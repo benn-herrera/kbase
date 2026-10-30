@@ -2,7 +2,6 @@ package config
 
 import (
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -47,26 +46,12 @@ func templateKeys(template string) map[string]bool {
 	return keys
 }
 
-// modelledNotWritten is the keys config's schema models and no template
-// writes: the superseded keys, which load so an old config.toml keeps working
-// — the top-level provider key, which `kbase configure` removes rather than
-// writes, and [asks] readerConcurrency, which asks.concurrency replaces. An
-// entry fails the test once a template spells its key, so it cannot outlive its
-// reason.
-var modelledNotWritten = map[string]bool{"provider": true, "asks.readerConcurrency": true}
-
 // TestTemplatesSpellEveryModeledKey: a template is the only schema prose a
 // user is handed, so neither may fall behind the structs it describes. Every
 // key the loaders model is spelled in the template it belongs to, as a live or
 // a commented `key =` line — a field added to Provider or Config without a line
 // here fails before a user meets a key the file never mentions.
 func TestTemplatesSpellEveryModeledKey(t *testing.T) {
-	configKeys := tomlKeys(reflect.TypeOf(Config{}), "")
-	for key := range modelledNotWritten {
-		if !slices.Contains(configKeys, key) {
-			t.Fatalf("%s is exempt from the template but no longer modelled", key)
-		}
-	}
 	for _, tc := range []struct {
 		file     string
 		typ      reflect.Type
@@ -79,12 +64,6 @@ func TestTemplatesSpellEveryModeledKey(t *testing.T) {
 			shown := templateKeys(tc.template)
 			for _, key := range tomlKeys(tc.typ, "") {
 				leaf := key[strings.LastIndex(key, ".")+1:]
-				if modelledNotWritten[key] {
-					if shown[leaf] {
-						t.Errorf("the %s template states %s: drop its modelledNotWritten entry", tc.file, key)
-					}
-					continue
-				}
 				if !shown[leaf] {
 					t.Errorf("the %s template states no %s key (`%s =`)", tc.file, key, leaf)
 				}
@@ -131,7 +110,7 @@ func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 			t.Errorf("entry %q = %+v, want a usable entry from the one layer", name, p)
 		}
 	}
-	if cfg.Provider != "" || cfg.Models != (ModelMap{}) || cfg.Asks.ReaderConcurrency != nil || cfg.Asks.Concurrency != nil || cfg.Sources != (Sources{}) {
+	if cfg.Models != (ModelMap{}) || cfg.Asks.Concurrency != nil || cfg.Sources != (Sources{}) {
 		t.Errorf("config = %+v (%+v), want every field unset", cfg, cfg.Sources)
 	}
 }

@@ -83,8 +83,7 @@ type Configured struct {
 // and the file picks a model on the user's behalf. Each reference is checked
 // against its own provider's catalogue, read through catalogue. Create with no
 // Provider is the one exception: catalogue is never called, the run writes
-// what the map names over what the file holds, and the superseded provider key
-// is removed.
+// what the map names over what the file holds.
 func Configure(req ConfigureRequest, catalogue CatalogueFunc) (Configured, error) {
 	if req.Offline() {
 		return configureOffline(req)
@@ -236,8 +235,7 @@ func missingReferenceProvider(provider string, in Inputs) result.Refusal {
 // named, so no request is made and no reference is checked against a catalogue.
 // What the target layer's config.toml already holds — an untouched category, a
 // comment — survives, because configure is an editor and Create is only
-// permission to create the file it edits. The superseded provider key goes
-// either way: the writer removes it.
+// permission to create the file it edits.
 func configureOffline(req ConfigureRequest) (Configured, error) {
 	var run Configured
 	cfg, err := LoadConfig(ConfigPath(req.Inputs.WriteDir))

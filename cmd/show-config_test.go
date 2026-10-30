@@ -20,8 +20,7 @@ const fileKey = "sk-file-MUST-NOT-APPEAR"
 // configFixture stages a configuration directory with both files: a pool whose
 // entries cover both faults the report distinguishes — one that drops for want
 // of a base URL, one supplying its key from a file any local account can read —
-// and a config.toml naming the key-file entry in each role's reference, the
-// superseded provider key beside them.
+// and a config.toml naming the key-file entry in each role's reference.
 func configFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -35,7 +34,7 @@ apiKeyFile = "key.txt"
 	if err := os.Chmod(keyFile, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeValues(t, dir, config.ConfigFileName, "provider = \"file\"\n\n[models]\ndecision = \"file/dec-1\"\ntext = \"file/text-1\"\n")
+	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"file/dec-1\"\ntext = \"file/text-1\"\n")
 	return dir
 }
 
@@ -84,7 +83,7 @@ func reportedLayers(t *testing.T, doc resultDoc) []map[string]any {
 func TestShowConfigReportsTheConfiguration(t *testing.T) {
 	unsetInferenceEnv(t)
 	dir := configFixture(t)
-	doc, stdout, stderr, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
+	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
 		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
 	}
@@ -122,9 +121,6 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 
 	cfg, _ := doc.Values["config"].(map[string]any)
 	models, _ := cfg["models"].(map[string]any)
-	if _, ok := cfg["provider"]; ok {
-		t.Errorf("config carries the superseded provider key: %v", cfg)
-	}
 	if models[config.CategoryDecision] != "file/dec-1" || models[config.CategoryText] != "file/text-1" ||
 		models[config.CategoryScoring] != nil {
 		t.Errorf("config = %v, want each role's value as written and null for the unset one", cfg)
@@ -177,29 +173,6 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 	}
 	if strings.Contains(stdout, fileKey) {
 		t.Errorf("the document carries the key %q:\n%s", fileKey, stdout)
-	}
-	// config.toml still states the superseded key, so the invocation says so —
-	// once.
-	if n := strings.Count(stderr, "superseded provider key"); n != 1 {
-		t.Errorf("stderr = %q, want one superseded-key line", stderr)
-	}
-}
-
-// TestShowConfigSaysNothingOfASupersededKeyItDidNotRead: an environment-mode
-// invocation reads no file value, so it reports no superseded key.
-func TestShowConfigSaysNothingOfASupersededKeyItDidNotRead(t *testing.T) {
-	dir := configFixture(t)
-	t.Setenv(config.EnvAPIBaseURL, "http://env.example/v1")
-	t.Setenv(config.EnvDecision, "env-decision")
-	t.Setenv(config.EnvText, "env-text")
-	t.Setenv(config.EnvScoring, "env-scoring")
-	t.Setenv(config.EnvAPIKeyFile, "")
-	doc, stdout, stderr, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
-	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
-	}
-	if strings.Contains(stderr, "superseded provider key") {
-		t.Errorf("an environment-mode invocation said the file's key is superseded: %q", stderr)
 	}
 }
 
@@ -431,8 +404,15 @@ func TestShowConfigRefusesAConfigurationThatDoesNotLoad(t *testing.T) {
 	if _, ok := doc.Values["diagnostics"]; ok {
 		t.Errorf("a refused document carries diagnostics:\n%s", stdout)
 	}
-	if items := doc.items(toolresult.RefusalsKey); len(items) != 1 || items[0]["check"] != checkUsage {
-		t.Errorf("refusals = %v, want the load's one usage item", items)
+	items := doc.items(toolresult.RefusalsKey)
+	if len(items) != 1 || items[0]["check"] != checkUsage {
+		t.Fatalf("refusals = %v, want the load's one usage item", items)
+	}
+	detail, _ := items[0]["detail"].(string)
+	for _, key := range []string{`"provider"`, `"models.heavy"`} {
+		if !strings.Contains(detail, key) {
+			t.Errorf("detail = %q, want it to name %s", detail, key)
+		}
 	}
 }
 

@@ -96,7 +96,6 @@ func configure(ctx context.Context, opts configureOptions) (string, []toolresult
 	offline := req.Offline()
 	if !offline {
 		warnFaults(opts.Stderr, opts.Faults)
-		supersededProvider(opts.Stderr, opts.Config)
 	}
 	run, err := config.Configure(req, func(entry config.Provider) ([]string, error) {
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -209,10 +208,9 @@ catalogue is a warning, not a failure — provider catalogues rotate.
 
 --create creates the target layer's providers.toml and config.toml where they
 are absent, from an annotated template, and overwrites none: config.toml is
-edited in place — the [models] decision, text and scoring keys are rewritten, a
-superseded top-level provider key is removed, every other byte kept, and a file
-already holding the values is left alone (outcome unchanged). A refused or
-failed run writes nothing.
+edited in place — the [models] decision, text and scoring keys are rewritten,
+every other byte kept, and a file already holding the values is left alone
+(outcome unchanged). A refused or failed run writes nothing.
 
 The target layer is the repository a --project flag names — <repository>/` + config.RepositoryDirName + `,
 whether or not it exists, refused outside a git worktree — else the directory

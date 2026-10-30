@@ -5,11 +5,8 @@ import (
 	"context"
 	"errors"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +15,6 @@ import (
 	"kbase/internal/log"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
-	"kbase/internal/modelclient"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 )
@@ -95,64 +91,6 @@ func TestScoreResumeLeavesOutTheAskConcurrency(t *testing.T) {
 	resume := scoreResume(scoreOptions{AskConcurrency: new(3)}, "run", "state", config.ModeFile, config.Overrides{})
 	if strings.Contains(resume, "--ask-concurrency") {
 		t.Errorf("resume = %q, want no --ask-concurrency", resume)
-	}
-}
-
-// TestBuildAndScoreSayReaderConcurrencyIsSuperseded: a file-mode build or
-// score whose configuration states [asks] readerConcurrency — 0 here, which
-// the load no longer refuses — says once on stderr that the key is
-// superseded, and one without it never names it; the score run runs as the
-// run without it does.
-func TestBuildAndScoreSayReaderConcurrencyIsSuperseded(t *testing.T) {
-	const line = "config.toml states the superseded [asks] readerConcurrency key; kbase does not use it — set asks.concurrency instead"
-	for _, verb := range []struct {
-		name string
-		// stderr is the verb's stderr with the key stated and without it.
-		stderr func(t *testing.T) (with, without string)
-	}{
-		{"score", func(t *testing.T) (string, string) {
-			run := func(readerConcurrency *int) scoreResult {
-				opts := scoreOptions{Pass: query.PassRigor, providerOptions: scoreProvider()}
-				opts.Config.Asks.ReaderConcurrency = readerConcurrency
-				return scoreIn(t, scoreFixture(t), t.TempDir(), opts, func() model.Client { return scoring("none", "none", "none", "none") })
-			}
-			with, without := run(new(0)), run(nil)
-			// What differs between two runs of one set is where each ran and
-			// the id it minted.
-			ownRun := func(k string, _ any) bool {
-				return slices.Contains([]string{"kb-root", "state-dir", "run", "ledger"}, k)
-			}
-			a, b := maps.Clone(with.doc.Values), maps.Clone(without.doc.Values)
-			maps.DeleteFunc(a, ownRun)
-			maps.DeleteFunc(b, ownRun)
-			if !slices.Equal(with.doc.Keys, without.doc.Keys) || !reflect.DeepEqual(a, b) {
-				t.Errorf("the run stating the key:\n%s\nwant the run without it:\n%s", with.stdout, without.stdout)
-			}
-			return with.stderr, without.stderr
-		}},
-		{"build", func(t *testing.T) (string, string) {
-			resolve := func(readerConcurrency *int) string {
-				p := scoreProvider()
-				p.Config.Asks.ReaderConcurrency = readerConcurrency
-				var stderr bytes.Buffer
-				reg := modelclient.New(func(model.Endpoint) model.Client { return &model.ClientFuncs{} }, nil, "", 0)
-				if _, err := buildProvider(p, config.Overrides{}, &stderr)(reg); err != nil {
-					t.Fatal(err)
-				}
-				return stderr.String()
-			}
-			return resolve(new(0)), resolve(nil)
-		}},
-	} {
-		t.Run(verb.name, func(t *testing.T) {
-			with, without := verb.stderr(t)
-			if n := strings.Count(with, line); n != 1 {
-				t.Errorf("stderr = %q, want the superseded-key line once", with)
-			}
-			if strings.Contains(without, "readerConcurrency") {
-				t.Errorf("a run without the key names it: %q", without)
-			}
-		})
 	}
 }
 

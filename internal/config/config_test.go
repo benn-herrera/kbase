@@ -14,8 +14,6 @@ const (
 
 func TestLoadConfig(t *testing.T) {
 	path := writeFile(t, t.TempDir(), ConfigFileName, `
-provider = "reaper"
-
 [models]
 decision = "`+decisionModel+`"
 text = "`+textModel+`"
@@ -24,40 +22,8 @@ text = "`+textModel+`"
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.Provider != "reaper" {
-		t.Errorf("Provider = %q, want reaper", cfg.Provider)
-	}
 	if cfg.Models.Decision != decisionModel || cfg.Models.Text != textModel {
 		t.Errorf("Models = %+v, want %q/%q", cfg.Models, decisionModel, textModel)
-	}
-}
-
-// TestLoadConfigReaderConcurrency: the superseded [asks] readerConcurrency
-// key still loads, whatever its value — a value under 1 included, since
-// nothing reads it — and leaves the concurrency key unset.
-func TestLoadConfigReaderConcurrency(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		body string
-		want *int
-	}{
-		{"absent", "provider = \"reaper\"\n", nil},
-		{"set", "[asks]\nreaderConcurrency = 2\n", new(2)},
-		{"zero", "[asks]\nreaderConcurrency = 0\n", new(0)},
-		{"negative", "[asks]\nreaderConcurrency = -3\n", new(-3)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := LoadConfig(writeFile(t, t.TempDir(), ConfigFileName, tc.body))
-			if err != nil {
-				t.Fatalf("LoadConfig: %v, want the superseded key loaded", err)
-			}
-			if got := cfg.Asks.ReaderConcurrency; (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
-				t.Errorf("readerConcurrency = %v, want %v", got, tc.want)
-			}
-			if cfg.Asks.Concurrency != nil {
-				t.Errorf("concurrency = %v, want it unset by the superseded key", *cfg.Asks.Concurrency)
-			}
-		})
 	}
 }
 
@@ -70,7 +36,7 @@ func TestLoadConfigConcurrency(t *testing.T) {
 		want *int
 		ok   bool
 	}{
-		{"absent", "provider = \"reaper\"\n", nil, true},
+		{"absent", "[models]\n", nil, true},
 		{"set", "[asks]\nconcurrency = 3\n", new(3), true},
 		{"zero", "[asks]\nconcurrency = 0\n", nil, false},
 		{"negative", "[asks]\nconcurrency = -3\n", nil, false},
@@ -130,6 +96,16 @@ func TestLoadConfigUnknownKey(t *testing.T) {
 			name: "misspelled top-level key",
 			body: "provdier = \"reaper\"\n",
 			want: []string{`"provdier"`},
+		},
+		{
+			name: "the removed provider key",
+			body: "provider = \"x\"\n",
+			want: []string{`"provider"`},
+		},
+		{
+			name: "the removed readerConcurrency key",
+			body: "[asks]\nreaderConcurrency = 2\n",
+			want: []string{`"asks.readerConcurrency"`},
 		},
 		{
 			name: "misspelled category",

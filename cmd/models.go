@@ -43,7 +43,6 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	env := config.EnvOverrides(os.Getenv)
 	s := opts.inputs(env)
 	warnFaults(opts.Stderr, opts.Faults)
-	supersededProvider(opts.Stderr, opts.Config)
 	name, rule, err := config.Select(s, opts.Provider)
 	if err != nil {
 		return refusedOrFailed(nil, err)
@@ -85,10 +84,10 @@ sorted ascending, as one YAML document on stdout.
 
 The provider is --provider, else the sole entry in providers.toml — with
 several entries declared and none chosen, the command refuses, listing them,
-rather than picking one. config.toml names no entry: its provider key is
-superseded, and each role names its own entry in its own model reference. Pool
-entries that failed to load are reported as warnings, and a summary line
-(provider, count, elapsed) is written to stderr.`,
+rather than picking one. config.toml names no entry: each role names its own
+entry in its own model reference. Pool entries that failed to load are
+reported as warnings, and a summary line (provider, count, elapsed) is written
+to stderr.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)

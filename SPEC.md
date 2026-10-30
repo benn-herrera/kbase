@@ -1310,8 +1310,7 @@ writes its result under §7.
 
 **Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
 dial — not a role: a role is never chosen this way, and `config.toml` names no entry. The rule is
-`--provider`, else the sole `providers.toml` entry; `config.toml`'s `provider` key is superseded and
-takes no part in it. Where no pool entry is named — zero usable providers, two or more with none
+`--provider`, else the sole `providers.toml` entry. Where no pool entry is named — zero usable providers, two or more with none
 selected, or a `--provider` the pool does not hold — `models` and `configure` refuse. An empty pool,
 and a name the pool does not hold, point at the `providers.toml` of the layer `configure` writes into,
 the file an entry belongs in; the name the pool does not hold also carries `key: --provider`, and the
@@ -1374,12 +1373,6 @@ spelling: `baseUrl` or `models.<role>` in file mode — `models.decision`, `mode
 `models.<role>` for a mode the files do not supply. A lack a variable's doing names that variable, as
 `KBASE_API_KEY_FILE` naming an unreadable file does. `show-config` runs the same decision and reports
 its refusal as a diagnostic rather than stopping (§9.6).
-
-**The `provider` key is superseded.** `config.toml`'s top-level `provider` loads and merges and
-chooses nothing: no role's endpoint is taken from it, and no catalogue verb selects by it. A file-mode
-invocation of a verb that resolves a role or selects an entry writes one line on stderr saying so and
-naming `kbase configure` as the rewrite. It leaves the schema at the next major
-([ROADMAP.md](ROADMAP.md)).
 
 There is no plaintext-transport switch: when a key is configured and the base URL is `http://` to a
 host other than loopback, one line on stderr says the key travels in cleartext, and the build
@@ -1456,9 +1449,6 @@ shape; a question left unanswered is the seam's own re-ask-then-default path.
 ### 9.2 `config.toml` — the choices
 
 ```toml
-provider = "..."             # SUPERSEDED — loads, and chooses nothing (§9); removed
-                             # at the next major
-
 [models]
 decision = "<entry>/<id>"      # the claim graph's multichoice asks: a providers.toml
                                # entry name, then the model that entry's
@@ -1468,7 +1458,6 @@ scoring = "<entry>/<id>"       # kbase score's asks; required for score, in ever
 
 [asks]
 concurrency = 4                # optional; model calls one build or score has in flight at once, across every role
-readerConcurrency              # SUPERSEDED — loads, and chooses nothing; removed at the next major
 
 [sampling.text]                # optional; the overview passage's sampling
 temperature = 0.0              # optional; a number
@@ -1479,8 +1468,7 @@ thinking = "off"               # optional; off | low | medium | high
 **A `[models]` value is a reference**, `<provider>/<model>`, split at the **first** `/`: a provider
 name is a `providers.toml` table's and carries none, while a model id may (`openrouter/anthropic/…`).
 Either part empty, or no `/` at all, is not a reference and is refused at resolution, naming
-`models.<role>` and the form — never resolved through the superseded `provider` key, even where that
-key names the entry that would work. Nothing is normalised but whitespace: a model id is the
+`models.<role>` and the form. Nothing is normalised but whitespace: a model id is the
 provider's spelling, not kbase's. In environment mode a model is a bare id of the environment's
 endpoint instead (§9), and one form of value is never read as the other.
 
@@ -1488,9 +1476,9 @@ A category left unset resolves to "not configured" — no defaulting, no guessin
 back to another. `concurrency` is how many model calls one invocation of `build` or `score` has in
 flight at once, across every role; absent, it is 4, and `--ask-concurrency` overrides it for that
 invocation. A value under 1 fails the load, naming `asks.concurrency`. Calls start in the order the
-invocation submits them. `readerConcurrency` is superseded: it loads and chooses nothing, a file-mode
-`build` or `score` says so in one line on stderr naming `asks.concurrency`, and it leaves the schema
-at the next major ([ROADMAP.md](ROADMAP.md)). There is no `[dev]` table; an old `[dev]` key fails strict load (§9.3). A
+invocation submits them. There is no `[dev]` table, top-level `provider` key or `[asks]
+readerConcurrency`: a file stating any of them fails strict load (§9.3) naming the key, and the
+remedy is a hand edit. A
 `[models]` table spelling `heavy`/`light` — the superseded category names — fails strict load as
 unmodeled keys (§9.3); the remedy is a hand edit.
 
@@ -1531,9 +1519,9 @@ the only file-permission behaviour kbase applies to a file it did not create.
 
 - An absent or blank file gets a full commented template, its `models.decision`, `models.text` and
   `models.scoring` written with the values the run resolves and blank for the user to fill where the
-  run names none, and no `provider` key.
-- Otherwise **only** the four keys it writes are touched: the `[models]` table's `decision`, `text`
-  and `scoring`, and — its one deletion — a top-level `provider` line, which is removed. Every other
+  run names none.
+- Otherwise **only** the three keys it writes are touched: the `[models]` table's `decision`, `text`
+  and `scoring`. Every other
   byte — comments, unrelated keys and tables, spacing, key order — is preserved exactly. A rewritten
   line's own trailing `# comment` is kept; its column position is not guaranteed.
 - Missing `decision`/`text`/`scoring` keys are appended inside (or as a new) `[models]` table. A
@@ -1542,7 +1530,7 @@ the only file-permission behaviour kbase applies to a file it did not create.
   refusal (§9, "Provider commands").
 - Before writing, kbase decodes both the original and the proposed file as TOML and refuses the
   write, leaving the file untouched, unless the only difference between the two decoded structures
-  is exactly the values it intended to change — the deletion included.
+  is exactly the values it intended to change.
 - The write is atomic (temp file in the same directory, then rename). A `config.toml` that is a
   symlink has its target rewritten; the symlink stays.
 - Any failure along this path leaves the file completely unwritten.
@@ -2355,6 +2343,9 @@ changes nothing.
 **<release version> — the files configure inference; the served surface is smaller.**
 
 - **Every command's help is an MCP resource**, `kbase://help/<command>`, the text its `--help` prints (§11).
+- **`provider` and `[asks] readerConcurrency` leave `config.toml`.** A file still stating either
+  fails strict load naming the key (§9.3); delete the line by hand — `kbase configure` cannot load
+  the file to repair it.
 
 **0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
 the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an

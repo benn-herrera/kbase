@@ -391,11 +391,10 @@ func withSampling(in Inputs, ep Endpoint) (Endpoint, error) {
 }
 
 // Select is a catalogue verb's choice of which pool entry to dial — not a
-// role: a role is never chosen this way, and config.toml names no entry
-// (its provider key is superseded and inert). The --provider flag answers
-// first; otherwise the pool's only entry does. The rule that answered is
-// returned, so a caller reporting the choice does not decide the precedence a
-// second time.
+// role: a role is never chosen this way, and config.toml names no entry. The
+// --provider flag answers first; otherwise the pool's only entry does. The rule
+// that answered is returned, so a caller reporting the choice does not decide
+// the precedence a second time.
 func Select(in Inputs, flag string) (name, rule string, err error) {
 	if named := strings.TrimSpace(flag); named != "" {
 		if _, ok := in.Providers[named]; !ok {

@@ -221,7 +221,6 @@ func probeEndpoint(opts probeOptions) (config.Endpoint, error) {
 	if resolution == config.ModeFile {
 		// This resolution read the pool, and a faulted entry is what a probe
 		// is asking about.
-		supersededProvider(opts.Stderr, opts.Config)
 		warnFaults(opts.Stderr, opts.Faults)
 	}
 	return ep, nil

@@ -155,12 +155,6 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 		if err != nil {
 			return build.Provider{}, err
 		}
-		if mode == config.ModeFile {
-			// An environment-mode invocation reads no file value, so it says
-			// nothing of the keys the files state.
-			supersededProvider(stderr, p.Config)
-			supersededReaderConcurrency(stderr, p.Config)
-		}
 		warnFaults(stderr, p.Faults)
 		var records []toolresult.Record
 		warned := map[string]bool{}

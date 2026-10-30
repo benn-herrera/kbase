@@ -250,14 +250,10 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		wantRule   string // the rule the result names for that choice
 		wantErr    string // substring of the expected error
 	}{{
-		name:       "flag beats config",
-		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}, Provider: "alpha"}},
+		name:       "the flag names one of several entries",
+		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Provider: "alpha"}},
 		wantChosen: "alpha",
 		wantRule:   "flag",
-	}, {
-		name:    "the superseded provider key chooses nothing",
-		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}}},
-		wantErr: "no provider selected",
 	}, {
 		name:       "sole entry needs no choice",
 		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha")}},

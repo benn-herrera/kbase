@@ -157,12 +157,8 @@ func takeProviders(pool, over Providers, source string) {
 
 // takeConfig overlays over's stated values onto cfg and records the layer that
 // supplied each. A field the higher layer leaves out keeps the lower layer's
-// value, and the lower layer's name. readerConcurrency is taken by presence:
-// it is a pointer, so nil alone means "unstated".
+// value, and the lower layer's name.
 func takeConfig(cfg *Config, over Config, source string) {
-	if cfg.Provider == "" {
-		cfg.Provider = over.Provider
-	}
 	takeStated(&cfg.Models.Decision, &cfg.Sources.Decision, over.Models.Decision, source)
 	takeStated(&cfg.Models.Text, &cfg.Sources.Text, over.Models.Text, source)
 	takeStated(&cfg.Models.Scoring, &cfg.Sources.Scoring, over.Models.Scoring, source)
@@ -170,9 +166,6 @@ func takeConfig(cfg *Config, over Config, source string) {
 	takeStated(&cfg.Sampling.Text.Thinking, &cfg.Sources.TextThinking, over.Sampling.Text.Thinking, source)
 	takeStated(&cfg.Sampling.Scoring.Temperature, &cfg.Sources.ScoringTemperature, over.Sampling.Scoring.Temperature, source)
 	takeStated(&cfg.Sampling.Scoring.Thinking, &cfg.Sources.ScoringThinking, over.Sampling.Scoring.Thinking, source)
-	if cfg.Asks.ReaderConcurrency == nil {
-		cfg.Asks.ReaderConcurrency = over.Asks.ReaderConcurrency
-	}
 	if cfg.Asks.Concurrency == nil {
 		cfg.Asks.Concurrency = over.Asks.Concurrency
 	}

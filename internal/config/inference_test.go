@@ -108,27 +108,25 @@ func TestModeOf(t *testing.T) {
 }
 
 // TestSelect: the catalogue verbs' choice is the flag, else the pool's only
-// entry — a role is never chosen this way, and config.toml's provider key is
-// never a fallback.
+// entry — a role is never chosen this way.
 func TestSelect(t *testing.T) {
 	two := Providers{"a": {Name: "a"}, "b": {Name: "b"}}
 	for _, tc := range []struct {
 		name, flag string
 		providers  Providers
-		configured string
 		wantName   string
 		wantRule   string
 		wantErr    string
 	}{
-		{name: "the flag", flag: "a", providers: two, configured: "b", wantName: "a", wantRule: RuleFlag},
+		{name: "the flag", flag: "a", providers: two, wantName: "a", wantRule: RuleFlag},
 		{name: "the only entry", providers: Providers{"solo": {Name: "solo"}}, wantName: "solo", wantRule: RuleSoleEntry},
-		{name: "several entries, none named", providers: two, configured: "b", wantErr: "no provider selected"},
+		{name: "several entries, none named", providers: two, wantErr: "no provider selected"},
 		{name: "no entries", wantErr: "no usable provider"},
 		{name: "a name the pool lacks", flag: "typo", providers: Providers{"a": {Name: "a"}}, wantErr: `provider "typo" not found`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			in := Inputs{Providers: tc.providers, Cfg: Config{Provider: tc.configured}, WriteDir: dir}
+			in := Inputs{Providers: tc.providers, WriteDir: dir}
 			name, rule, err := Select(in, tc.flag)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -140,15 +138,6 @@ func TestSelect(t *testing.T) {
 				t.Errorf("= (%q, %q), %v; want (%q, %q)", name, rule, err, tc.wantName, tc.wantRule)
 			}
 		})
-	}
-}
-
-// TestSelectNeverReadsTheProviderKey: a config.toml naming one entry of two
-// selects nothing — the key is inert, so the verb refuses and lists both.
-func TestSelectNeverReadsTheProviderKey(t *testing.T) {
-	in := Inputs{Cfg: Config{Provider: "a"}, Providers: Providers{"a": {Name: "a"}, "b": {Name: "b"}}}
-	if _, _, err := Select(in, ""); err == nil {
-		t.Fatal("the superseded provider key selected an entry")
 	}
 }
 
@@ -256,7 +245,7 @@ func TestResolveEnvironmentMode(t *testing.T) {
 }
 
 // TestResolveRefusals: every way a role does not resolve, by its own key —
-// never another role's endpoint, never the superseded provider key.
+// never another role's endpoint.
 func TestResolveRefusals(t *testing.T) {
 	configFile, providersFile := "config.toml", "providers.toml"
 	for _, tc := range []struct {

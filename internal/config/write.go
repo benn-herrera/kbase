@@ -24,14 +24,6 @@ const (
 	// so the directory is ordinary user data, not a keystore.
 	configDirPerm = 0o777
 
-	// keyProvider is the top-level key the editor removes; it mirrors
-	// Config's `toml` tag. The key is modelled so an old config.toml still
-	// loads and the diagnostic that reports it superseded can name it, and
-	// nothing writes it: a reference names its own pool entry. The [models]
-	// table's keys are the category names themselves, so the Category
-	// constants are their single source here as everywhere else.
-	keyProvider = "provider"
-
 	// tableModels is the table holding the category→model-id map; it mirrors
 	// Config's `toml` tag for Models.
 	tableModels = "models"
@@ -65,16 +57,15 @@ func createTemplateFile(path, template string) (bool, error) {
 }
 
 // UpdateConfig writes the [models] categories into the config.toml at path,
-// creating the containing directory and the file if they are missing, and
-// removes the superseded top-level provider key. The write is atomic: the
-// content lands in a temporary file in the destination directory and is
-// renamed over path, so a reader sees either the previous config or the new
-// one, never a half-written file, and a failed write leaves the previous
-// config intact.
+// creating the containing directory and the file if they are missing. The
+// write is atomic: the content lands in a temporary file in the destination
+// directory and is renamed over path, so a reader sees either the previous
+// config or the new one, never a half-written file, and a failed write leaves
+// the previous config intact.
 //
 // It is an editor, not a serializer. config.toml is a primary user-editable
 // file, so an existing one is updated line by line: the lines carrying the
-// [models] keys are rewritten, the provider line is deleted, and every other
+// [models] keys are rewritten, and every other
 // byte — comments, blank-line grouping, key spelling and spacing, keys and
 // tables Config does not model — passes through untouched. A rewritten line's
 // own trailing comment survives too: those lines are the ones a user is
@@ -90,8 +81,7 @@ func createTemplateFile(path, template string) (bool, error) {
 // offer.
 //
 // It reports whether it wrote: a file already holding the values is left as
-// it stands. cfg.Provider is not written — the key is the one the editor
-// deletes, and a reference names its own pool entry.
+// it stands.
 func UpdateConfig(path string, cfg Config) (bool, error) {
 	src, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -126,10 +116,10 @@ func freshConfig(cfg Config) string {
 		DefaultAskConcurrency)
 }
 
-// updateLines rewrites the [models] lines of an existing config.toml, removes
-// a top-level provider line, and returns the new content. Keys the file does
-// not have are added: missing categories at the end of the [models] table, and
-// a missing [models] table at the end of the file.
+// updateLines rewrites the [models] lines of an existing config.toml and
+// returns the new content. Keys the file does not have are added: missing
+// categories at the end of the [models] table, and a missing [models] table at
+// the end of the file.
 func updateLines(src string, cfg Config) string {
 	lines := strings.Split(src, "\n")
 	// A trailing newline splits into a final empty element. Holding it
@@ -144,7 +134,6 @@ func updateLines(src string, cfg Config) string {
 		table       string
 		modelsFound bool
 		modelsEnd   = -1 // first line past the [models] table
-		providerAt  = -1 // the superseded top-level line, removed below
 		found       = map[string]bool{}
 	)
 	for i, line := range lines {
@@ -159,28 +148,13 @@ func updateLines(src string, cfg Config) string {
 			continue
 		}
 		key := lineKey(trimmed)
-		switch {
-		case table == "" && key == keyProvider && providerAt < 0:
-			providerAt = i
-			found[keyProvider] = true
-		case table == tableModels && isCategory(key) && !found[key]:
+		if table == tableModels && isCategory(key) && !found[key] {
 			lines[i] = withComment(assign(key, categoryValue(cfg, key)), comment)
 			found[key] = true
-		default:
-			continue
 		}
 	}
 	if modelsFound && modelsEnd < 0 {
 		modelsEnd = len(lines)
-	}
-
-	// The editor's one deletion, and the only change that is not a value
-	// rewrite. Nothing writes the key: a reference names its own pool entry.
-	if providerAt >= 0 {
-		lines = slices.Delete(lines, providerAt, providerAt+1)
-		if modelsEnd > providerAt {
-			modelsEnd--
-		}
 	}
 
 	var missing []string
@@ -222,8 +196,8 @@ func isCategory(key string) bool {
 
 // verifyUpdate is the guard on the line editor: it decodes the previous
 // content and the proposed replacement and requires that they differ in
-// exactly the values UpdateConfig was asked to set — the three [models] keys,
-// and the removal of the provider key. Anything else the edit touched — an
+// exactly the values UpdateConfig was asked to set — the three [models] keys.
+// Anything else the edit touched — an
 // unknown key, a table, the text inside a multiline string the editor mistook
 // for config — shows up here as a mismatch, and a mismatch refuses the write.
 func verifyUpdate(before, after string, cfg Config) error {
@@ -245,15 +219,14 @@ func verifyUpdate(before, after string, cfg Config) error {
 	if m, ok := want[tableModels].(map[string]any); ok {
 		models = maps.Clone(m)
 	}
-	delete(want, keyProvider)
 	models[CategoryDecision] = cfg.Models.Decision
 	models[CategoryText] = cfg.Models.Text
 	models[CategoryScoring] = cfg.Models.Scoring
 	want[tableModels] = models
 
 	if !reflect.DeepEqual(want, next) {
-		return fmt.Errorf("the update would change more than the [%s] values and the removal of %s — "+
-			"this layout is beyond the line editor; set them by hand", tableModels, keyProvider)
+		return fmt.Errorf("the update would change more than the [%s] values — "+
+			"this layout is beyond the line editor; set them by hand", tableModels)
 	}
 	return nil
 }

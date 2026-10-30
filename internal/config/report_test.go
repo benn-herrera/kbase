@@ -37,7 +37,7 @@ func TestReport(t *testing.T) {
 		},
 		{
 			name: "a pool with one fault of each kind",
-			cfg:  Config{Provider: "reaper", Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"}},
+			cfg:  Config{Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"}},
 			providers: Providers{
 				"reaper": {Name: "reaper", BaseURL: "https://reaper.example/v1", APIKeyFile: "keys/reaper.txt", Layer: LayerSourceRepository,
 					DecisionsFlavor: FlavorDecisions},

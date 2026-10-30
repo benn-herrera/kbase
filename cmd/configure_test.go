@@ -183,16 +183,15 @@ func TestRunConfigureListFailure(t *testing.T) {
 	}
 }
 
-// TestRunConfigureWarnsBeforeTheDial: the pool's faults and the superseded
-// provider key are on stderr before the first catalogue is requested, so a
-// dial that hangs or fails leaves them said.
+// TestRunConfigureWarnsBeforeTheDial: the pool's faults are on stderr before
+// the first catalogue is requested, so a dial that hangs or fails leaves them
+// said.
 func TestRunConfigureWarnsBeforeTheDial(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	opts := soloOpts()
 	opts.WriteDir = t.TempDir()
 	opts.ModelMap = refs(decisionID, textID, scoringID)
 	opts.Faults = []config.ProviderFault{{Name: "broken", Reason: "no base_url"}}
-	opts.Config = config.Config{Provider: "solo"}
 	opts.Stdout, opts.Stderr = &stdout, &stderr
 	var atDial string
 	opts.NewClient = func(model.Endpoint) model.Client {
@@ -202,10 +201,8 @@ func TestRunConfigureWarnsBeforeTheDial(t *testing.T) {
 	if _, err := runConfigure(context.Background(), opts); err != nil {
 		t.Fatalf("runConfigure: %v", err)
 	}
-	for _, want := range []string{`provider "broken" unavailable: no base_url`, "superseded provider key"} {
-		if !strings.Contains(atDial, want) {
-			t.Errorf("stderr at the dial = %q, want it to hold %q", atDial, want)
-		}
+	if want := `provider "broken" unavailable: no base_url`; !strings.Contains(atDial, want) {
+		t.Errorf("stderr at the dial = %q, want it to hold %q", atDial, want)
 	}
 }
 

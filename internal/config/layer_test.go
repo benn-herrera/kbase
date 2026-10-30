@@ -126,14 +126,11 @@ apiKeyFile = "shared.key"
 baseUrl = "http://inherited.example/v1"
 `)
 	writeFile(t, globalDir, ConfigFileName, `
-provider = "inherited"
-
 [models]
 decision = "global-decision"
 text = "global-text"
 
 [asks]
-readerConcurrency = 2
 concurrency = 3
 `)
 	writeProviders(t, repoDir, `
@@ -143,7 +140,7 @@ baseUrl = "http://shared.example/v2"
 [local]
 baseUrl = "http://local.example/v1"
 `)
-	writeFile(t, repoDir, ConfigFileName, "provider = \"local\"\n\n[models]\ndecision = \"repo-decision\"\n")
+	writeFile(t, repoDir, ConfigFileName, "[models]\ndecision = \"repo-decision\"\n")
 
 	layers := []Layer{
 		{Path: repoDir, Source: LayerSourceRepository},
@@ -171,16 +168,10 @@ baseUrl = "http://local.example/v1"
 			t.Errorf("%s.Layer = %q, want %q", name, got, wantLayer)
 		}
 	}
-	if cfg.Provider != "local" {
-		t.Errorf("Provider = %q, want the repository's choice", cfg.Provider)
-	}
-	want := Config{Provider: "local", Models: ModelMap{Decision: "repo-decision", Text: "global-text"},
+	want := Config{Models: ModelMap{Decision: "repo-decision", Text: "global-text"},
 		Sources: Sources{Decision: LayerSourceRepository, Text: LayerSourceGlobal}}
-	if cfg.Provider != want.Provider || cfg.Models != want.Models || cfg.Sources != want.Sources {
+	if cfg.Models != want.Models || cfg.Sources != want.Sources {
 		t.Errorf("config = %+v (%+v), want %+v", cfg, cfg.Sources, want)
-	}
-	if n := cfg.Asks.ReaderConcurrency; n == nil || *n != 2 {
-		t.Errorf("readerConcurrency = %v, want the global layer's 2 inherited", n)
 	}
 	if n := cfg.Asks.Concurrency; n == nil || *n != 3 {
 		t.Errorf("concurrency = %v, want the global layer's 3 inherited", n)
@@ -192,7 +183,7 @@ baseUrl = "http://local.example/v1"
 func TestLoadOneLayer(t *testing.T) {
 	dir := t.TempDir()
 	writeProviders(t, dir, "[solo]\nbaseUrl = \"http://solo.example/v1\"\n")
-	writeFile(t, dir, ConfigFileName, "provider = \"solo\"\n\n[models]\ndecision = \"d\"\ntext = \"t\"\n")
+	writeFile(t, dir, ConfigFileName, "[models]\ndecision = \"d\"\ntext = \"t\"\n")
 
 	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
 	if err != nil {
@@ -320,7 +311,7 @@ apiKeyFile = "not-here.key"
 // a broken repository file never falls through to the global one.
 func TestLoadRefusesTheStack(t *testing.T) {
 	globalDir, repoDir := t.TempDir(), t.TempDir()
-	globalConfig := writeFile(t, globalDir, ConfigFileName, "provider = \"a\"\n")
+	globalConfig := writeFile(t, globalDir, ConfigFileName, "[models]\n")
 	repoConfig := writeFile(t, repoDir, ConfigFileName, "provdier = \"b\"\n")
 
 	loaded, err := Load([]Layer{

@@ -170,19 +170,14 @@ func TestConfigureRecordsACatalogueMiss(t *testing.T) {
 }
 
 // TestConfigureRewritesAnOldGrammarFile: one dialed call over a file in the old
-// grammar removes the superseded provider key, writes all three references, and
-// changes every other byte of the file — a hand-written comment included — not
-// at all.
+// grammar writes all three references and changes every other byte of the file
+// — a hand-written comment included — not at all.
 func TestConfigureRewritesAnOldGrammarFile(t *testing.T) {
 	const old = `# kept note
-provider = "solo"
 
 [models]
 decision = "clef"   # the letter asks
 text = "Qwen3.8-27B"
-
-[asks]
-readerConcurrency = 2
 `
 	const want = `# kept note
 
@@ -190,9 +185,6 @@ readerConcurrency = 2
 decision = "solo/clef"  # the letter asks
 text = "solo/Qwen3.8-27B"
 scoring = "solo/clef-scoring"
-
-[asks]
-readerConcurrency = 2
 `
 	dir := t.TempDir()
 	if err := os.WriteFile(ConfigPath(dir), []byte(old), 0o600); err != nil {
@@ -234,7 +226,7 @@ func TestConfigureWritesNothingWhereTheListingFails(t *testing.T) {
 
 // TestConfigureOfflineWritesBothFiles: Create with no provider reads no
 // catalogue and selects no entry, lands both files in a directory that did not
-// exist — the pool, then the choices — and writes no provider key; the same run
+// exist — the pool, then the choices; the same run
 // again finds both holding what it would write and writes nothing.
 func TestConfigureOfflineWritesBothFiles(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "fresh")
@@ -259,8 +251,8 @@ func TestConfigureOfflineWritesBothFiles(t *testing.T) {
 	if err != nil || len(faults) != 0 || len(pool) != 1 {
 		t.Fatalf("the created pool = %v, faults %v, err %v; want one usable entry", pool, faults, err)
 	}
-	if cfg, written := configFile(t, dir); !written || cfg.Provider != "" || cfg.Models != want {
-		t.Errorf("config.toml = %+v (%t), want the references and no provider", cfg, written)
+	if cfg, written := configFile(t, dir); !written || cfg.Models != want {
+		t.Errorf("config.toml = %+v (%t), want the references", cfg, written)
 	}
 
 	again, err := Configure(req, unlisted(t))
@@ -270,14 +262,13 @@ func TestConfigureOfflineWritesBothFiles(t *testing.T) {
 }
 
 // TestConfigureOfflineKeepsWhatStandsThere: Create is permission to create, not
-// to replace. A config.toml holding a provider, an unmentioned category and a
-// hand-written comment keeps the comment and the category, loses the superseded
-// provider key, and a standing providers.toml is left exactly as it was.
+// to replace. A config.toml holding an unmentioned category and a hand-written
+// comment keeps both, and a standing providers.toml is left exactly as it was.
 func TestConfigureOfflineKeepsWhatStandsThere(t *testing.T) {
 	dir := t.TempDir()
 	const note = "# this box reaches the lab"
 	pool := "[solo]\nbaseUrl = \"http://kept.example/v1\"\n"
-	if err := os.WriteFile(ConfigPath(dir), []byte(note+"\nprovider = \"solo\"\n\n[models]\ndecision = \"kept\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(ConfigPath(dir), []byte(note+"\n\n[models]\ndecision = \"kept\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(ProvidersPath(dir), []byte(pool), 0o600); err != nil {
@@ -289,12 +280,11 @@ func TestConfigureOfflineKeepsWhatStandsThere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
-	if cfg, _ := configFile(t, dir); cfg.Provider != "" || cfg.Models.Decision != "kept" || cfg.Models.Text != soloRef(textID).String() {
-		t.Errorf("config.toml = %+v, want the standing decision kept, text set and the provider key removed", cfg)
+	if cfg, _ := configFile(t, dir); cfg.Models.Decision != "kept" || cfg.Models.Text != soloRef(textID).String() {
+		t.Errorf("config.toml = %+v, want the standing decision kept and text set", cfg)
 	}
-	body := fileText(t, ConfigPath(dir))
-	if !strings.Contains(body, note) || strings.Contains(body, "provider =") {
-		t.Errorf("config.toml, want the hand-written comment kept and the superseded provider key gone:\n%s", body)
+	if body := fileText(t, ConfigPath(dir)); !strings.Contains(body, note) {
+		t.Errorf("config.toml, want the hand-written comment kept:\n%s", body)
 	}
 	if kept := fileText(t, ProvidersPath(dir)); kept != pool {
 		t.Errorf("providers.toml = %q, want it untouched", kept)
@@ -391,8 +381,8 @@ func TestConfigureChecksEachReferenceAgainstItsOwnProvider(t *testing.T) {
 		t.Errorf("selected %v, provider %q; want the run settled on no one entry", run.Selected, run.Provider)
 	}
 	want := ModelMap{Decision: "a/d", Text: "b/t", Scoring: "a/s"}
-	if cfg, written := configFile(t, dir); !written || cfg.Models != want || cfg.Provider != "" {
-		t.Errorf("config.toml = %+v (%t), want %+v and no provider", cfg, written, want)
+	if cfg, written := configFile(t, dir); !written || cfg.Models != want {
+		t.Errorf("config.toml = %+v (%t), want %+v", cfg, written, want)
 	}
 }
 

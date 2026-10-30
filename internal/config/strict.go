@@ -8,9 +8,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// unknownKeyHint closes every unknown-key refusal. The keys are named, so
-// what the user needs next is where the real spelling is written down.
-const unknownKeyHint = "check spelling against the documented schema"
+// unknownKeyHint closes every unknown-key refusal. The keys are named; an
+// unknown one is a misspelling or a key the schema has dropped, which only a
+// hand edit removes, since configure cannot load the file to rewrite it.
+const unknownKeyHint = "remove it, or correct its spelling against the documented schema"
 
 // rejectUnknownKeys turns anything the decode did not consume into a load
 // error naming the file and every offending key, and returns nil when the

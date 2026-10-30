@@ -13,8 +13,7 @@ package config
 // The [models] guidance it carries is hints.go's, rendered here and as the
 // kbase://model-hints resource.
 const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase configure`" + ` rewrites the
-# [` + tableModels + `] values and removes a superseded ` + "`" + keyProvider + "`" + ` key, and leaves
-# everything else in this file exactly as it found it.
+# [` + tableModels + `] values and leaves everything else in this file exactly as it found it.
 
 %s
 

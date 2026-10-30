@@ -91,30 +91,6 @@ func warnFaults(stderr io.Writer, faults []config.ProviderFault) {
 	}
 }
 
-// supersededProvider is the one line a file-mode invocation writes where
-// config.toml still states the provider key: it loads, and nothing resolves
-// from it — a role names its own entry in its own reference — so the key is
-// reported superseded rather than silently obeyed. A verb that resolves
-// nothing, and an environment-mode invocation, read no file value and say
-// nothing.
-func supersededProvider(stderr io.Writer, cfg config.Config) {
-	if cfg.Provider == "" {
-		return
-	}
-	fmt.Fprintln(stderr, "config.toml states the superseded provider key; kbase does not use it — run kbase configure to rewrite the file")
-}
-
-// supersededReaderConcurrency is the one line a file-mode build or score
-// writes where config.toml still states [asks] readerConcurrency: the key
-// loads, and asks.concurrency bounds the calls in its place, so it is reported
-// superseded rather than silently ignored.
-func supersededReaderConcurrency(stderr io.Writer, cfg config.Config) {
-	if cfg.Asks.ReaderConcurrency == nil {
-		return
-	}
-	fmt.Fprintln(stderr, "config.toml states the superseded [asks] readerConcurrency key; kbase does not use it — set asks.concurrency instead")
-}
-
 // warnCleartextKey writes config.CleartextWarning's line for ep, judged on the
 // key reg dials ep with, and reports whether it wrote one. A key reg cannot
 // read says nothing here: the dial refuses it.

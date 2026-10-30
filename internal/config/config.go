@@ -32,13 +32,6 @@ const (
 // on its providers.toml pool entry, which is what keeps config.toml safe
 // to read and edit.
 type Config struct {
-	// Provider names the active providers.toml pool entry. It is superseded
-	// and inert: it loads and it merges, and nothing resolves from it — a
-	// role names its own entry in its own reference. The one reader left is
-	// the diagnostic that reports the key superseded, until it is removed at
-	// the next major.
-	Provider string `toml:"provider"`
-
 	// Models maps the verb's roles onto the endpoint and model each asks.
 	Models ModelMap `toml:"models"`
 
@@ -57,10 +50,6 @@ type Config struct {
 
 // AsksConfig is the [asks] table.
 type AsksConfig struct {
-	// ReaderConcurrency is the superseded readerConcurrency key: it loads and
-	// merges, any value, and chooses nothing. Concurrency replaces it.
-	ReaderConcurrency *int `toml:"readerConcurrency"`
-
 	// Concurrency is how many model calls one build or score has in flight
 	// at once, across every role; nil, the key absent, leaves the default.
 	Concurrency *int `toml:"concurrency"`

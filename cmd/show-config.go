@@ -59,12 +59,6 @@ func showConfigFields(opts showConfigOptions) []toolresult.Field {
 	facts := config.Report(opts.Config, opts.Providers, faults, opts.Layers, fileExists, os.Getenv)
 	s := opts.inputs(opts.Env)
 	mode, modeErr := config.ModeOf(s)
-	if mode == config.ModeFile {
-		// The report resolves every role from the files in file mode, so a
-		// config.toml still stating the superseded key is said once on stderr,
-		// as it is by any other verb that resolves from it.
-		supersededProvider(opts.Stderr, opts.Config)
-	}
 	reg := modelclient.New(opts.NewClient, opts.Logger, "", 0)
 	roles, roleItems := resolvedRoles(reg, s, mode, modeErr)
 	return []toolresult.Field{

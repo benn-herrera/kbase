@@ -486,9 +486,8 @@ read in its place.
   states, beside `[models]`, what each role wants and example ids to choose from — the same guidance
   an MCP client reads at `kbase://model-hints`. The layers merge `config.toml` field by field: a
   value the repository states wins, and one it leaves out keeps the global value. `kbase configure`
-  writes it and preserves every other byte of an existing file. Its top-level `provider` key is
-  **superseded**: it still loads and nothing chooses by it, and a file-mode run says so once on
-  stderr; `kbase configure` removes it.
+  writes it and preserves every other byte of an existing file. A `config.toml` stating a top-level
+  `provider` key or `[asks] readerConcurrency` fails to load, naming the key; delete the line.
 - **`kbase configure --create`** writes an annotated `providers.toml` where none stands — nothing
   else creates it — and overwrites no other content. `config.toml` is created where absent by a run
   that resolves a provider, or by `--create`

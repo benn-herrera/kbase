@@ -299,12 +299,6 @@ func scoringRole(opts scoreOptions, env config.Overrides) (config.Endpoint, conf
 	if err != nil {
 		return config.Endpoint{}, mode, err
 	}
-	if mode == config.ModeFile {
-		// An environment-mode invocation reads no file value, so it says
-		// nothing of the keys the files state.
-		supersededProvider(opts.Stderr, opts.Config)
-		supersededReaderConcurrency(opts.Stderr, opts.Config)
-	}
 	ep, err := config.Resolve(s, mode, config.RoleScoring, opts.ScoringModel)
 	if err != nil {
 		return config.Endpoint{}, mode, err
