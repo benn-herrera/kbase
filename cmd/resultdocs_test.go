@@ -59,7 +59,6 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	run("done", "refresh")
 	run("unchanged", "refresh")
 	run("done", "verify")
-	run("unchanged", "render-claim-graph")
 
 	insert := writeValues(t, values, "insert.yaml", "entry:\n- title: A Result\n  rigor: 0.5\n  rationale: Shown.\n"+
 		"- title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n")

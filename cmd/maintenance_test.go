@@ -150,25 +150,21 @@ func TestRefreshAndVerifyVerbs(t *testing.T) {
 }
 
 // TestADegradedKBIsRefusedUntilRefreshRepairsIt: an edge naming no node
-// degrades the load. render-claim-graph and export-latex are refused, check
-// degraded with the remedy kbase refresh, writing nothing; verify reports the
-// fault; refresh rewrites the records without the edge and lists its loss under
-// warnings; verify is then green.
+// degrades the load. export-latex is refused, check degraded with the remedy
+// kbase refresh, writing nothing; verify reports the fault; refresh rewrites
+// the records without the edge and lists its loss under warnings; verify is
+// then green.
 func TestADegradedKBIsRefusedUntilRefreshRepairsIt(t *testing.T) {
 	repo := maintenanceRepo(t)
 	writeRepo(t, repo, recordFiles(kb.Graph{Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports,
 		Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: kb.Bearing{Pending: true}}}}))
-	sheet := filepath.Join(repo, kb.KBDir, kb.ClaimGraphFile)
 
-	for _, args := range [][]string{{"render-claim-graph"}, {"export-latex"}, {"verify"}} {
+	for _, args := range [][]string{{"export-latex"}, {"verify"}} {
 		out, code := kbase(t, repo, args...)
 		d := checkDocument(t, args[0], out)
 		if code != toolresult.ExitCode("refused") || !hasItem(d.items("refusals"), kb.CheckDegraded, kb.GraphEdgesFile, index.RefreshRemedy) {
 			t.Errorf("%s over a degraded KB: exit %d, want refused naming the fault with remedy %q\n%s", args[0], code, index.RefreshRemedy, out)
 		}
-	}
-	if _, err := os.Stat(sheet); !os.IsNotExist(err) {
-		t.Errorf("a refused render left %s standing (%v)", kb.ClaimGraphFile, err)
 	}
 	if _, err := os.Stat(filepath.Join(repo, exportOutDefault)); !os.IsNotExist(err) {
 		t.Errorf("a refused export wrote %s (%v)", exportOutDefault, err)

@@ -206,19 +206,34 @@ func refresh(opts maintenanceOptions) (string, []toolresult.Field) {
 	written := slices.Compact(slices.Sorted(slices.Values(r.Written)))
 	removed := slices.Sorted(slices.Values(r.Removed))
 	fields = append(fields, toolresult.Field{Key: "written", Value: append([]string{}, written...)},
-		toolresult.Field{Key: "removed", Value: append([]string{}, removed...)},
-		toolresult.Field{Key: "warnings", Value: append([]toolresult.Item{}, r.Warnings...)})
+		toolresult.Field{Key: "removed", Value: append([]string{}, removed...)})
+	warnings := toolresult.Field{Key: "warnings", Value: append([]toolresult.Item{}, r.Warnings...)}
 	var refusal toolresult.Refusal
 	switch {
 	case errors.As(err, &refusal):
-		return refused(fields, refusal...)
+		return refused(append(fields, warnings), refusal...)
 	case err != nil:
-		return failed(fields, err)
-	case len(written) == 0 && len(removed) == 0:
+		return failed(append(fields, warnings), err)
+	}
+	if !r.NoDot {
+		fields = append(fields, toolresult.Field{Key: "sheet", Value: sheetDrawn})
+	} else {
+		fields = append(fields, toolresult.Field{Key: "sheet", Value: sheetPlaceholder}, toolresult.Field{Key: "dot", Value: dotNotFound})
+	}
+	fields = append(fields, warnings)
+	if len(written) == 0 && len(removed) == 0 {
 		return toolresult.Unchanged, fields
 	}
 	return toolresult.Done, fields
 }
+
+// Whether refresh drew the sheets through Graphviz dot or, with no dot on
+// PATH, stood the placeholder in for the root sheet.
+const (
+	sheetPlaceholder = "placeholder"
+	sheetDrawn       = "drawn"
+	dotNotFound      = "not found on PATH"
+)
 
 // maintenanceCommand is a verb over the KB found from the working directory.
 func maintenanceCommand(use, short, long string, run func(maintenanceOptions) (int, error)) *cobra.Command {
@@ -251,11 +266,13 @@ func refreshCommand() *cobra.Command {
 records: every register page the KB calls for — kb-root/`+kb.RegisterFile+` and
 <volume>/`+kb.RegisterFile+`, generated and never read as a source — removing a
 page it no longer calls for, and the claim-graph sheets, drawn through Graphviz dot:
-kb-root/claim-graph.svg and, where two or more volumes hold nodes,
-kb-root/claim-graph-digest.svg and <volume>/claim-graph.svg (see
-render-claim-graph), removing a digest or volume sheet the KB no longer calls
-for. With no dot on PATH it draws nothing, says so on stderr, and writes a
-placeholder kb-root/claim-graph.svg only where none exists. It writes no
+kb-root/claim-graph.svg always; where two or more volumes hold nodes,
+kb-root/claim-graph-digest.svg and <volume>/claim-graph.svg for each volume
+holding a node — removing a digest or volume sheet the KB no longer calls for.
+With no dot on PATH it draws nothing, leaves every sheet standing as it is,
+writes a placeholder kb-root/claim-graph.svg only where none exists, and says so
+on stderr and in its result: sheet is placeholder (nothing drawn, whatever
+stands) and dot names the cause. It writes no
 authored file but in two cases. A KB in an older metadata format is rewritten
 whole in the current one, the format stamp standing at the old version until
 the save's last write moves it to the current one, and the files the old

@@ -216,8 +216,7 @@ stays refused forever (SPEC §5's fresh-vs-resume reads the `kb-build:` trail, a
 commit is a plain subject); content joins through the write ops, a claim at a time.
 
 After a build, subcommands operate on the living KB: write ops that insert entries and set fields,
-`render-citation`, queries over the claim graph, `refresh` and `verify`, `render-claim-graph`, and
-`export-latex`, which writes a LaTeX project from the KB through pandoc; `score` asks the configured
+`render-citation`, queries over the claim graph, `refresh` and `verify`, and `export-latex`, which writes a LaTeX project from the KB through pandoc; `score` asks the configured
 scoring model for the faults each item's text commits, one item at a time, and prices them into the
 KB's rigor and bearing values.
 The queries are `find`, `show`, `deps`, `gated-on`, `cited-by`, `referenced-by`, `strength`,
@@ -301,7 +300,7 @@ A run asks a model for minutes: at a terminal `kbase score` blocks until the wal
 [MCP](#using-kbase-from-an-agent-harness-mcp) tool it starts a detached child and returns at once with
 the run's identity, `kbase wait` reporting the outcome.
 
-**Locks.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the whole run.
+**Locks.** A write op and `refresh` hold the KB write lock for the whole run.
 A writer that cannot take it within 30 s gets `retry`. While a build runs, these are refused at once
 (`check: lock`). A build waits out a write in progress for up to 30 s. `kbase score` takes it around
 its one landing and each of its two refreshes, never across the run. A resume restores every path
@@ -329,15 +328,14 @@ the records, strips every other document's frontmatter, writes `AGENTS.md` and `
 whole from the current templates, renders the register pages, removes the files the form no longer
 has (listed under `removed`), strips the entry point's frontmatter too and writes `3.0.0` to the
 stamp file last. Every converted rigor and bearing is marked model-scored, so a default `score` run
-re-judges it. Read-only commands write nothing, and
-`render-claim-graph` writes only sheets. A write op's `--no-refresh` on an unmigrated KB is refused
+re-judges it. Read-only commands write nothing. A write op's `--no-refresh` on an unmigrated KB is refused
 (`check: index`, remedy `kbase refresh`), and `verify` reports it stale with the same remedy. A KB
 stamped with a newer major or minor is refused (`check: kb-format`; update kbase). `status` and
 `cancel` do not load the KB.
 
 ### Claim-graph sheets
 
-`refresh` and `render-claim-graph` draw the claim graph as SVG: `kb-root/claim-graph.svg`, the whole
+`refresh` draws the claim graph as SVG: `kb-root/claim-graph.svg`, the whole
 KB with every volume as a cluster; and, where two or more volumes hold nodes,
 `kb-root/claim-graph-digest.svg`, one box per volume with the edges between volumes counted, and
 `kb-root/<volume>/claim-graph.svg` for each volume (its claims plus every claim one edge away).
@@ -349,8 +347,8 @@ grey, and every node links to its place: a claim's or a work's entry on its regi
 analysis's or an experiment's section in the leaf that hosts it, an axiom's heading in `axioms.md`.
 
 The sheets need Graphviz's `dot` on `PATH`, any version. Without it, existing sheets are left as
-they are, `refresh` writes a placeholder `kb-root/claim-graph.svg` only where none exists, and
-`render-claim-graph` reports `sheet: placeholder`. Sheets are rewritten only when their content
+they are, `refresh` writes a placeholder `kb-root/claim-graph.svg` only where none exists and
+reports `sheet: placeholder`. Sheets are rewritten only when their content
 changes. A digest or volume sheet the KB no longer calls for is removed by the next render and
 reported under `removed`. The drawing is specified in [SPEC.md](SPEC.md) §3.
 
@@ -391,10 +389,10 @@ opencode, in `opencode.json`:
 These are examples; any MCP-capable harness adds its own equivalent entry.
 
 - **Tools.** The subcommands: `init`, the write ops, `render-citation`, the queries (including `show`
-  and `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `render-claim-graph`,
-  `export-latex`, `status`, `cancel`, `build` and `score`. `completion`, `help` and `mcp` are not
-  offered, and neither is `wait`: a held call would spend the turn the build or score run takes, so
-  the `build` and `score` tools hand you their command to run in the background instead. `models`
+  and `stats`), `show-config`, `models`, `configure`, `refresh`, `verify`, `export-latex`,
+  `status`, `cancel`, `build` and `score`. `completion`, `help` and `mcp` are not offered,
+  and neither is `wait`: a held call would spend the turn the build or score run takes, so the
+  `build` and `score` tools hand you their command to run in the background instead. `models`
   reads a provider's model catalogue and `configure` writes `config.toml`; neither performs
   inference — `build` and `score` are the tools that do. A write-op tool takes one entry and offers
   no `--no-refresh`.

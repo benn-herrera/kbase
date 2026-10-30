@@ -167,6 +167,10 @@ These are decided. Packages implement them as stated.
   differ from the current templates' render, SPEC §3/§10 moving with it; (B) leave them until the
   next format migration and narrow CONVENTIONS to "a new format". The plan runs without R; it is
   added, or CONVENTIONS narrowed, on the owner's ruling.
+- **`sheet: placeholder` (awaiting the owner).** SPEC §8 defines it as "nothing was drawn, whether or
+  not a sheet stands", so a model reading it beside an older full drawing may report the graph as a
+  placeholder. Readings: (A) rename the value to one that says what happened (`not-drawn`), a SPEC
+  §7/§8 change; (B) keep it, refresh's help now stating what it means.
 
 ## Skill candidates
 
@@ -184,7 +188,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 | P3: remove the environment inference mode | expert | P2; P1's evidence green | landed |
 | S2: `strength` replaces `weak-points`/`strength-below`; `stats` absorbs `edge-census` | expert | P3 | landed |
 | S3: `drop-claim-node` deletes a claim in one call | expert | S2 | landed |
-| S4: `refresh` absorbs `render-claim-graph` | expert | S3 | pending |
+| S4: `refresh` absorbs `render-claim-graph` | expert | S3 | landed |
 | S5: family binding (`query` reads, `write` writes); shared help stated once | expert | S4 | pending |
 | Review | — | S5 | pending |
 

@@ -137,7 +137,7 @@ func TestA100KBRefreshesToTheCurrentFormat(t *testing.T) {
 // and the remedy, and nothing is written; a newer patch is read as current.
 func TestNewerFormatRefusedByEveryReader(t *testing.T) {
 	values := writeValues(t, t.TempDir(), "insert.yaml", "entry:\n- title: A Result\n  rigor: 0.5\n  rationale: Shown.\n")
-	readers := append([][]string{{"refresh"}, {"verify"}, {"render-claim-graph"},
+	readers := append([][]string{{"refresh"}, {"verify"},
 		{"insert-claim-entry", "--values", values}, {"insert-claim-entry", "--no-refresh", "--values", values}}, queryCases...)
 	for _, stamp := range []string{"4.0.0", "3.1.0"} {
 		t.Run(stamp, func(t *testing.T) {
@@ -205,33 +205,6 @@ func TestARefusedConversionStampsNothing(t *testing.T) {
 	}
 	if data, err := os.ReadFile(outside); err != nil || string(data) != "{}\n" {
 		t.Errorf("%s = %q (%v), want it untouched", outside, data, err)
-	}
-}
-
-// TestRenderClaimGraphDrawsAMigratedKB: rendering the sheets of a KB loaded at
-// an older format draws them from the conversion in memory and carries the
-// migration record; the sheets are all it writes, and the KB keeps its stamp.
-func TestRenderClaimGraphDrawsAMigratedKB(t *testing.T) {
-	repo := stageRepo(t, kb100Dir)
-	before := tree(t, repo)
-	out, code := kbase(t, repo, "render-claim-graph")
-	d := checkDocument(t, "render-claim-graph", out)
-	if code != 0 || d.Outcome != "done" || len(anyStrings(d.Values["written"])) == 0 {
-		t.Fatalf("render-claim-graph over an unsaved 1.0.0 conversion: exit %d\n%s", code, out)
-	}
-	if m, _ := d.Values["migration"].(map[string]any); m["from"] != "1.0.0" || m["to"] != kb.FormatVersion {
-		t.Errorf("the render's migration record is %v", m)
-	}
-	after := tree(t, repo)
-	for p, text := range after {
-		if was, ok := before[p]; (!ok || was != text) && path.Ext(p) != ".svg" {
-			t.Errorf("the render wrote %s, which is no sheet", p)
-		}
-	}
-	for p := range before {
-		if _, ok := after[p]; !ok {
-			t.Errorf("the render removed %s", p)
-		}
 	}
 }
 

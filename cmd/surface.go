@@ -61,7 +61,6 @@ func init() {
 		readWriteTool(exportLatexCommand()),
 		readWriteTool(initCommand()),
 		readWriteTool(refreshCommand()),
-		readWriteTool(renderClaimGraphCommand()),
 		readOnlyTool(verifyCommand()),
 	)
 	// Runs.

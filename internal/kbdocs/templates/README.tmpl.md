@@ -44,9 +44,9 @@ rests on it. A `demoted` edge is a scoring edge cut because it closed a cycle �
 `refresh` repairing what a merge left; it keeps the edge it replaced, relation and bearing, so
 `resolve-demoted` can restore it, and nothing rests on it either.
 
-[`claim-graph.svg`](claim-graph.svg) beside this file is drawn by `refresh` and `render-claim-graph`
-and authored by nobody — a picture for a person to view; a session neither opens nor edits it, and
-takes the graph from the query tools. It draws every volume as a cluster.
+[`claim-graph.svg`](claim-graph.svg) beside this file is drawn by `refresh` and authored by nobody
+— a picture for a person to view; a session neither opens nor edits it, and takes the graph from
+the query tools. It draws every volume as a cluster.
 {digest-chunk}`<volume>/claim-graph.svg` beside each volume's `index.md` shows that volume and every
 node one edge from it.
 A sheet draws the four scoring relations and no `references` edge, and every `demoted` one as a cut;

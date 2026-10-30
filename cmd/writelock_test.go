@@ -153,12 +153,11 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 
 	insert, insertErr := insertClaim(repo, "Blocked")
 	refreshed, refreshErr := runQuiet(runRefresh, repo)
-	rendered, renderErr := runQuiet(runRenderClaimGraph, repo)
 	detail := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), state)
 	for _, c := range []struct {
 		verb, out string
 		err       error
-	}{{"insert-claim-entry", insert, insertErr}, {"refresh", refreshed, refreshErr}, {"render-claim-graph", rendered, renderErr}} {
+	}{{"insert-claim-entry", insert, insertErr}, {"refresh", refreshed, refreshErr}} {
 		if c.err != nil {
 			t.Fatal(c.err)
 		}

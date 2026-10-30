@@ -37,7 +37,7 @@ Input is LaTeX only; no other input format is in scope.
 | Interface | Observed version | Contract |
 |---|---|---|
 | pandoc | 3.12 (`pandoc-api-version` 1.23.1.2) | Required on the host, not shipped. |
-| Graphviz `dot` | Any version | Optional on the host, found on `PATH`, not shipped. Draws the claim-graph sheets (§3); absent, `refresh` writes the placeholder at the root only and `render-claim-graph` says so (§3, §7). |
+| Graphviz `dot` | Any version | Optional on the host, found on `PATH`, not shipped. Draws the claim-graph sheets (§3); absent, `refresh` writes the placeholder at the root only and its result says so (§3, §7). |
 | git | 2.56.0 | Required on the host. The recoverable record of a build (§6). |
 
 **pandoc.** The accepted range's lower bound is 3.12. Its upper bound is the next major
@@ -69,7 +69,7 @@ filter.
 | `kb-root/CLAUDE.md` exactly `@AGENTS.md` | Refresh's precheck of the stamped documents (`check: agents-redirect`) |
 | The `` ``` math `` fence opener | The inventory's display-maths fence reader |
 | The up-link line | `kb.UplinkMarker` and the readers that key on it |
-| The claim-graph sheets' DOT, against the DOT goldens (`internal/sheet/testdata/`) | The sheet writer's write-only-where-bytes-change rule: under the same `dot`, `refresh` and `render-claim-graph` leave an unchanged sheet's bytes as they are |
+| The claim-graph sheets' DOT, against the DOT goldens (`internal/sheet/testdata/`) | The sheet writer's write-only-where-bytes-change rule: under the same `dot`, `refresh` leaves an unchanged sheet's bytes as they are |
 
 **Stamped documents.** `AGENTS.md`, `CONVENTIONS.md` and `README.md` give the maintenance commands:
 kbase's subcommands. They point a reader at kbase's tools, never at its records: `AGENTS.md`
@@ -87,8 +87,8 @@ superseded form, `2.0.x` or `1.0.0` (§10), is read through migration.
 
 ### `claim-graph.svg`
 
-A picture of the claim graph, drawn through Graphviz `dot` (§2). `refresh` and `render-claim-graph`
-render every sheet on each run and write one only where its bytes change. The SVG's bytes are
+A picture of the claim graph, drawn through Graphviz `dot` (§2). `refresh` renders every sheet on
+each run and write one only where its bytes change. The SVG's bytes are
 Graphviz's; no check reads them for their content — the refresh test writes one DOT twice through
 the same `dot` and asserts identical bytes, the write-only-where-bytes-change rule's basis — and no
 other command's behaviour depends on them (ARCHITECTURE §6).
@@ -143,7 +143,7 @@ appears; it checks an edge only against the edges still kept.
 `kb-root/claim-graph.svg` does not exist `refresh` writes a placeholder there — an SVG naming the
 missing tool and, beneath it, `index sha256:` followed by the first 12 hex digits of the SHA-256 of
 the `.index/` files — the two record files — concatenated in sorted path order, deterministic.
-`refresh` says so in one line on stderr; `render-claim-graph`'s result names the lack (§7).
+`refresh` says so in one line on stderr, and its result names the lack (§7).
 
 ---
 
@@ -369,7 +369,7 @@ kbase-owned paths to the last stage commit and re-runs the stage. **A build in f
 `kb-root/`:** a resume restores every path under it to the last boundary, whatever was done to it
 since, and nothing vets what it finds there. An edit made while a build is interrupted is the
 editor's to carry in git, by waiting for the build or by reverting the commit that reset it; a write
-op, `refresh` or `render-claim-graph` attempted while a build or a scoring run runs is refused (§8).
+op or `refresh` attempted while a build or a scoring run runs is refused (§8).
 Commits are scoped by pathspec to kbase-owned paths.
 
 **The state store holds what does not belong in the repository** — the holder lock and the record
@@ -503,7 +503,7 @@ usage error on its own command line, before it serves, still prints a YAML refus
    conversion dropped or changed that the converted files do not show: `path`, `line` where it
    names one, `detail`; `[]` when none) — present on the result of every verb that reads a KB
    through the loader on an older format version, and absent otherwise (§10):
-   `refresh`, `verify`, `render-claim-graph`, `render-citation`, `export-latex`, the queries, `score`
+   `refresh`, `verify`, `render-citation`, `export-latex`, the queries, `score`
    and every write op. It follows `kb-root` where the result carries both.
 4. The subcommand's own keys, in the order its table gives.
 5. Exactly one of these, chosen by `outcome`, and it closes the document: `refusals` for `refused`
@@ -547,14 +547,13 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `status` | `state-dir`; `state` (§6's vocabulary, `interrupted` included); `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (list of `stage`, `commit`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `cache-entries`, `cache-bytes` (integers: the answer cache's entry count and total size in bytes, §6); `resume` (absent for `finished`, `running` and `bounded`; read from the run §6 names) |
 | `cancel` | `state-dir`; `pid`; `resume` (absent where the record's command does not read as a `kbase build` invocation, §6) |
 | `init` | `written` (every path this call wrote — the spine, the two empty record files, the stamped readiness documents and the refresh's output, merged, deduplicated, path-sorted); `removed` (as `refresh`'s; `[]` at birth) |
-| `refresh` | `written` (includes every register page and sheet written); `removed` (files the KB no longer calls for — a register page no node is rendered on, a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none); `warnings` (one item per record the repair of a degraded load dropped and per edge it cut (§10), `path` the record file and `detail` the record and why; `[]` when none) |
+| `refresh` | `written` (includes every register page and sheet written); `removed` (files the KB no longer calls for — a register page no node is rendered on, a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands; present only on `done` and `unchanged`); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`); `warnings` (one item per record the repair of a degraded load dropped and per edge it cut (§10), `path` the record file and `detail` the record and why; `[]` when none) |
 | `verify` | `findings` (items the KB's structure carries that are not faults — every `demoted` record (§10), as an item with `check: demoted`, `path` the register page of the record's `target`, omitted where that target has no host, and `detail` the edge and the relation it replaced; `[]` when none); its faults are `refusals` items, a refresh-fixable item carrying `remedy: kbase refresh` |
 | every write op | `ids` (inserts only; minted or adopted, in entry order); `minted` (the subset this call drew); `adopted` (list of `entry`, `id`, `differs` — values keys whose supplied value the existing entry does not carry); `written` (paths this call wrote); `refreshed` (paths; null under `--no-refresh`); `removed` (the trailing refresh's, as `refresh`'s; `[]` under `--no-refresh`) |
 | `resolve-demoted` | as every write op; `resolved` (list of `source`, `target`, `action`: `removed` or `restored`) |
 | `render-citation` | `citations` (one per entry, in entry order) |
 | `deps`, `gated-on`, `cited-by`, `find`, `referenced-by`, `strength`, `subtree`, `edges` | `count`; `offset`; `truncated` (bool); `results` (the query's list, in its own key names, sliced; `strength`'s records are a claim's node record (as `show`'s below, without `manually_scored` and `strengthen_by`) then `dependents`, the count of nodes its strength enters — `strength` null on a pending claim; `deps`' edge records, not `-i`'s ids, are `relation`, `direction`, `target`, `bearing`, `manually_scored`, `context` — the bearing as the index writes it, a number in `[0, 1]` or `*pending*` spelled as text, and null only where the pairing carries none; `manually_scored` the record's flag (§8), null where its record carries none; the context null where the edge has none; `edges`' records are `source`, `relation`, `target`, `bearing` (as `deps`' bearing), `manually_scored` (as `deps`'), `context` (as `deps`') and `walked` (bool)) |
 | `show`, `stats` | `results` (the query's mapping; a node record carries `node_type`, `id`, `title`, `canonical_path` and `canonical_anchor`, then the keys its kind carries: `rigor` and `strength` on a claim, with `build_status`, `build_band`, `rationale`, `premise_count`, `strengthen_by_count` and `citation_count` after them; `rigor`, `strength` and `build_band` on an analysis; `status` and `rigor` on an experiment; `rigor` on a work; `rigor` on an axiom, its `1.0` by rule; `show` adds `manually_scored` (§8) after `rigor` on a claim, an analysis and an experiment; `strength` is a number rounded to two decimals for reading, `rigor` the number the node holds; `stats`' mapping carries one count per node kind — `claims`, `analyses`, `experiments`, `axioms`, `works` — then `edges`, `demoted_edges`, `strengthen_by_items`, `citation_edges` and `subtree_aggregates`, then `rigor_manual`, `rigor_model`, `bearing_manual` and `bearing_model` (the records whose type carries `manually-scored`, `*pending*` values included, counted by the flag), then `relations`, then `strength_bands` and its two ranked sections, whose records carry `strength`; `relations` carries one record per relation in this order — `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted` — each `edges`, the relation's row count, `walked` (bool), then on a scoring relation `bearings`: one record per distinct bearing its rows carry, `bearing`, as the index writes it, and `edges`; numbers ascending, then `*pending*`, then null, `[]` where the relation has no rows; `show`'s claim record adds `strengthen_by` after `strengthen_by_count`: the claim's strengthen-by items in `item_idx` order, each `item_idx`, `text`, `mentioned_ids` (`[]` when none)) |
-| `render-claim-graph` | `written` (the sheets whose bytes changed); `removed` (the sheets the volume-count rule drops; `[]` when none); `sheet` (`drawn` where the sheets were rendered this call, else `placeholder`: nothing was drawn, whether or not a sheet stands); `dot` (`"not found on PATH"`, present only when `sheet` is `placeholder`) |
 | `models` | `provider`; `provider-rule`, `provider-layer` (the rule that named the entry — `flag` or `sole-entry` — and the layer that supplied it; this verb always selects one); `models` (ids, sorted ascending) |
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
@@ -633,9 +632,8 @@ is `refused`, never `unchanged`.
 one that ends with a refresh refuses, before it writes anything, a `kb-root/CLAUDE.md` that is not
 the redirect (`check: agents-redirect`, §3), which that refresh would refuse.
 
-**One write lock.** A write op, `refresh` and `render-claim-graph` hold the KB write lock for the
-whole run: from loading the KB through the trailing refresh and the sheets to the result. `init`
-holds it from before `kb-root/` exists — the lock sits on the directory `kb-root/` stands in, so it
+**One write lock.** A write op and `refresh` hold the KB write lock for the whole run: from loading
+the KB through the trailing refresh and the sheets to the result. `init` holds it from before `kb-root/` exists — the lock sits on the directory `kb-root/` stands in, so it
 is available at birth — through the skeleton, the trailing refresh and the birth commit to the
 result. `score` takes it around its one landing — every value the walk produced, after the walk — and
 around each of its two refreshes, never across the run (§8). A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the
@@ -829,13 +827,6 @@ report are the values the rows hold, which `set-bearing` moves. `relations` repo
 relation and `edges` on each row: whether a score run's bearing pass asks about that relation's
 edges — `supports`, `lifts` and `refutes` — where a `founds` bearing is the user's, written by
 `set-bearing`.
-
-### `render-claim-graph`
-
-Renders every claim-graph sheet (§3) from the KB's records and statement markers, writing those
-whose bytes change. Without `dot`, §3's rule, and the result names the lack. On a KB in an older
-format it draws from the conversion in memory and writes sheets only: it saves no conversion, and
-its result carries `migration`. A degraded KB is refused (§10). Result keys: §7.
 
 ### `export-latex`
 
@@ -1565,7 +1556,7 @@ the words of the band ladder's bottom rung on a derived line.
 **One version read and written.** kbase reads and writes exactly the current version (ARCHITECTURE
 §12). An older stamp is read through migration (below). A newer major or minor is refused by every
 subcommand that reads the KB — `build` on an existing KB, `refresh`, `verify`, the write ops, the
-queries, `score`, `render-citation`, `render-claim-graph` and `export-latex`; `status` and `cancel` do
+queries, `score`, `render-citation` and `export-latex`; `status` and `cancel` do
 not load the KB — outcome `refused`, one
 item `check: kb-format` naming the KB's version and kbase's, remedy "update kbase". No subcommand
 writes an older format, and nothing downgrades.
@@ -1575,7 +1566,7 @@ KB's files as bytes in, the current form's files as bytes out, plus the set of r
 paths the conversion made obsolete and the conversion's warnings — version step by version step, in
 memory; every command then sees the current form, and a converted, unsaved KB answers every query
 as converted. A read-only command (`verify`, the queries, `render-citation`, `export-latex`) writes
-nothing, and `render-claim-graph` writes sheets only (§8). The next natural write — `refresh`, a
+nothing. The next natural write — `refresh`, a
 write op's trailing refresh, or a scoring run's start refresh — saves the conversion, in this
 order: `.index/edges.yaml`, then `.index/nodes.yaml`, then every other file the conversion produced
 (each document with its frontmatter removed); then the stamped `AGENTS.md` and `CONVENTIONS.md`,
@@ -1756,7 +1747,7 @@ completes **degraded** — a state computed on every load and never stored:
 | A cycle among the scoring edges | cut by the cycle walk (below); nothing is dropped |
 
 While degraded, `verify` runs and reports every fault as a `degraded` item, remedy `kbase refresh`;
-every query, `score`, `export-latex`, `render-claim-graph`, a `build` resuming a trail and every
+every query, `score`, `export-latex`, a `build` resuming a trail and every
 public write op is refused, `check: degraded`, naming the faults, remedy `kbase refresh`. `refresh`
 writes the records as the walk resolved them and reports each record dropped and each edge cut under
 its `warnings` (§7). Merging metadata across branches is unsupported; `kbase refresh` repairs what a
@@ -2285,7 +2276,7 @@ changes nothing.
   write kbase's records and derived files — anything
   under `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path
   exists; it names the query tools as what reports what the records hold, the write tools as what
-  changes them, and `refresh` and `render-claim-graph` as what writes the sheets. A `claim-rigor.md`
+  changes them, and `refresh` as what writes the sheets. A `claim-rigor.md`
   register page is the exception: `refresh` generates it to be read as prose, and a session takes no
   value from it and never edits it. Its last paragraph is the session rule `AGENTS.md` also states
   (§3): a session sets a rigor or a bearing, its current value included, only to a value the user
@@ -2321,6 +2312,7 @@ changes nothing.
 - **`drop-claim-node` deletes a claim in one call.** It removes every edge naming the claim with the
   node, so `drop-claim-edges` and `drop-inbound-edges` are no longer needed first; a mention in prose
   still refuses the drop (§8).
+- **`render-claim-graph` is gone**: `refresh` draws the sheets and reports `sheet` and `dot` (§7, §8).
 
 **0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
 the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an

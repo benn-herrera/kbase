@@ -401,7 +401,7 @@ exists, a line naming it as the author's. `writeReport` reads the filter's findi
 | Mechanism | Package | Status |
 |---|---|---|
 | **Metadata layer**: kb-root model: names, exclusions, link primitives and the dead-link gate over `kb-root/`; the record loader (`LoadGraph`, the two record files decoded and encoded by `format300` and re-exported here); the statement-marker reader and the hosts it derives (`MarkerLines`, `Hosts`); the document kind (`DocumentKind`, from the child list); the format stamp and its file; schema; the derived-line renderers the register pages are written through | `internal/kb` | Landed |
-| **Write API**: render, values, store, ops — every op edits the records and the statement markers (`records.go`, `marks.go`) | `internal/write` | Landed. An insert adopts by title and host (SPEC §8), reporting the differing fields; a work by its key and an axiom by its label. There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh` and `render-claim-graph`; a scoring run takes it around its one landing, from `internal/score`, and around each of its two refreshes, from `cmd/score.go`, never across a run (§6's Scoring). The ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root — the one item `write.HeldLockItem` gives, beside `LockKB`. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
+| **Write API**: render, values, store, ops — every op edits the records and the statement markers (`records.go`, `marks.go`) | `internal/write` | Landed. An insert adopts by title and host (SPEC §8), reporting the differing fields; a work by its key and an axiom by its label. There is one KB write lock, `write.LockKB(kbRoot)` (`lock.go`): `internal/filelock`'s advisory lock on the directory `kb-root/` sits in. The caller takes it and holds it across the whole run (SPEC §8): `cmd` from `kbload.Open` through the write, the trailing refresh and the sheets to the result, and around `refresh`; a scoring run takes it around its one landing, from `internal/score`, and around each of its two refreshes, from `cmd/score.go`, never across a run (§6's Scoring). The ops and refresh themselves take none, and the per-directory splice locks are gone. A writer that cannot take it within the wait (§12) gets `retry`, `check: lock`, `path` the repository root — the one item `write.HeldLockItem` gives, beside `LockKB`. `render-citation`, `verify` and the queries take none. The build takes and releases it once to wait out a write in progress (§8). On Windows, where no advisory lock exists, only the read-then-compare check guards against a concurrent writer |
 | **Refresh and verify; the index**: the derived rows in memory (`Derive`), the degraded load's resolution and the cycle walk (`BreakCycles`), strength, aggregates, the register pages and their freshness, refresh's save, the citation gate and the claim-id link check | `internal/index` | Landed |
 | **Queries** | `internal/query` | Landed |
 | **Sheet**: DOT emitter and `dot` invocation; `Derive`'s rows, the leaves and the entry point's and volumes' headings in, SVGs out | `internal/sheet` | Landed as the drawing of SPEC §3; the placeholder only where `dot` is absent |
@@ -537,7 +537,7 @@ nothing, leaves existing sheets as they are, and yields the placeholder for a ro
 sheet.
 
 `refresh` — and so every caller of `index.Refresh`: a write op's trailing refresh, the build's gate
-— and `render-claim-graph` reach it through one seam, `index.WriteSheet`, which renders every sheet
+— reaches it through one seam, `index.WriteSheet`, which renders every sheet
 on each call and writes one only where its bytes change, with no ownership test on an existing
 sheet. `verify` never reaches it.
 
@@ -1133,8 +1133,8 @@ reading, status and the trail's reading. Only `build`, `buildstore` and `cmd`'s 
   takes it after it opens and holds it for the whole run, and removes it on release. Because it is
   per repository, a second run through any `--state-dir` is `refused` (`check: lock`, `path` the
   state-dir, no remedy) with a detail naming the holder — "a build (pid 1) is running; its state-dir
-  is …" or "a score run (pid 1) is running; …", both read from the store the lock names. A write op,
-  `refresh` or `render-claim-graph` that finds it held is refused with the same item; a write verb
+  is …" or "a score run (pid 1) is running; …", both read from the store the lock names. A write op
+  or `refresh` that finds it held is refused with the same item; a write verb
   probes for it before waiting on the write lock and again after taking it, and a scoring run's own
   landings and refreshes probe for it not at all: they write as the run that holds it. An empty
   lock file is the window between acquiring the lock and writing the state-dir: it reads as
@@ -1655,8 +1655,8 @@ The dependency rules are enforced by an import-policy test over the transitive i
 Exit codes and the placeholder's digest form are in SPEC §7 and §3; the pandoc range is SPEC §2; the
 stage-commit subject is SPEC §6.
 
-**Format migration (SPEC §10).** Every verb that reads a KB — `refresh`, `verify`,
-`render-claim-graph`, the queries, the write ops, `export-latex`, and the build's spine-seed, phase-3a, readiness
+**Format migration (SPEC §10).** Every verb that reads a KB — `refresh`, `verify`, the queries,
+the write ops, `export-latex`, and the build's spine-seed, phase-3a, readiness
 stamp, overview and resume — calls `kbload.Open(kbRoot)`; `status` and `cancel` do not load the KB.
 `Open` reads the stamp alone — from `.index/format.yaml` (`kb.DecodeFormatStamp`), else from the
 superseded entry-point frontmatter (`kb.FormatStamp`) — before anything else. A
@@ -1691,9 +1691,7 @@ part-way leaves the KB stamped at the version it converts from, its next load re
 conversion and its next refresh completing it. A converter that finds `.index/nodes.yaml` standing
 takes both record files as they stand (`from200to300`'s `resumed`), since only an interrupted save
 writes it, and carries the stamp file through unchanged, holding the version the tree is still at.
-The removals are reported as `removed` by `refresh` and every write op; `render-claim-graph` on an older KB draws the
-sheets from the `Source`'s converted bytes, writes nothing else and saves no conversion, and `score`
-refuses a KB its start refresh left unmigrated. A converter is a pure function with a golden pair as
+The removals are reported as `removed` by `refresh` and every write op, and `score` refuses a KB its start refresh left unmigrated. A converter is a pure function with a golden pair as
 its test; the chain's order is the version order and a gap in it is a test failure. The record files
 of each `3.0.0` golden tree, `internal/formats/testdata/<tree>-3.0.0/`, have a decoded-values golden
 beside it, `<tree>-3.0.0.values.jsonl`: one JSON object per record in the files' order, its keys in

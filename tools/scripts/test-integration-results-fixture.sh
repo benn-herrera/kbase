@@ -61,8 +61,11 @@ run() {
 run verify done verify
 run refresh done refresh
 run refresh unchanged refresh
+# refresh renders every sheet on each call: drawn wherever the host has dot.
+sheet=placeholder
+command -v dot > /dev/null && sheet=drawn
+grep -qx "sheet: \"${sheet}\"" "${LAST}" || { printf '  fail: refresh does not report sheet %s\n' "${sheet}"; status=1; }
 run verify done verify
-run render-claim-graph unchanged render-claim-graph
 run insert-claim-entry done insert-claim-entry --values "${fixture}/values/insert.yaml"
 run insert-claim-entry unchanged insert-claim-entry --no-refresh --values "${fixture}/values/insert.yaml"
 # The edges every later leg reads: a work, an analysis and one edge of each
@@ -71,7 +74,7 @@ run insert-claim-entry unchanged insert-claim-entry --no-refresh --values "${fix
 # the claims in id order, ${ID3} the analysis once its insert reports it —
 # then both claims marked in a.md, so verify reads the staged KB whole.
 ids=()
-while IFS= read -r i; do ids+=("${i}"); done < <(sed -n '/^ids:/,/^minted:/s/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${docs}/06-insert-claim-entry.out" | sort)
+while IFS= read -r i; do ids+=("${i}"); done < <(sed -n '/^ids:/,/^minted:/s/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${docs}/05-insert-claim-entry.out" | sort)
 [[ "${#ids[@]}" -eq 2 ]] || { printf 'integration(results-fixture): the insert reported no two claim ids\n'; exit 1; }
 mkdir -p "${out}/values"
 # staged <file>: the fixture's values file, its ids substituted, under values/;

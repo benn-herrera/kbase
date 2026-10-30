@@ -18,9 +18,9 @@ This tree is a knowledge base with a verified claim graph over it. It has agents
 - **Do not read kbase's records or its sheets.** `.index/` holds kbase's own records; the
   `claim-graph.svg` and `claim-graph-digest.svg` sheets, a volume's `claim-graph.svg` and any `.dot`
   file are its derived output. The query tools — `show`, `deps`, `find`, `stats` and the rest —
-  report what the records hold, the write tools change them, and `refresh` and
-  `render-claim-graph` write the sheets. Testing that such a path exists (`test -d`, a stat) is
-  allowed; listing, globbing or opening anything under `.index/` is reading it. A `claim-rigor.md`
+  report what the records hold, the write tools change them, and `refresh` writes the sheets.
+  Testing that such a path exists (`test -d`, a stat) is allowed; listing, globbing or opening
+  anything under `.index/` is reading it. A `claim-rigor.md`
   page is the exception: `refresh` generates it for reading as prose; take values from the query
   tools, never from it, and never edit it.
 
