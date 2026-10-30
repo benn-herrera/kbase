@@ -27,6 +27,10 @@ putting the key in a transcript.
 2. **Adding a key is `kbase auth add <provider>`, and the key arrives on stdin, never as an
    argument.** `<provider>` is a `providers.toml` entry name, never a role: a key belongs to the
    endpoint that dials, and a role reaches it only through `config.toml`'s model reference.
+   - `add` refuses a name that is not a configured entry, naming the name as given, with
+     `kbase show-config` — which lists the entries — as its remedy; a configuration that does not
+     load refuses as it does for any verb. `remove` takes any name, so an orphaned file can be
+     cleared. Refusals and remedies name the provider as given.
    - The key is piped in: `<key-manager> --print-key | kbase auth add <provider>`. A key manager
      feeds it hands-free, and the key never enters an agent's context, even when the agent runs that
      pipeline.

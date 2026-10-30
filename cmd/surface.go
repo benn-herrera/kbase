@@ -117,6 +117,11 @@ func init() {
 		readOnlyTool(showConfigCmd),
 		cliOnly(probeCmd, "a diagnostic whose tool would let an agent poll a model at will"),
 	)
+	// Credentials: the store's verbs, under one parent the tool table never
+	// reads below.
+	authCmd := authCommand()
+	authCmd.AddCommand(authAddCommand(), authRemoveCommand(), authListCommand())
+	rootCmd.AddCommand(cliOnly(authCmd, "a key arrives on stdin, which no tool call has, and no tool accepts a key"))
 	// Server.
 	rootCmd.AddCommand(cliOnly(mcpCommand(), "it is the server the tools are served by"))
 

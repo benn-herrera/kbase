@@ -96,7 +96,7 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 |---|---|---|---|---|
 | A | mechanical | test failure messages never print a key | none | landed |
 | B | expert | `internal/auth`: the encrypted per-provider files; an atomic write that takes a mode; one state-base function | A | landed |
-| C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | in progress |
+| C | expert | `kbase auth add`, `auth remove` and `auth list`, CLI-only; `cmd` tests isolate the store | B | landed |
 | D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C | pending |
 | E | expert | a 401 or 403 from the provider fails with the remedy `kbase auth add <provider>` | D | pending |
 | F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
@@ -228,8 +228,10 @@ site that is not in this list, it reports the site and does not change it.
   gains the auth verbs
 - SPEC §7 (the result table, and the `kb-root` exemption at line 500), §9 ("Provider commands"),
   §11 ("Tools", lines 2097–2099)
-- ARCHITECTURE I9 (line 32)
-- README "Configuration"
+- ARCHITECTURE I9 (line 32), §11 "MCP server"
+- README "Configuration" and the MCP not-offered list
+- `cmd/main.go` (root `Long`), `cmd/auth_test.go` (new), CONVENTIONS (subcommands are added in
+  `cmd/surface.go`)
 
 **Facts acted on:**
 - `auth` is the first command with subcommands. The tool table reads `root.Commands()` alone
@@ -240,9 +242,9 @@ site that is not in this list, it reports the site and does not change it.
   §11 line 2097: "Every subcommand is served, less `completion`, `help`, `mcp` itself and `wait` …
   and less `probe`". Both lists gain `auth`, with its reason: no tool call has stdin, and no tool
   accepts a key.
-- The verbs load no configuration. The root's `PersistentPreRunE` (`cmd/main.go:85-95`) builds
-  only the logger, and configuration is loaded per verb by `loadVerbContext`. The auth verbs do
-  not call it, so a configuration that fails the strict load does not block them.
+- Configuration is loaded per verb by `loadVerbContext`; the root's `PersistentPreRunE`
+  (`cmd/main.go:85-95`) builds only the logger. `auth add` loads it, to refuse a name no
+  configured entry carries (ACTIVE_DESIGN decision 2); `remove` and `list` load none.
 - No new module is needed to detect a tty. `os.Stdin.Stat()` reports `os.ModeCharDevice` for a
   terminal.
 - `cmd`'s `TestMain` (`cmd/mcp_test.go:52`) isolates nothing. The command

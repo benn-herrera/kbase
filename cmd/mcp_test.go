@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -49,11 +50,32 @@ const (
 // shipped binary would start.
 const runAsKBaseEnv = "KBASE_TEST_RUN_AS_KBASE"
 
+// scratchStateHome is the XDG_STATE_HOME TestMain points the package's tests
+// at, so no test reaches the user's state base or credentials store.
+var scratchStateHome string
+
 func TestMain(m *testing.M) {
 	if os.Getenv(runAsKBaseEnv) != "" {
 		main()
 	}
-	os.Exit(m.Run())
+	os.Exit(runWithScratchStateHome(m))
+}
+
+// runWithScratchStateHome runs the tests with XDG_STATE_HOME on a scratch
+// directory, removed after them.
+func runWithScratchStateHome(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "kbase-cmd-state-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scratch state home:", err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	if err := os.Setenv("XDG_STATE_HOME", dir); err != nil {
+		fmt.Fprintln(os.Stderr, "scratch state home:", err)
+		return 1
+	}
+	scratchStateHome = dir
+	return m.Run()
 }
 
 // isolateChildBuild points everything a build started from this test reads

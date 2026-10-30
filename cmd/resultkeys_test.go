@@ -34,6 +34,9 @@ var documentedKeys = map[string][]string{
 	"probe":           {"provider", "provider-rule", "provider-layer", "selection", "model", "temperature", "thinking", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
 	"export-latex":    {"written", "volumes", "report"},
 	"score":           {"state-dir", "pass", "roles", "run", "ledger", "counts", "scored", "resume"},
+	"auth add":        {"provider"},
+	"auth remove":     {"provider"},
+	"auth list":       {"providers"},
 }
 
 // documentedSubKeys is the keys of each mapping a result nests, in order.
@@ -162,7 +165,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		t.Fatalf("%s: keys %q, want outcome first", verb, keys)
 	}
 	keys = keys[1:]
-	if verb != "models" && verb != "configure" && verb != "show-config" && verb != "probe" && len(keys) > 0 && keys[0] == "kb-root" {
+	if !slices.Contains([]string{"models", "configure", "show-config", "probe", "auth add", "auth remove", "auth list"}, verb) && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 		// A migrated KB's record is conditional: present after kb-root and
 		// nowhere else, so a document carrying one is checked without it.

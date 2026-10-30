@@ -497,7 +497,7 @@ usage error on its own command line, before it serves, still prints a YAML refus
 
 1. `outcome`.
 2. `kb-root`: the absolute path. Present on every subcommand that resolves a KB, which is all of
-   them except `models`, `configure`, `show-config` and `probe`; `init` omits it from results written
+   them except `models`, `configure`, `show-config`, `probe` and the `auth` subcommands; `init` omits it from results written
    while no `kb-root/` stands (§8).
 3. `migration`: a conditional record — `from`, `to`, `note`, `warnings` (one item per thing the
    conversion dropped or changed that the converted files do not show: `path`, `line` where it
@@ -558,6 +558,8 @@ category `configure` is not given names `key: models.<category>` (`models.decisi
 | `show-config` | `layers` (one record per directory this invocation read, in precedence order: `path`, `source` (`explicit`, `environment`, `repository` or `global`), `exists`, `providersExists`, `configExists` — the directory's presence and each of its two files'); `providers` (one record per entry, in name order: `name`, `base-url`, `decisions-flavor` (the surface it speaks, `systemone` where the entry is silent), `key` (`file` or `none`), `key-file`, `layer` (the layer that supplied the entry), `usable`, `fault`; a provider a dropping fault removed has `name`, `layer`, `usable`, `fault` only); `config` (the merged choices: `models` (`decision`, `text`, `scoring` — each the reference `config.toml` states, null where unset); `sampling` (`text`, `scoring` — each `temperature` and `thinking` as `config.toml` states them, null where unset)); `selection` (`provider` and `rule` — `flag` or `sole-entry` — or `detail` where no entry was named); `roles` (one record per role in role order, in the role record's shape below, each with `base-url`, `sources` (`base-url`, `model`, `key`, and for a chat role `temperature`, `thinking` — the layer that supplied that field, one of `layers`' four names, null where the field is unset), a chat role's `temperature` and `thinking` (null where unset: kbase's default, §9.2) and `detail` where the role does not resolve); `diagnostics` (items: every fault, `path` the `providers.toml` that carries it, and the resolution failure where a role does not resolve) |
 | `configure` | `provider` (the entry configured, null where the configuration names none); `provider-rule`, `provider-layer` (as `models`'s; absent where no provider resolved, as under `--create` with no `--provider`); `models` (`decision`, `text`, `scoring`, as `config.toml`'s `[models]` spells them, null for a category left unset); `written` (the files this call wrote — `providers.toml`, then `config.toml`, in the order they were written; `[]` with outcome `unchanged`) |
 | `probe` | `provider`; `provider-rule`, `provider-layer` (as `models`'s); `selection` (the selection that answered: `decision`, `text` or `scoring` where a role flag or the default named it, else the `<provider>/<model>` reference `--model` named); `model` (the id asked); `temperature`, `thinking` (chat selections only: the effective settings — `temperature` a number; `thinking` `off`, `low`, `medium` or `high`); `first-token-ms`, `wall-ms` (integers: request start to the first non-empty content or reasoning delta — zero where none arrived — and the call's end-to-end time); `finish-reason` (null where the stream reported none); `reply` (the reply's text on a chat surface, and on a decision surface the answer's probability, chosen letter or type); `usage` (a record: `reported` — whether the provider sent a usage block at all, so a zero count is a measurement only where it is true — then `prompt-tokens`, `completion-tokens`, `reasoning-tokens`, `cached-tokens`) |
+| `auth add`, `auth remove` | `provider` (the name given; never the key) |
+| `auth list` | `providers` (the names with a stored key, in name order; `[]` when none) |
 | `export-latex` | `written` (absolute paths; outside `kb-root/`); `volumes` (the volume directories exported, entry-point order); `report` (the path of the export report written under the out dir — one YAML list, every degradation and finding line the run produced, each naming the form, the source path and the reason) |
 | `score` | `migration` (conditional, the shared vocabulary's; it stands before `state-dir`, and a run that starts on an older KB is the call whose start refresh saves the conversion); `state-dir`; `pass` (the set it walks: one pass, or `both`); `roles` (one record, `scoring`, in the role record's shape below; absent under `--dry-run`); `run` (the run's id); `ledger` (the run's directory, absolute); `counts` (a record: `total`, `done`, `failed`, `skipped`, `remaining` — the items by the status the ledger last records for each, so a resumed run reports the whole run); `scored` (the items whose value landed, in the walk's order — a node's id, or an edge's `<relation> <source> → <target>`); `resume` (the command that continues the run, carrying `--project-dir` where given, and `--config-dir` written absolute; present wherever an item failed or was not reached — a `skipped` item does not make it present — and it stands before the record the outcome closes on; absent from a dry run, and from a stop before the walk) |
 
@@ -1297,6 +1299,23 @@ resolves and changes nothing (§9.6). `kbase probe [--model REF] [--decision | -
 [--prompt TEXT]` asks one selection — a role flag's role, else the `scoring` role, or the reference
 `--model` names — one question and reports the call, reading no KB and writing no state (§8). Each
 writes its result under §7.
+
+`kbase auth add <provider>` stores the API key piped on its stdin for `<provider>`, a
+`providers.toml` entry name, replacing any key stored for it: one file per provider,
+`$XDG_STATE_HOME/kbase/auth/<provider>-key.enc` (`~/.local/state` where the variable is unset),
+encrypted under an encryption key derived for the OS user — obfuscation against a reader of the
+file, not a boundary against that user — and readable by its owner alone. `add` reads the
+configuration as the provider verbs do, and a configuration that does not load refuses as it does
+for them; a name no `providers.toml` entry carries — in the pool or dropped from it by a fault —
+is refused, `check: usage`, `key` the name as given, `remedy: kbase show-config`. The key arrives
+on stdin and no other way: stdin that is a terminal is refused, as is input that is empty once
+surrounding whitespace is trimmed, each `check: usage` with the piped form, the provider's name
+filled in, as its `remedy`. A refusal writes nothing, and the name refusals come before stdin is
+read. `kbase auth remove <provider>` clears the stored key, `unchanged` where none was stored, and
+`kbase auth list` names the providers with a stored key; neither reads the configuration, so a
+key file whose entry is gone is still removed. A provider name that cannot name a file — empty,
+`.` or `..`, or holding `/`, `\` or a NUL — is a usage refusal, `key` the name as given. A
+refusal of the argument count names no argument given. No result names a key.
 
 **Provider selection is the catalogue verbs' alone.** `models` and `configure` select a pool entry to
 dial — not a role: a role is never chosen this way, and `config.toml` names no entry. The rule is
@@ -2096,7 +2115,8 @@ already state, and changes nothing.
 
 - **Tools.** Every subcommand is served, less `completion`, `help`, `mcp` itself and
   `wait` — a tool call would hold the turn for the build's or score run's duration — and less
-  `probe`, a diagnostic whose tool would let an agent poll a model at will; plus
+  `probe`, a diagnostic whose tool would let an agent poll a model at will, and less `auth` and
+  its subcommands — a key arrives on stdin, which no tool call has, and no tool accepts a key; plus
   `rewind-build`, which no subcommand stands behind. The queries and `render-citation` are the
   operations of one tool, `query`, and the write ops the operations of another, `write`; every
   other subcommand is one tool, named as the subcommand. Each operation stays a subcommand, unchanged

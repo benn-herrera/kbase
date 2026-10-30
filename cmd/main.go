@@ -61,7 +61,8 @@ and .index/. The maintenance subcommands then operate on the living KB:
 refresh and verify, the write API's ops, render-citation, the queries and the
 claim-graph sheet. build runs in the foreground; status
 and cancel observe and stop it. show-config reports how the provider and model
-configuration resolves; models and configure choose it.
+configuration resolves; models and configure choose it; auth stores a
+provider's API key.
 
 Every subcommand writes one YAML document to stdout, its outcome first, and
 nothing else; stderr is for humans. The exit code follows the outcome: 0 for

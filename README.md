@@ -394,8 +394,8 @@ These are examples; any MCP-capable harness adds its own equivalent entry.
   takes — a query's positionals and flags by name, or one values entry — and a bad argument is a
   usage refusal naming it and every argument the operation takes. Every other subcommand is a tool
   of its own: `init`, `show-config`, `models`, `configure`, `refresh`, `verify`, `export-latex`,
-  `status`, `cancel`, `build` and `score`. `completion`, `help` and `mcp` are not offered,
-  and neither is `wait`: a held call would spend the turn the build or score run takes, so the
+  `status`, `cancel`, `build` and `score`. `completion`, `help`, `mcp`, `probe` and `auth` are not
+  offered, and neither is `wait`: a held call would spend the turn the build or score run takes, so the
   `build` and `score` tools hand you their command to run in the background instead. `models`
   reads a provider's model catalogue and `configure` writes `config.toml`; neither performs
   inference — `build` and `score` are the tools that do. A write op takes one entry and offers
@@ -527,6 +527,16 @@ names a reference to reach instead, resolved against the same pool. The four are
 none of them the probe asks the `scoring` role — the selection a run would make — so
 `kbase probe` with no arguments is the heartbeat of a configuration. The document names the selection
 that answered. It reads no KB and reads or writes no state directory: one ask, one result document.
+
+`kbase auth add <provider>` stores a provider's API key, read from stdin and nowhere else, one
+encrypted file per `providers.toml` entry under `$XDG_STATE_HOME/kbase/auth/`
+(`~/.local/state/kbase/auth/` by default). Pipe the key in from your key manager or clipboard —
+`<key-manager> --print-key | kbase auth add <provider>` — so it never stands on a command line or
+in a terminal; a terminal on stdin, empty input, or a name no `providers.toml` entry carries is
+refused. The encryption keeps the key out of
+anything that reads the file; it is no protection against your own OS account.
+`kbase auth remove <provider>` clears a stored key and `kbase auth list` names the providers that
+have one. These verbs are CLI-only: no MCP tool takes a key.
 
 Global flags on every subcommand: `--config-dir`, `--log-level debug|info|warn|error` (default
 `warn`), `--log-file`, `--project-dir` (the git worktree root that holds `kb-root/`; the search for

@@ -158,7 +158,8 @@ single source. Working habits they impose:
   tool of its own; `cliOnly` takes the command's reason as a required argument and records it as the
   annotation `kbase.mcp.reason`, and the tool-table test fails an exclusion whose reason is empty;
   cobra's own `help` and `completion` are declared `cliOnly` there too. A test fails an
-  `AddCommand` outside that file. The table binds only `bound` commands, and the test derives its
+  `AddCommand` outside that file. A command's subcommands are added in `cmd/surface.go` too; the
+  binding is declared on the root's child alone, since the tool table reads no deeper. The table binds only `bound` commands, and the test derives its
   expectation from the annotations, never from a list — one tool per family named by a member's
   `kbase.mcp.family`, its `operation` enum those members, one per other bound command — failing a
   command that declares neither. A family operation's arguments are checked against its own derived
