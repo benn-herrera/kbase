@@ -1,10 +1,10 @@
 # THESIS - kbase
 
-*Why the KB build pipeline has the shape it has.*
+*Why the KB system has the shape it has.*
 
 ---
 
-## The thesis
+## The building thesis
 
 **A well-structured argument inscribed in LaTeX is not raw text to be mined. It is a tree that has
 already been flattened, and distillation is deserialization.**
@@ -15,7 +15,7 @@ the hierarchy is present in the bytes rather than latent in the prose.
 
 Two hierarchies are encoded this way, and they are independent.
 
-## The navigation hierarchy
+### The navigation hierarchy
 
 Titles, parts, chapters, sections, subsections. These are hierarchy encodings and nothing else: each
 one names a node and its position, and the nesting is the edge set. Breaking them into documents
@@ -23,7 +23,7 @@ with children linked under their parents is a transcription, not a judgment.
 
 Mechanical in the testable sense: a second implementation produces the same tree.
 
-## The argument hierarchy
+### The argument hierarchy
 
 The spine is also mechanically encoded, by two different constructs.
 
@@ -37,12 +37,12 @@ mention, supported by, or in support of the citation. It does indicate an edge c
 
 **For an ideally transcribed paper, that captures all nodes and edge candidates.**
 
-## Why the ideal does not hold
+### Why the ideal does not hold
 
 We don't get to choose our inputs, and authors frequently do not transcribe arguments into LaTeX
 exhaustively. Under-marking is the issue refinement via inference resolves.
 
-## What inference is for
+### What inference is for
 
 **Inference refines a mechanical draft. It never produces one.** Both hierarchies come out of the
 mechanical pass first.
@@ -61,7 +61,7 @@ on a citation to a work outside this document set. The rest of the edges connect
 resulting in a directed graph whose nodes and edges were drafted mechanically and refined by
 inference.
 
-## Where we came from and where we are going
+### Where we came from and where we are going
 
 The first prototypes of KB building took a full day of combined human/frontier AI model work and resulted
 in something that had a considerable settling-in period. Scoring the claim graph was on the order of hours.
@@ -74,6 +74,30 @@ inference (a 128 GB machine) takes minutes (again, WIP).
 The goal is to get to a ~30 minute KB build time for an average arXiv math paper using models that can be
 hosted on a 36GB M3 Max MacBook Pro. Scoring via local inference on the same machine should only take 
 five minutes. This would make kbase's utility available on a standard middleweight notebook commonly found
-in university labs and on researcher's desks.
+in university labs and on researchers' desks.
 
 If we could make it work even moderately well on a 16GB M3 MacBook Air, we've made it available to students.
+
+## The scoring thesis
+
+An argument can be broken down into a graph of nodes (claims, analyses, etc) and relationships (supports, refutes, etc).
+If we apply small, targeted, local judgments about the local rigor of each node and applicability of the relationships
+we can cascade those local judgments into a useful picture of the strength of the whole.
+
+### Intelligence-neutral
+
+If we design this system well it will produce usefully consistent results across a range of executors of the scoring scheme
+be they human or machine.
+
+### Simplicity of the individual judgments is the key
+
+When evaluating the nodes and edges, the narrower and less potentially arguable each question is, the more consistent the results will be.
+
+### The behavior of the scoring system must make sense as well as be consistent
+
+Two arguments constructed of the same points but arranged differently must score essentially the same.
+Example: 
+- Argument 1 is fairly linear, takes medium steps, and builds top down with about three layers of argument.
+- Argument 2 is two foundational points and builds bottom-up with small steps to make five layers of argument.
+
+If these arguments are essentially textual transformations of each other then they must score very closely. There should be no meta-gaming possible by modifying edge count, step size, construction direction, etc.
