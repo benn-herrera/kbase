@@ -139,7 +139,7 @@ func TestShowConfigReportsTheStore(t *testing.T) {
 	if d := diagnostics[0]; d["path"] != providersFile || d["remedy"] != nil {
 		t.Errorf("diagnostic 0 = %v, want the missing key file's read fault against %s", d, providersFile)
 	}
-	if d := diagnostics[1]; d["path"] != truncated || d["detail"] != auth.ErrTruncated.Error() || d["remedy"] != "<key-manager> --print-key | kbase auth add Truncated" {
+	if d := diagnostics[1]; d["path"] != truncated || d["detail"] != auth.ErrTruncated.Error() || d["remedy"] != "<command-that-prints-the-key> | kbase auth add Truncated" {
 		t.Errorf("diagnostic 1 = %v, want the truncated store file, what is wrong with it, and the piped kbase auth add Truncated", d)
 	}
 	if d := diagnostics[2]; d["path"] != providersFile || !strings.Contains(d["detail"].(string), `provider "both"`) ||

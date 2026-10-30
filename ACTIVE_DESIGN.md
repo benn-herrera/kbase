@@ -36,7 +36,7 @@ putting the key in a transcript.
      names differ only by case are refused, within a file or across layers: an override names its
      entry exactly. A key file's name is the provider's name lowercased, so a hand-renamed file is
      found only under a lowercase name, and `auth list` names the providers in lowercase.
-   - The key is piped in: `<key-manager> --print-key | kbase auth add <provider>`. A key manager
+   - The key is piped in: `<command-that-prints-the-key> | kbase auth add <provider>`. A key manager
      feeds it hands-free, and the key never enters an agent's context, even when the agent runs that
      pipeline.
    - Stdin that is a tty is refused, writing nothing: kbase never prompts for a key, so no key is
@@ -68,7 +68,7 @@ putting the key in a transcript.
    later without a code change.
 6. **The agent names the command; the key stays out of the conversation.** Where a provider
    refuses a call for its key, the failure's remedy is the piped form,
-   `<key-manager> --print-key | kbase auth add <provider>` (`config.AuthAddRemedy`), the name filled
+   `<command-that-prints-the-key> | kbase auth add <provider>` (`config.AuthAddRemedy`), the name filled
    in. An agent tells the user to run it, or runs it against the user's key manager; it never asks
    for the key itself.
 

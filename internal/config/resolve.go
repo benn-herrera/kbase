@@ -226,7 +226,7 @@ func authAddCommand(provider string) string { return "kbase auth add " + provide
 // spells it: piped on stdin from wherever the user keeps it, never typed at a
 // prompt or given as an argument.
 func AuthAddRemedy(provider string) string {
-	return "<key-manager> --print-key | " + authAddCommand(provider)
+	return "<command-that-prints-the-key> | " + authAddCommand(provider)
 }
 
 // temperatureMax is the top of the temperature range each chat protocol

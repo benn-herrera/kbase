@@ -536,8 +536,8 @@ that answered. It reads no KB and reads or writes no state directory: one ask, o
 `kbase auth add <provider>` is how you give an entry its key. It stores a provider's API key, read from stdin and nowhere else, one
 encrypted file per `providers.toml` entry under `$XDG_STATE_HOME/kbase/auth/`
 (`~/.local/state/kbase/auth/` by default). Pipe the key in from your key manager or clipboard —
-`<key-manager> --print-key | kbase auth add <provider>` — so it never stands on a command line or
-in a terminal; a terminal on stdin, empty input, or a name no `providers.toml` entry carries is
+`<command-that-prints-the-key> | kbase auth add <provider>` — so it never stands on a command line
+or in a terminal; a terminal on stdin, empty input, or a name no `providers.toml` entry carries is
 refused. The encryption keeps the key out of
 anything that reads the file; it is no protection against your own OS account.
 `kbase auth remove <provider>` clears a stored key and `kbase auth list` names the providers that

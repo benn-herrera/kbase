@@ -100,7 +100,8 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 | C2 | expert | provider names: the name pattern at load and in the store, case-only collisions refused, key files named in lowercase | C | landed |
 | D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C2 | landed |
 | E | expert | a 401 or 403 from the provider fails with the piped `kbase auth add` remedy | D | landed |
-| E2 | mechanical | the remedy's key source is generic: `<command-that-prints-the-key>` | E | in progress |
+| E2 | mechanical | the remedy's key source is generic: `<command-that-prints-the-key>` | E | landed |
+| E3 | mechanical | a refused-key item's detail says to ask for the command, never the key; SPEC cites the remedy once | E2 | in progress |
 | F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
 
 **Order:** one package at a time, A through F, with one agent editing the tree at once.
@@ -475,7 +476,7 @@ file name.
 
 **Requirement** (design, outline item 2 and decision 6): a provider that answers 401 or 403 fails
 the call as `provider-refused` does today, and that failure's item carries the remedy
-`config.AuthAddRemedy(<provider>)` — `<key-manager> --print-key | kbase auth add <provider>`, the
+`config.AuthAddRemedy(<provider>)` — `<command-that-prints-the-key> | kbase auth add <provider>`, the
 provider's name filled in — for a missing key and a wrong one alike. Nothing is checked before
 dialling.
 

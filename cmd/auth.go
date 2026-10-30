@@ -227,7 +227,7 @@ The key is read from stdin alone, never from an argument. Pipe it
 from a program that prints it: a key manager, or your system's clipboard paster
 for a key copied there by hand or by a program.
 
-  <key-manager> --print-key | kbase auth add <provider>
+  <command-that-prints-the-key> | kbase auth add <provider>
   <your-system-clipboard-paster> | kbase auth add <provider>
 
 A command that spells the key out, such as echo, puts it on a command line.

@@ -62,7 +62,7 @@ func storeFiles(t *testing.T, dir string) []string {
 // the name rule, the configured check, a terminal, empty input — and leaves
 // the store empty; the first two fire before stdin is read.
 func TestAuthAddRefusesBeforeWriting(t *testing.T) {
-	const pipedP = "<key-manager> --print-key | kbase auth add p"
+	const pipedP = "<command-that-prints-the-key> | kbase auth add p"
 	for _, tc := range []struct {
 		name       string
 		provider   string

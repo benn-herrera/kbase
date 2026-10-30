@@ -128,7 +128,7 @@ func TestReport(t *testing.T) {
 						Fault: storeDir + ": " + noUsername},
 				},
 				Diagnostics: []result.Item{
-					{Check: CheckProvider, Path: storeFile, Detail: truncated, Remedy: "<key-manager> --print-key | kbase auth add Lab"},
+					{Check: CheckProvider, Path: storeFile, Detail: truncated, Remedy: "<command-that-prints-the-key> | kbase auth add Lab"},
 					{Check: CheckProvider, Path: storeDir, Detail: noUsername},
 				},
 			},
