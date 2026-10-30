@@ -31,6 +31,7 @@ MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arx
 RESULTS_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "results"
 MCP_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp"
 MCP_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp-build"
+MEASURE_MCP_SURFACE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "measure-mcp-surface"
 INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
 CONFIG_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-config"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
@@ -255,6 +256,11 @@ test-integration-mcp: build
 test-integration-mcp-build: build
     @mkdir -p "{{MCP_BUILD_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" MCP_TRANSCRIPT_DIR="{{MCP_TRANSCRIPT_DIR}}" MCP_BUILD_OUT_DIR="{{MCP_BUILD_OUT_DIR}}" tools/scripts/test-integration-mcp-build.sh 2>&1 | tee "{{MCP_BUILD_OUT_DIR}}/log.txt"
+
+[doc("hermetic, a measurement and no gate (excluded from test-integration): ./bin/kbase mcp from a system temporary directory under no repository, sent initialize, tools/list and resources/list; surface.yaml holds tools (the count), tools-list-chars (the tools/list result's JSON length), input-schema-chars (every inputSchema's JSON length, summed) and instructions-chars, measured by TestMeasureMCPSurface, which fails only on an unanswered request or a count that is not positive; evidence under test-data/transient/measure-mcp-surface/")]
+measure-mcp-surface: build
+    @mkdir -p "{{MEASURE_MCP_SURFACE_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}" MEASURE_MCP_SURFACE_OUT_DIR="{{MEASURE_MCP_SURFACE_OUT_DIR}}" tools/scripts/measure-mcp-surface.sh 2>&1 | tee "{{MEASURE_MCP_SURFACE_OUT_DIR}}/log.txt"
 
 [doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over test-data/fixtures/lamb/ in fresh repositories — the fixture as committed, checked for its colon title unquoted in the volume heading, its slug and the entry point's link text, verify done, no claim, the citation resolved through lamb.bib into a references leaf, and stray.bib's uncited entry in no document; and a copy of the paper inputting lamb.bbl with no .bib beside it, checked for a done build and verify, no claim, no references leaf, the citation left as its key and the entry text in a leaf; evidence under test-data/transient/test-integration-build-lamb/")]
 test-integration-build-lamb: build

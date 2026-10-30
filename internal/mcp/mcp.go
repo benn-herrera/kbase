@@ -181,10 +181,7 @@ type Calls struct {
 // declares bound, and after them calls.Listed, each served by inProject.
 func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
 	var tools []protocol.Tool
-	for _, cmd := range root.Commands() {
-		if cmd.Annotations[BindingAnnotation] != Bound {
-			continue
-		}
+	for _, cmd := range boundCommands(root) {
 		var tool ProjectTool
 		var err error
 		if fields, ok := write.OpVocabulary(cmd.Name()); ok {
@@ -205,6 +202,14 @@ func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) 
 		tools = append(tools, inProject(tool, located))
 	}
 	return tools, nil
+}
+
+// boundCommands is the commands under root whose binding declares them bound,
+// in the tree's order.
+func boundCommands(root *cobra.Command) []*cobra.Command {
+	return slices.DeleteFunc(slices.Clone(root.Commands()), func(c *cobra.Command) bool {
+		return c.Annotations[BindingAnnotation] != Bound
+	})
 }
 
 // projectDirProperty is the argument naming the project a call runs in, which

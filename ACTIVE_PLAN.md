@@ -170,7 +170,7 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
 
 | Package | Rating | Depends on | Status |
 |---|---|---|---|
-| S1: measure the served surface; serve each command's help as a resource | expert | Gate | pending |
+| S1: measure the served surface; serve each command's help as a resource | expert | Gate | landed |
 | U: retire `USER_CONVENTIONS.md` onto the served surface | expert | S1 | pending |
 | P1: move environment-configured tests onto configuration directories | expert | U | pending |
 | P2: remove `provider` and `[asks] readerConcurrency` | mechanical | P1 | pending |
@@ -292,6 +292,9 @@ text, the adjagent file it would go in, and the owner's ruling. Empty until U re
   - `test-data/fixtures/mcp/resources.jsonl`, `initialize.jsonl`, `gui-project-dir.jsonl`, and the
     new transcript.
   - SPEC §11/§12, ARCHITECTURE §11, CONVENTIONS ("An MCP tool is a subcommand's binding").
+- **Added in execution.** `cmd/mcp_test.go` (three tests pin the resource count and the
+  instructions' tokens S1 moves); `internal/mcp/mcp.go` (the bound-command filter, shared with the
+  help resource); ARCHITECTURE's "MCP server (SPEC §11)" paragraph; `tools/scripts/write-evidence.sh`.
 - **Not touched.** No help text, and no tool.
 
 **Done**
@@ -1241,8 +1244,11 @@ Only the deletion sequence merges into `drop-claim-node`.
     rendered from the same annotations as the tool's `operation` enum, never written by hand.
   - The root command's `Long` draws on the same three constants for the CLI.
   - `kbase://help/<command>` serves each member's own help (S1).
+  - **The two family resources' names** are not built from `CommandPath`: no `kbase query` or
+    `kbase write` command exists, and S1 names each help resource `kbase <command> --help`.
 - **Instructions.** They name the two families in their existing sentence about query and write
-  tools.
+  tools. S1's sentence ("A tool's full help is the resource kbase://help/<tool>.") stops being true
+  for a family's operations, whose help is `kbase://help/<operation>`; reword it to cover both.
 - **Contract.**
   - **ARCHITECTURE I9.** A command declares its binding and, for a family member, its family. The
     table is one tool per family plus one per other bound command, plus `rewind-build`. The test

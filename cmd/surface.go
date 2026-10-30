@@ -104,7 +104,7 @@ func init() {
 // verb documented is refused as exitStatus refuses it, build and score start
 // detached with the server's global flags, rewind-build stands beside the
 // derived tools, and the resources are the sheets, the model guidance, the
-// build trail and the build's state, in that order.
+// build trail, the build's state and each bound command's help, in that order.
 func servedServer(root *cobra.Command, located mcp.Located, stderr io.Writer, lg log.Logger) mcp.Server {
 	return mcp.Server{
 		Version: version.Current,
@@ -122,7 +122,7 @@ func servedServer(root *cobra.Command, located mcp.Located, stderr io.Writer, lg
 		Launches:    map[*cobra.Command]mcp.Launch{buildCmd: mcp.BuildLaunch(), scoreCmd: mcp.ScoreLaunch()},
 		Listed:      []mcp.ProjectTool{mcp.RewindBuildTool()},
 		Resources: []mcp.ResourceFamily{mcp.SheetResources(servedKB), mcp.ModelHintsResource(),
-			mcp.BuildTrailResource(), mcp.BuildResource()},
+			mcp.BuildTrailResource(), mcp.BuildResource(), mcp.HelpResources(root)},
 	}
 }
 

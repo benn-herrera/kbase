@@ -1471,7 +1471,9 @@ internal/mcp/protocol     (SPEC §11) JSON-RPC framing, dispatch, the Tool, Sche
 internal/mcp              the MCP exposure of the command tree: the `kbase.mcp` and
                           `kbase.readOnly` annotations, the tool table derived from the
                           bound commands, a call run as its command's RunE, the
-                          project a call runs in, the resources, the build
+                          project a call runs in, the resources (each bound
+                          command's help, `kbase://help/<command>`, among them:
+                          cobra's own help rendering, `--help`'s text), the build
                           watcher, and the detached build and score launches
                           (`launch.go`, the one self-exec owner, I1), and the
                           instructions `initialize` reports; imported by cmd alone
@@ -1771,8 +1773,11 @@ varies by mode — the located project's state in TUI mode, none where it locate
 `project-dir` line in GUI mode — followed, always, by the embedded `internal/mcp/instructions.txt`
 and then the session rule, `kbdocs.SessionRule`, which the stamped `AGENTS.md` carries through its `session-rule`
 slot: the text a session reads. `resources/list` and `resources/read` serve the resources `internal/mcp` supplies: the
-sheets, under `kbase://sheet/<kb-root-relative path>`, and the model guidance, at
-`kbase://model-hints`, which is `internal/config`'s rows rendered as markdown and needs no KB.
+sheets, under `kbase://sheet/<kb-root-relative path>`; the model guidance, at
+`kbase://model-hints`, which is `internal/config`'s rows rendered as markdown and needs no KB;
+and each bound command's help, at `kbase://help/<command>` (`mcp.HelpResources`), which is
+cobra's own help function run on the command into a buffer, the text `--help` prints, and needs
+no KB either.
 Beside them `kbase://build-trail` is `internal/buildstore`'s `Rewind` document (`rewind.go`) for
 the repository the KB sits in, no target named: the same text `internal/mcp`'s `rewindDocument`
 gives the tool, because one function serves both — the resource is discovery, the tool is

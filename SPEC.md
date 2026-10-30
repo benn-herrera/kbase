@@ -2300,6 +2300,11 @@ changes nothing.
   when the run ends, and nothing here makes it promise the session is at a turn when it arrives. An
   unknown URI is JSON-RPC `-32002` (resource not found); a missing `uri` is `-32602`.
   `initialize` advertises the `resources` capability, its `subscribe` among the ones it carries.
+  Each command a tool binds has its help listed as one `text/plain` resource with URI
+  `kbase://help/<command>`, the command's name in place of `<command>`: exactly the text
+  `kbase <command> --help` prints. It is KB-independent text, as the model guidance is: listed
+  whether or not a KB is found or opens, and the same in every project. `rewind-build`, which no
+  command stands behind, has none.
   Nothing else is served, a register page included: the KB's documents are the external agent
   harness's own files.
 - **What the server never does.** It sends no sampling request and offers no prompts; no inference
@@ -2322,8 +2327,9 @@ changes nothing.
   KB's path; over one whose `kb-root/` is yet to be made, the repository's, saying the KB can be
   built; the path is absolute. In GUI mode that opening is one line instead: name the project with
   `project-dir` on each tool call. A TUI-mode server that located no project opens with neither.
-  The `kbase` skill is named as the workflow, and `show-config` as the tool reporting
-  configuration. It forbids a session to read or write kbase's records and derived files — anything
+  The `kbase` skill is named as the workflow, `show-config` as the tool reporting
+  configuration, and `kbase://help/<command>` as a tool's full help. It forbids a session to read or
+  write kbase's records and derived files — anything
   under `kb-root/.index/`, a claim-graph sheet, a `.dot` file — save testing that such a path
   exists; it names the query tools as what reports what the records hold, the write tools as what
   changes them, and `refresh` and `render-claim-graph` as what writes the sheets. A `claim-rigor.md`
@@ -2343,6 +2349,10 @@ changes nothing.
 ---
 
 ## 12. Interim releases
+
+**<release version> — the files configure inference; the served surface is smaller.**
+
+- **Every command's help is an MCP resource**, `kbase://help/<command>`, the text its `--help` prints (§11).
 
 **0.9.0 — Messages is the default chat protocol.** A `providers.toml` entry silent on `api` speaks
 the Anthropic Messages protocol; `api = "openai"` selects the OpenAI-compatible protocol, and an

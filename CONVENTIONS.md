@@ -166,8 +166,11 @@ single source. Working habits they impose:
   command's. `rewind-build`, built in `internal/mcp` and declared in `cmd/surface.go`, is the only
   one: read-only, schema and description its own. A flag annotated `kbase.mcp` = `excluded`
   (`mcp.ExcludeFlag`) is not part of its command's tool schema: `mcp.CommandSchema` skips it.
-  Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never strings asserted in
-  code.
+  A bound command's full help is the resource `kbase://help/<command>` (`mcp.HelpResources`),
+  rendered by cobra's help function from the command itself, so it is what `--help` prints; the
+  trap is help text written into a resource, a description or the instructions beside the
+  command's `Long`. Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never
+  strings asserted in code.
 - **Dev-only diagnostics are compiled out of the shipped binary.** A diagnostic for developing kbase
   itself — today `score --replay` and `build --replay` — lives in files carrying `//go:build kbasedev`,
   code and tests alike; the untagged build is what users receive and it carries none of that code. What

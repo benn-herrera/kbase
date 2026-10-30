@@ -824,6 +824,22 @@ func TestMCPResourcesAreTheSheetsOnDisk(t *testing.T) {
 	}
 }
 
+// requireHelpResources requires listed to be the help resources: one per
+// bound command, in the command tree's order, each its command's
+// kbase://help/<command> as text/plain.
+func requireHelpResources(t *testing.T, listed []protocol.Resource) {
+	t.Helper()
+	var want []protocol.Resource
+	for _, c := range rootCmd.Commands() {
+		if c.Annotations[mcp.BindingAnnotation] == mcp.Bound {
+			want = append(want, protocol.Resource{URI: mcp.HelpURIPrefix + c.Name(), Name: c.CommandPath() + " --help", MimeType: "text/plain"})
+		}
+	}
+	if len(want) == 0 || !slices.Equal(listed, want) {
+		t.Errorf("after the build state, resources/list is %+v, want each bound command's help %+v", listed, want)
+	}
+}
+
 // TestMCPModelHintsResource: the model guidance is one resource beside the
 // sheets — same list, same read — read as markdown, and needing no KB. A KB
 // the sheet family refuses leaves the guidance and the trail listed, and the
@@ -843,9 +859,10 @@ func TestMCPModelHintsResource(t *testing.T) {
 			onDisk = append(onDisk, r)
 		}
 	}
-	if len(listed.Resources) != len(onDisk)+3 {
+	if len(listed.Resources) < len(onDisk)+3 {
 		t.Fatalf("resources/list is %+v, want the %d sheets, the guidance, the trail and the build state", listed.Resources, len(onDisk))
 	}
+	requireHelpResources(t, listed.Resources[len(onDisk)+3:])
 	if !slices.Equal(listed.Resources[:len(onDisk)], onDisk) {
 		t.Errorf("the sheets list as %+v, want %+v", listed.Resources[:len(onDisk)], onDisk)
 	}
@@ -881,18 +898,24 @@ func TestMCPModelHintsResource(t *testing.T) {
 	}
 
 	// What a list holds where it lists no sheet: the guidance, then the trail,
-	// which reports the repository it cannot read, then the build's state.
+	// which reports the repository it cannot read, then the build's state, then
+	// each bound command's help.
 	want := []protocol.Resource{{URI: mcp.ModelHintsURI, Name: "Model hints", MimeType: "text/markdown"},
 		{URI: mcp.BuildTrailURI, Name: "Build trail", MimeType: "application/yaml"},
 		{URI: mcp.BuildURI, Name: "Build state", MimeType: "application/yaml"}}
-	// listedBy is what a server's resources/list answers; a fault in the list
-	// is an error response, which fails the test.
+	// listedBy is what a server's resources/list answers before the help
+	// resources, which it requires to follow; a fault in the list is an error
+	// response, which fails the test.
 	listedBy := func(srv mcp.Server) []protocol.Resource {
 		var listed struct {
 			Resources []protocol.Resource `json:"resources"`
 		}
 		serveOne(t, srv, "resources/list", nil, &listed)
-		return listed.Resources
+		if len(listed.Resources) < len(want) {
+			return listed.Resources
+		}
+		requireHelpResources(t, listed.Resources[len(want):])
+		return listed.Resources[:len(want)]
 	}
 
 	// A KB that exists but will not open: the sheet family refuses it, so that
@@ -1032,9 +1055,10 @@ func TestMCPRewindBuildIsTheBuildTrail(t *testing.T) {
 		Resources []protocol.Resource `json:"resources"`
 	}
 	serveOne(t, srv, "resources/list", nil, &listed)
-	if len(listed.Resources) != 3 || listed.Resources[1].URI != mcp.BuildTrailURI {
+	if len(listed.Resources) < 3 || listed.Resources[1].URI != mcp.BuildTrailURI {
 		t.Fatalf("resources/list is %+v, want the guidance, the build trail and the build state", listed.Resources)
 	}
+	requireHelpResources(t, listed.Resources[3:])
 	if trail := listed.Resources[1]; trail.Name != "Build trail" || trail.MimeType != "application/yaml" {
 		t.Errorf("the build trail lists as %+v", trail)
 	}
@@ -1394,8 +1418,19 @@ func TestMCPInitializeNamesWhatItServes(t *testing.T) {
 			if strings.Contains(text, "`") {
 				t.Errorf("instructions %q carry a backtick", text)
 			}
+			// A kbase:// URI names a resource, not a command, though its
+			// path reads as one (kbase://help/<command>).
+			prose := strings.Join(slices.DeleteFunc(strings.Fields(text), func(word string) bool {
+				return strings.HasPrefix(word, "kbase://")
+			}), " ")
+			// help is the word for a tool's help, said once in that phrase,
+			// never the CLI-only help command.
+			const helpPhrase = "full help"
+			if strings.Count(prose, helpPhrase) != 1 {
+				t.Errorf("instructions %q do not say %q once", text, helpPhrase)
+			}
 			builds := 0
-			for _, token := range instructionsTokens(text) {
+			for _, token := range instructionsTokens(strings.Replace(prose, helpPhrase, "", 1)) {
 				if token == "build" {
 					builds++
 					continue
