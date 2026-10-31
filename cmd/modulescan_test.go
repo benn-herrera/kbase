@@ -14,7 +14,7 @@ import (
 )
 
 // The module walk every policy scan reads: the exec, import, read, relation,
-// id-prefix, record, registration and key-reveal policies agree on which files
+// id-prefix, record, registration, key-reveal and key-file-text policies agree on which files
 // are the module's Go source.
 
 // rootSkipDirs hold no module source at the module root; deeper, a directory

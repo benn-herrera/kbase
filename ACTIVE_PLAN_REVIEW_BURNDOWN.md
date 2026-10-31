@@ -12,8 +12,8 @@ dispatch quotes them. Line numbers are as of `fcb1738`; locate cited text where 
 | R6 | expert | a key is a redacting type; a scan holds where it is revealed | `just checkpoint`, `just test-integration` | landed |
 | R3 | expert | a store fault has one representation | `just checkpoint`, `just test-integration-config`, `just test-integration-auth` | landed |
 | R4 | expert | a refused key is classified once on the `cmd` side | `just checkpoint` | landed |
-| R5 | expert | a scan holds "no production text names apiKeyFile" | `just test` | in progress |
-| R8 | expert | store hardening: directory `0700`, symlinked key files, relative `XDG_STATE_HOME` | `just checkpoint`, `just test-integration-auth` | pending |
+| R5 | expert | a scan holds "no production text names apiKeyFile" | `just test` | landed |
+| R8 | expert | store hardening: directory `0700`, symlinked key files, relative `XDG_STATE_HOME` | `just checkpoint`, `just test-integration-auth` | in progress |
 | R2 | expert | the live layered leg keeps the store | `just edit-gate` (the live run is the operator's) | pending |
 | R9 | expert | `auth add` bounds its input | `just checkpoint`, `just test-integration-auth` | pending |
 | R10 | mechanical | one home: `kbase auth remove`'s spelling; the providers template built without a format | `just checkpoint` | pending |
