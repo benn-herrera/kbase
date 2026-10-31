@@ -14,8 +14,8 @@ dispatch quotes them. Line numbers are as of `fcb1738`; locate cited text where 
 | R4 | expert | a refused key is classified once on the `cmd` side | `just checkpoint` | landed |
 | R5 | expert | a scan holds "no production text names apiKeyFile" | `just test` | landed |
 | R8 | expert | store hardening: directory `0700`, symlinked key files, relative `XDG_STATE_HOME` | `just checkpoint`, `just test-integration-auth` | landed |
-| R2 | expert | the live layered leg keeps the store | `just edit-gate` (the live run is the operator's) | pending |
-| R9 | expert | `auth add` bounds its input | `just checkpoint`, `just test-integration-auth` | pending |
+| R2 | expert | the live layered leg keeps the store | `just edit-gate` (the live run is the operator's) | landed |
+| R9 | expert | `auth add` bounds its input | `just checkpoint`, `just test-integration-auth` | in progress |
 | R10 | mechanical | one home: `kbase auth remove`'s spelling; the providers template built without a format | `just checkpoint` | pending |
 | R11 | mechanical | tests: cuts, failure messages, `auth remove`'s refusals | `just test` | pending |
 
