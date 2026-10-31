@@ -33,6 +33,10 @@ const FileSuffix = "-key.enc"
 // FileMode is every key file's permission, on creation and on every replace.
 const FileMode fs.FileMode = 0o600
 
+// DirMode is the store directory's permission, set on every Add whether Add
+// creates the directory or finds it standing.
+const DirMode fs.FileMode = 0o700
+
 // sourceKey is the secret every user's key is derived from. It is a plain
 // constant in public source on purpose: a key chosen at build time would leave
 // each release unable to read the last one's store, and disguising a constant
@@ -114,7 +118,10 @@ func (s Store) Add(name string, key secret.Key) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.dir, 0o777); err != nil {
+	if err := os.MkdirAll(s.dir, DirMode); err != nil {
+		return err
+	}
+	if err := os.Chmod(s.dir, DirMode); err != nil {
 		return err
 	}
 	return atomicfile.WriteMode(path, aead.Seal(nil, nil, []byte(key.Reveal()), nil), FileMode)
@@ -168,7 +175,8 @@ func (s Store) Remove(name string) (bool, error) {
 
 // List names the providers with a key file, in lowercase and in name order. A
 // directory that does not stand holds none; a file whose name no lowercase
-// provider name yields is not a key file.
+// provider name yields is not a key file, nor is anything but a regular file
+// or a symbolic link to one.
 func (s Store) List() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -180,12 +188,22 @@ func (s Store) List() ([]string, error) {
 	var names []string
 	for _, e := range entries {
 		name, ok := strings.CutSuffix(e.Name(), FileSuffix)
-		if ok && e.Type().IsRegular() && CheckName(name) == nil && name == strings.ToLower(name) {
+		if ok && CheckName(name) == nil && name == strings.ToLower(name) && s.isRegular(e) {
 			names = append(names, name)
 		}
 	}
 	slices.Sort(names)
 	return names, nil
+}
+
+// isRegular reports whether the entry is a regular file, following a symbolic
+// link to its target; a link whose target does not stand is not.
+func (s Store) isRegular(e fs.DirEntry) bool {
+	if e.Type()&fs.ModeSymlink == 0 {
+		return e.Type().IsRegular()
+	}
+	info, err := os.Stat(filepath.Join(s.dir, e.Name()))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // path is the provider name's key file, once the name is checked: the name

@@ -205,9 +205,9 @@ func authCommand() *cobra.Command {
 		Short: "store, remove and list the API keys kbase keeps, one encrypted file per provider",
 		Long: `Manage the API keys kbase stores: one file per providers.toml entry, under
 $XDG_STATE_HOME/kbase/` + auth.DirName + `/ (~/.local/state/kbase/` + auth.DirName + `/ where the variable is
-unset), each encrypted under an encryption key derived for your OS user. The
-encryption is obfuscation, not a boundary: anyone running as your OS user can
-recover a key, while a reader of the file sees ciphertext.
+unset or not an absolute path), each encrypted under an encryption key derived
+for your OS user. The encryption is obfuscation, not a boundary: anyone running
+as your OS user can recover a key, while a reader of the file sees ciphertext.
 
 A key arrives on stdin alone, piped: never as an argument and never typed at
 a prompt. These commands are CLI-only; no MCP tool accepts a key.`,

@@ -1313,7 +1313,7 @@ writes its result under §7.
 
 `kbase auth add <provider>` stores the API key piped on its stdin for `<provider>`, a
 `providers.toml` entry name, replacing any key stored for it: one file per provider,
-`$XDG_STATE_HOME/kbase/auth/<provider>-key.enc` (`~/.local/state` where the variable is unset),
+`$XDG_STATE_HOME/kbase/auth/<provider>-key.enc` (`~/.local/state` where the variable is unset or not an absolute path),
 the file named for `<provider>` in lowercase, each file encrypted under an encryption key derived
 for the OS user — obfuscation against a reader of the file, not a boundary against that user — and
 readable by its owner alone. `add` reads the configuration as the provider verbs do, and a

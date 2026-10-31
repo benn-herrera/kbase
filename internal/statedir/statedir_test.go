@@ -38,15 +38,18 @@ func TestDirPerKBRoot(t *testing.T) {
 }
 
 // TestBaseFollowsXDGStateHome: the state base is kbase under $XDG_STATE_HOME,
-// and under ~/.local/state where the variable is unset or empty.
+// and under ~/.local/state where the variable is empty or not an absolute path.
 func TestBaseFollowsXDGStateHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir's source on Windows
 	xdg := t.TempDir()
+	fallback := filepath.Join(home, ".local", "state", "kbase")
 	for _, tc := range []struct{ xdg, want string }{
 		{xdg, filepath.Join(xdg, "kbase")},
-		{"", filepath.Join(home, ".local", "state", "kbase")},
+		{"", fallback},
+		{"relative/state", fallback},
+		{".", fallback},
 	} {
 		t.Setenv("XDG_STATE_HOME", tc.xdg)
 		if got, err := Base(); err != nil || got != tc.want {

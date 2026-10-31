@@ -98,6 +98,54 @@ func TestFileModeIsOwnerOnly(t *testing.T) {
 	}
 }
 
+// TestDirModeIsOwnerOnly: the store directory is 0700 when Add creates it, and
+// when Add finds it standing at 0755.
+func TestDirModeIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	created := storeFor(t, "alice")
+	created.dir = filepath.Join(created.dir, "auth")
+	addSentinel(t, created, "cloud")
+	widened := storeFor(t, "alice")
+	if err := os.Chmod(widened.dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	addSentinel(t, widened, "cloud")
+	for _, s := range []Store{created, widened} {
+		info, err := os.Stat(s.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != DirMode {
+			t.Errorf("%s has mode %#o, want %#o", s.dir, got, DirMode)
+		}
+	}
+}
+
+// TestListFollowsLinksToFiles: a symbolic link to a regular file is listed and
+// its key read; a dangling link and a link to a directory are not listed.
+func TestListFollowsLinksToFiles(t *testing.T) {
+	s := storeFor(t, "alice")
+	elsewhere := storeFor(t, "alice")
+	target := addSentinel(t, elsewhere, "cloud")
+	for name, to := range map[string]string{
+		"linked":   target,
+		"dangling": filepath.Join(elsewhere.dir, "absent"+FileSuffix),
+		"todir":    elsewhere.dir,
+	} {
+		if err := os.Symlink(to, filepath.Join(s.dir, name+FileSuffix)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if names, err := s.List(); err != nil || !slices.Equal(names, []string{"linked"}) {
+		t.Errorf("List = %q, %v; want [linked]", names, err)
+	}
+	if got, err := s.Read("linked"); err != nil || got.Reveal() != sentinelKey {
+		t.Errorf("Read(linked): key matches %t, error %T; want the key", got.Reveal() == sentinelKey, err)
+	}
+}
+
 // TestFileHoldsNoPlaintext: the key's bytes appear nowhere in its file.
 func TestFileHoldsNoPlaintext(t *testing.T) {
 	s := storeFor(t, "alice")

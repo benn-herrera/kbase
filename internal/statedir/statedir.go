@@ -50,11 +50,12 @@ func Dir(override, kbRoot string) (string, error) {
 }
 
 // Base is kbase's state base, $XDG_STATE_HOME/kbase, $XDG_STATE_HOME
-// defaulting to ~/.local/state: the parent of every KB's default state
-// directory, and of anything else kbase keeps per user.
+// defaulting to ~/.local/state where it is unset or not an absolute path (the
+// XDG base directory spec ignores a relative value): the parent of every KB's
+// default state directory, and of anything else kbase keeps per user.
 func Base() (string, error) {
 	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
+	if !filepath.IsAbs(base) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
