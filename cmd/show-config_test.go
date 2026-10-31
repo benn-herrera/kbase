@@ -102,7 +102,7 @@ apiKeyFile = "missing.key"
 // naming the provider; file with its upgrade command, the path quoted — and a
 // truncated store file is a diagnostic by its path, its remedy adding the key
 // again, beside the read fault of the missing key file it fell through to,
-// with the outcome still done. Each role names the store as its key's source
+// whose remedy stores a key too, with the outcome still done. Each role names the store as its key's source
 // where the store supplied it.
 func TestShowConfigReportsTheStore(t *testing.T) {
 	configDir, keyPath, truncated := storeFixture(t)
@@ -136,8 +136,8 @@ func TestShowConfigReportsTheStore(t *testing.T) {
 	if len(diagnostics) != 3 {
 		t.Fatalf("diagnostics = %v, want Truncated's two faults and both's unread key file", diagnostics)
 	}
-	if d := diagnostics[0]; d["path"] != providersFile || d["remedy"] != nil {
-		t.Errorf("diagnostic 0 = %v, want the missing key file's read fault against %s", d, providersFile)
+	if d := diagnostics[0]; d["path"] != providersFile || d["remedy"] != config.AuthAddRemedy("Truncated") {
+		t.Errorf("diagnostic 0 = %v, want the missing key file's read fault against %s, its remedy storing a key for Truncated", d, providersFile)
 	}
 	if d := diagnostics[1]; d["path"] != truncated || d["detail"] != auth.ErrTruncated.Error() || d["remedy"] != "<command-that-prints-the-key> | kbase auth add Truncated" {
 		t.Errorf("diagnostic 1 = %v, want the truncated store file, what is wrong with it, and the piped kbase auth add Truncated", d)
@@ -448,8 +448,9 @@ func TestShowConfigNamesTheConfigFileALackBelongsTo(t *testing.T) {
 
 // TestShowConfigReportsARolesProviderThePoolLacks: a role whose reference names
 // an entry the pool does not hold is a provider item by that role's key, with
-// the pool's entry names as the values that would work — the shape a run
-// refuses with, reported here because this verb never refuses.
+// the pool's entry names as the values that would work and no creation remedy,
+// the providers.toml standing — the shape a run refuses with, reported here
+// because this verb never refuses.
 func TestShowConfigReportsARolesProviderThePoolLacks(t *testing.T) {
 	dir := t.TempDir()
 	writeValues(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab.example/v1\"\n")
@@ -468,8 +469,8 @@ func TestShowConfigReportsARolesProviderThePoolLacks(t *testing.T) {
 		t.Fatalf("no item names models.scoring: %v", doc.items("diagnostics"))
 	}
 	if scoring["check"] != config.CheckProvider || !slices.Equal(anyStrings(scoring["allowed"]), []string{"lab"}) ||
-		!strings.Contains(scoring["detail"].(string), `provider "elsewhere"`) {
-		t.Errorf("the item = %v, want check %s, the pool's entries allowed and the provider named", scoring, config.CheckProvider)
+		!strings.Contains(scoring["detail"].(string), `provider "elsewhere"`) || scoring["remedy"] != nil {
+		t.Errorf("the item = %v, want check %s, the pool's entries allowed, the provider named, and no remedy: providers.toml stands", scoring, config.CheckProvider)
 	}
 	if role := roleOf(doc, "scoring"); role["detail"] == nil || role["provider"] != nil {
 		t.Errorf("the scoring role = %v, want a detail and no provider", role)

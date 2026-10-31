@@ -53,6 +53,9 @@ type providerOptions struct {
 	Faults      []config.ProviderFault
 	StoreFaults []config.StoreFault
 
+	// ProvidersFiles is each layer's providers.toml that stood when loaded.
+	ProvidersFiles []string
+
 	// Config is the merged config.toml. A verb that resolves a role reads its
 	// [models] table; the verb that selects a pool entry to dial reads none of
 	// it.
@@ -77,7 +80,7 @@ type providerOptions struct {
 // inputs is what a resolution decision reads: the loaded configuration this
 // invocation works from.
 func (o providerOptions) inputs() config.Inputs {
-	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir}
+	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir, ProvidersFiles: o.ProvidersFiles}
 }
 
 // warnFaults says what the pool's faults were, one line each. A provider
@@ -199,12 +202,13 @@ func loadConfigContext(layers []config.Layer) (providerOptions, error) {
 		return providerOptions{}, err
 	}
 	return providerOptions{
-		Layers:      layers,
-		Providers:   loaded.Providers,
-		Faults:      loaded.Faults,
-		StoreFaults: stored.Faults,
-		Config:      loaded.Cfg,
-		Stderr:      os.Stderr,
+		Layers:         layers,
+		Providers:      loaded.Providers,
+		Faults:         loaded.Faults,
+		StoreFaults:    stored.Faults,
+		ProvidersFiles: loaded.ProvidersFiles,
+		Config:         loaded.Cfg,
+		Stderr:         os.Stderr,
 	}, nil
 }
 

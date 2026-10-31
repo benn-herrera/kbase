@@ -94,10 +94,13 @@ func WriteTarget(layers []Layer, projectRoot string) string {
 
 // Loaded is everything one configuration load produced: the merged pool with
 // the entries that dropped out of it, and the merged config.toml choices.
+// ProvidersFiles is each layer's providers.toml that stood when read, in
+// precedence order.
 type Loaded struct {
-	Providers Providers
-	Faults    []ProviderFault
-	Cfg       Config
+	Providers      Providers
+	Faults         []ProviderFault
+	Cfg            Config
+	ProvidersFiles []string
 }
 
 // StoredKeys is the credentials store as the caller read it, every name the
@@ -153,7 +156,14 @@ func Load(layers []Layer, stored StoredKeys) (Loaded, error) {
 	stated := map[string]statedName{}
 	for _, layer := range layers {
 		path := ProvidersPath(layer.Path)
-		providers, layerFaults, err := LoadProviders(path, stored.Keys)
+		data, stands, err := readProvidersFile(path)
+		if err != nil {
+			return Loaded{}, err
+		}
+		if stands {
+			loaded.ProvidersFiles = append(loaded.ProvidersFiles, path)
+		}
+		providers, layerFaults, err := parseProviders(path, data, stored.Keys)
 		if err != nil {
 			return Loaded{}, err
 		}

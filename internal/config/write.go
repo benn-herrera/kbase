@@ -40,7 +40,13 @@ const (
 // whether it wrote. It is the only writer of providers.toml: a file that
 // stands is a hand-editing surface nothing here overwrites.
 func CreateProvidersFile(path string) (bool, error) {
-	return createTemplateFile(path, providersTemplate)
+	return createTemplateFile(path, freshProviders())
+}
+
+// freshProviders renders the commented template for a providers.toml that
+// does not exist yet.
+func freshProviders() string {
+	return fmt.Sprintf(providersTemplate, AuthAddRemedy("<name>"))
 }
 
 // createTemplateFile installs template at path where nothing stands.

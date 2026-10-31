@@ -37,19 +37,22 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // providersTemplate is what a providers.toml that does not exist yet is
 // created as. One entry is live, so the pool holds something a selection
 // resolves without a choice; the rest is commented, so a fresh install never
-// has two usable entries and no selection between them. apiKeyFile is
-// commented because a live one naming a file that is not there drops its
-// entry — a fault where an endpoint was meant. The live base URL is a lab
+// has two usable entries and no selection between them. It names no key
+// field, because a key is added with `kbase auth add`; an apiKeyFile an entry
+// states still loads. The %s is AuthAddRemedy's form for a placeholder name,
+// filled in by freshProviders. The live base URL is a lab
 // host, and .example is a reserved TLD that can never resolve, so no
 // placeholder can reach a real vendor.
 const providersTemplate = `# Each provider is one top-level table; ` + ProviderNameRule + `;
 # no two names may differ by case alone. The name is what a [models]
 # reference's provider part and --provider name. An entry here replaces the
 # entry of exactly the same name from ~/.config/kbase/providers.toml whole.
+# This file holds no API key: an entry's key goes in kbase's store, under the
+# entry's name:
+#   %s
 
 [local]
 baseUrl = "http://lab-server.local:8000/v1"
-# apiKeyFile = "~/.api_keys/lab-server.txt"  # relative paths resolve beside this file
 # type = "inference"  # optional; the only kind kbase can use
 # api = "anthropic"   # optional; the chat protocol: "anthropic" (the default),
 #                     # the Messages API, or "openai"
@@ -59,5 +62,4 @@ baseUrl = "http://lab-server.local:8000/v1"
 
 # [cloud]
 # baseUrl = "https://api.inference.example/v1"
-# apiKeyFile = "~/.api_keys/cloud.txt"
 `

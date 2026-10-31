@@ -21,7 +21,8 @@ func TestReport(t *testing.T) {
 		truncated   = "too short to hold a stored key: the file is truncated"
 		noUsername  = "the OS reports no username"
 		storeDir    = "/state/kbase/auth"
-		exposedWarn = "apiKeyFile /k/warned.txt is readable beyond its owner (mode 0644) — chmod 600 it"
+		exposedWarn = "key file /k/warned.txt, named in providers.toml, is readable beyond its owner (mode 0644) — chmod 600 it"
+		unreadKey   = "read the key file providers.toml names: open keys/gone.txt: no such file or directory"
 	)
 
 	for _, tc := range []struct {
@@ -55,6 +56,7 @@ func TestReport(t *testing.T) {
 			faults: []ProviderFault{
 				{Name: "warned", Path: globalProviders, Reason: exposedWarn, Warning: true},
 				{Name: "broken", Path: repoProviders, Reason: "no baseUrl declared"},
+				{Name: "gone", Path: repoProviders, Reason: unreadKey, KeyFileUnread: true},
 			},
 			exists: func(path string) bool { return path == repoProviders },
 			want: Facts{
@@ -65,6 +67,7 @@ func TestReport(t *testing.T) {
 				Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"},
 				Entries: []Entry{
 					{Name: "broken", Layer: LayerSourceRepository, Fault: "no baseUrl declared"},
+					{Name: "gone", Layer: LayerSourceRepository, Fault: unreadKey},
 					{Name: "nokey", BaseURL: "https://nokey.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceRepository, Usable: true},
 					{Name: "reaper", BaseURL: "https://reaper.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorDecisions, Key: KeyKindFile, KeyFile: "keys/reaper.txt",
 						Upgrade: "cat " + filepath.Join(repoDir, "keys", "reaper.txt") + " | kbase auth add reaper", Layer: LayerSourceRepository, Usable: true},
@@ -74,6 +77,7 @@ func TestReport(t *testing.T) {
 				Diagnostics: []result.Item{
 					{Check: CheckProvider, Path: globalProviders, Detail: exposedWarn},
 					{Check: CheckProvider, Path: repoProviders, Detail: "no baseUrl declared"},
+					{Check: CheckProvider, Path: repoProviders, Detail: unreadKey, Remedy: AuthAddRemedy("gone")},
 				},
 			},
 		},

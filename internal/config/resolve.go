@@ -83,12 +83,14 @@ func (r Reference) String() string { return r.Provider + "/" + r.Model }
 
 // Inputs is everything a resolution decision reads — the loaded files — so
 // Select and Resolve share one parameter list. WriteDir is the configuration
-// directory a lacking setting belongs in.
+// directory a lacking setting belongs in. ProvidersFiles is each providers.toml
+// that stood when the layers were loaded (Loaded.ProvidersFiles).
 type Inputs struct {
-	Cfg       Config
-	Providers Providers
-	Faults    []ProviderFault
-	WriteDir  string
+	Cfg            Config
+	Providers      Providers
+	Faults         []ProviderFault
+	WriteDir       string
+	ProvidersFiles []string
 }
 
 // Endpoint is one role's resolved endpoint: the entry that supplies it, the
@@ -303,12 +305,16 @@ func Select(in Inputs, flag string) (name, rule string, err error) {
 // provider that FAULTED out of the pool from one that was never declared:
 // without the distinction a dropped provider reads exactly like a typo, and
 // the user goes looking for the wrong mistake. A faulted name keeps the
-// file's own reason and gets no creation remedy — the file stands, and what is
-// wrong is the entry in it.
+// file's own reason. The creation remedy is given only where the file does not
+// stand: configure --create never overwrites one, so there it would change
+// nothing, and the detail already says what to add.
 func unresolvedProvider(name string, in Inputs) result.Item {
 	providersFile := ProvidersPath(in.WriteDir)
-	refusal := result.Item{Check: CheckProvider, Key: "--provider", Path: providersFile, Allowed: providerNames(in.Providers), Remedy: "kbase configure --create",
-		Detail: fmt.Sprintf("provider %q not found in %s — a pool entry there supplies baseUrl and apiKeyFile", name, providersFile)}
+	refusal := result.Item{Check: CheckProvider, Key: "--provider", Path: providersFile, Allowed: providerNames(in.Providers),
+		Detail: fmt.Sprintf("provider %q not found in %s — add a [%s] table there with its baseUrl", name, providersFile, name)}
+	if !slices.Contains(in.ProvidersFiles, providersFile) {
+		refusal.Remedy = "kbase configure --create"
+	}
 	for _, fault := range in.Faults {
 		// A warning fault belongs to a provider that loaded, so it can
 		// never be the reason one is missing from the pool.

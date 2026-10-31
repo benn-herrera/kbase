@@ -65,6 +65,7 @@ Configure a provider. Skip this step for `--no-inference` builds.
 ```sh
 kbase configure --create                    # writes providers.toml and config.toml, offline
 $EDITOR ~/.config/kbase/providers.toml      # point [local] at your endpoint
+<command-that-prints-the-key> | kbase auth add local   # its API key, if it needs one
 kbase models                                # the model ids it offers
 kbase configure --model-map decision=local/<id>,text=local/<id>,scoring=local/<id>
 ```

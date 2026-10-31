@@ -208,11 +208,11 @@ func TestRunModelsEmptyCatalogue(t *testing.T) {
 func TestRunModelsFaultsAreWarnings(t *testing.T) {
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"good": provider("good", "http://provider.example/v1")},
-		Faults:    []config.ProviderFault{{Name: "bad", Reason: "read apiKeyFile: open missing.key: no such file or directory"}},
+		Faults:    []config.ProviderFault{{Name: "bad", Reason: "read the key file providers.toml names: open missing.key: no such file or directory"}},
 		Provider:  "good",
 	}}, modeltest.NewScriptedMock(nil, catalogue("m1")))
 
-	if !strings.Contains(got.stderr, `provider "bad" unavailable: read apiKeyFile:`) {
+	if !strings.Contains(got.stderr, `provider "bad" unavailable: read the key file providers.toml names:`) {
 		t.Errorf("stderr should warn about the faulted provider; got %q", got.stderr)
 	}
 	if got.code != 0 || !slices.Equal(got.ids(), []string{"m1"}) {

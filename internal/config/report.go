@@ -107,10 +107,15 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, stored []St
 
 // faultItem is the diagnostic a fault reports as: the file that carries it and
 // its reason — or, where storeFiles holds the store file or directory it
-// names, that path and what went wrong with it, and where a key file does not
-// open, adding the key again as the remedy, since adding replaces the file.
+// names, that path and what went wrong with it, and where a stored key file
+// does not open, adding the key again as the remedy, since adding replaces the file.
+// An apiKeyFile that could not be read has adding a key as its remedy too: the
+// stored key outranks the file.
 func faultItem(fault ProviderFault, storeFiles map[string]StoreFault) result.Item {
 	item := result.Item{Check: CheckProvider, Path: fault.Path, Detail: fault.Reason}
+	if fault.KeyFileUnread {
+		item.Remedy = AuthAddRemedy(fault.Name)
+	}
 	if sf, ok := storeFiles[fault.Path]; ok && fault.Warning {
 		item.Detail = sf.Reason
 		if sf.DoesNotOpen {

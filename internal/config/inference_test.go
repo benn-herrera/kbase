@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -49,6 +51,34 @@ func TestSelect(t *testing.T) {
 			}
 			if err != nil || name != tc.wantName || rule != tc.wantRule {
 				t.Errorf("= (%q, %q), %v; want (%q, %q)", name, rule, err, tc.wantName, tc.wantRule)
+			}
+		})
+	}
+}
+
+// TestUnresolvedProviderRemedy: a name the pool lacks is refused naming the
+// table to add, with configure --create as the remedy only where the
+// providers.toml does not stand — a standing one it would never overwrite.
+func TestUnresolvedProviderRemedy(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name       string
+		files      []string
+		wantRemedy string
+	}{
+		{name: "no providers.toml", wantRemedy: "kbase configure --create"},
+		{name: "a providers.toml that stands", files: []string{ProvidersPath(dir)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := Inputs{Providers: Providers{"a": {Name: "a"}}, WriteDir: dir, ProvidersFiles: tc.files}
+			_, _, err := Select(in, "typo")
+			var refusal result.Refusal
+			if !errors.As(err, &refusal) || len(refusal) != 1 {
+				t.Fatalf("Select = %v, want one refusal", err)
+			}
+			want := fmt.Sprintf("provider %q not found in %s — add a [typo] table there with its baseUrl", "typo", ProvidersPath(dir))
+			if item := refusal[0]; item.Detail != want || item.Remedy != tc.wantRemedy {
+				t.Errorf("refusal = %+v, want detail %q and remedy %q", item, want, tc.wantRemedy)
 			}
 		})
 	}

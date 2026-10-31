@@ -139,6 +139,10 @@ type ProviderFault struct {
 	// kind, so a fault built without considering this stays the strict
 	// one.
 	Warning bool
+
+	// KeyFileUnread is the dropping fault of an entry whose apiKeyFile could
+	// not be read. A stored key outranks that file, so storing one clears it.
+	KeyFileUnread bool
 }
 
 // Kind returns the normalized (trimmed, lower-cased) provider type,
@@ -233,14 +237,29 @@ func (p Provider) Validate() error {
 // material — a parse error references line/column, and a key-file read
 // failure references the path, so no secret leaks.
 func LoadProviders(path string, storedKeys map[string]string) (Providers, []ProviderFault, error) {
-	data, err := os.ReadFile(path)
+	data, _, err := readProvidersFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Providers{}, nil, nil
-		}
-		return nil, nil, fmt.Errorf("providers: read %s: %w", path, err)
+		return nil, nil, err
 	}
+	return parseProviders(path, data, storedKeys)
+}
 
+// readProvidersFile returns the providers.toml at path and whether it stands:
+// a file that does not is no content and no error.
+func readProvidersFile(path string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("providers: read %s: %w", path, err)
+	}
+	return data, true, nil
+}
+
+// parseProviders is LoadProviders over data, the content of the providers.toml
+// at path.
+func parseProviders(path string, data []byte, storedKeys map[string]string) (Providers, []ProviderFault, error) {
 	raw := map[string]Provider{}
 	md, err := toml.Decode(string(data), &raw)
 	if err != nil {
@@ -280,7 +299,7 @@ func LoadProviders(path string, storedKeys map[string]string) (Providers, []Prov
 		if keyKind(p) == KeyKindFile {
 			key, err := resolveAPIKey(p, dir)
 			if err != nil {
-				faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
+				faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error(), KeyFileUnread: true})
 				continue
 			}
 			if reason := keyFileExposure(p, dir); reason != "" {
@@ -357,7 +376,7 @@ func resolveAPIKey(p Provider, dir string) (string, error) {
 	}
 	b, err := os.ReadFile(keyFilePath(p, dir))
 	if err != nil {
-		return "", fmt.Errorf("read apiKeyFile: %w", err)
+		return "", fmt.Errorf("read the key file providers.toml names: %w", err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }
@@ -401,5 +420,5 @@ func keyFileExposure(p Provider, dir string) string {
 	if mode&keyFileExposedBits == 0 {
 		return ""
 	}
-	return fmt.Sprintf("apiKeyFile %s is readable beyond its owner (mode %#o) — chmod 600 it", path, mode)
+	return fmt.Sprintf("key file %s, named in providers.toml, is readable beyond its owner (mode %#o) — chmod 600 it", path, mode)
 }

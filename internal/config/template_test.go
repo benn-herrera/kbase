@@ -50,20 +50,26 @@ func templateKeys(template string) map[string]bool {
 // user is handed, so neither may fall behind the structs it describes. Every
 // key the loaders model is spelled in the template it belongs to, as a live or
 // a commented `key =` line — a field added to Provider or Config without a line
-// here fails before a user meets a key the file never mentions.
+// here fails before a user meets a key the file never mentions. The one
+// exception is apiKeyFile: the providers.toml template names no key field,
+// because a key is added with `kbase auth add`.
 func TestTemplatesSpellEveryModeledKey(t *testing.T) {
 	for _, tc := range []struct {
 		file     string
 		typ      reflect.Type
 		template string
+		omitted  string
 	}{
-		{ProvidersFileName, reflect.TypeOf(Provider{}), providersTemplate},
-		{ConfigFileName, reflect.TypeOf(Config{}), freshConfig(Config{})},
+		{ProvidersFileName, reflect.TypeOf(Provider{}), freshProviders(), "apiKeyFile"},
+		{ConfigFileName, reflect.TypeOf(Config{}), freshConfig(Config{}), ""},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			shown := templateKeys(tc.template)
 			for _, key := range tomlKeys(tc.typ, "") {
 				leaf := key[strings.LastIndex(key, ".")+1:]
+				if leaf == tc.omitted {
+					continue
+				}
 				if !shown[leaf] {
 					t.Errorf("the %s template states no %s key (`%s =`)", tc.file, key, leaf)
 				}

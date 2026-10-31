@@ -1023,7 +1023,9 @@ the context stopped the walk — its `cancelled` record naming the first item it
   role's value from; `ProviderFault.Path` names the `providers.toml` a fault came from, and a
   `Refusal`'s path names the file a lacking setting belongs in — the write target's
   `providers.toml` or `config.toml` — so
-  a layered configuration says which file to edit.
+  a layered configuration says which file to edit. `config.Loaded.ProvidersFiles`, carried into
+  `config.Inputs`, lists each layer's `providers.toml` that stood when read, so a refusal of a name
+  the pool lacks offers `kbase configure --create` only where its file does not stand.
 - **Keys: the store is read in `cmd`, the precedence lives in `config`.** `cmd`'s
   `loadConfigContext` reads every file of the credentials store through `internal/auth`
   (`readStoredKeys`) before the load, and hands `config.Load` a `config.StoredKeys` as data — each
@@ -1042,7 +1044,8 @@ the context stopped the walk — its `cancelled` record naming the first item it
   store's. `config.Report` is given the store faults too, and reports each from its parts with
   `config.AuthAddRemedy` — the piped form, also `kbase auth add`'s own input-refusal remedy and a
   refused key's failure remedy — as the
-  remedy where the file does not open; it alone computes a
+  remedy where the file does not open, and for an entry dropped because its `apiKeyFile` could not
+  be read (`ProviderFault.KeyFileUnread`), the stored key outranking the file; it alone computes a
   `file` key's `upgrade` and the warning that a stored key leaves an `apiKeyFile` unread, so
   `show-config` alone emits them.
 - **Resolution is pure, and connection is the registry's.** `config.Resolve`

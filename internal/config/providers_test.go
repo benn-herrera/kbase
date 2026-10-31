@@ -152,14 +152,17 @@ apiKeyFile = "not-here.key"
 	if len(faults) != 1 || faults[0].Name != "broken" {
 		t.Fatalf("want exactly one fault naming broken, got %+v", faults)
 	}
-	if !strings.Contains(faults[0].Reason, "apiKeyFile") {
-		t.Errorf("fault reason (len %d) does not name the failing field", len(faults[0].Reason))
+	if !strings.Contains(faults[0].Reason, "key file") || !strings.Contains(faults[0].Reason, "not-here.key") {
+		t.Errorf("fault reason (len %d) does not name the key file by its path", len(faults[0].Reason))
 	}
 	if strings.Contains(faults[0].Reason, fakeKey) {
 		t.Error("ProviderFault.Reason carries key material")
 	}
 	if faults[0].Warning {
 		t.Error("a dropped provider was reported as a warning")
+	}
+	if !faults[0].KeyFileUnread {
+		t.Error("the fault of a key file that could not be read is not marked KeyFileUnread")
 	}
 }
 
