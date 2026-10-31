@@ -153,6 +153,7 @@ edit-gate: fmt-check
     go vet ./...
     go vet -tags kbasedev ./...
     @for f in tools/scripts/*.sh; do bash -n "${f}" || exit 1; done
+    @tools/scripts/check-hermetic.sh
 
 # this project is developed in tandem with adjagent
 AGENTS_DIR := "../adjagent"
