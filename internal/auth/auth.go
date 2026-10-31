@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"kbase/internal/atomicfile"
+	"kbase/internal/secret"
 )
 
 // DirName is the store's directory under kbase's state base.
@@ -104,7 +105,7 @@ func currentUsername() (string, error) {
 }
 
 // Add stores key for the provider name, replacing any key stored for it.
-func (s Store) Add(name, key string) error {
+func (s Store) Add(name string, key secret.Key) error {
 	path, err := s.path(name)
 	if err != nil {
 		return err
@@ -116,20 +117,20 @@ func (s Store) Add(name, key string) error {
 	if err := os.MkdirAll(s.dir, 0o777); err != nil {
 		return err
 	}
-	return atomicfile.WriteMode(path, aead.Seal(nil, nil, []byte(key), nil), FileMode)
+	return atomicfile.WriteMode(path, aead.Seal(nil, nil, []byte(key.Reveal()), nil), FileMode)
 }
 
 // Read is the key stored for the provider name. A name with no file is a
 // *FileError matching fs.ErrNotExist; a file that does not open is one
 // wrapping ErrTruncated or ErrDoesNotOpen.
-func (s Store) Read(name string) (string, error) {
+func (s Store) Read(name string) (secret.Key, error) {
 	path, err := s.path(name)
 	if err != nil {
-		return "", err
+		return secret.Key{}, err
 	}
 	aead, err := s.sealer()
 	if err != nil {
-		return "", err
+		return secret.Key{}, err
 	}
 	sealed, err := os.ReadFile(path)
 	if err != nil {
@@ -137,16 +138,16 @@ func (s Store) Read(name string) (string, error) {
 		if errors.As(err, &pathErr) {
 			err = pathErr.Err
 		}
-		return "", &FileError{Path: path, Err: err}
+		return secret.Key{}, &FileError{Path: path, Err: err}
 	}
 	if len(sealed) < aead.Overhead() {
-		return "", &FileError{Path: path, Err: ErrTruncated}
+		return secret.Key{}, &FileError{Path: path, Err: ErrTruncated}
 	}
 	key, err := aead.Open(nil, nil, sealed, nil)
 	if err != nil {
-		return "", &FileError{Path: path, Err: ErrDoesNotOpen}
+		return secret.Key{}, &FileError{Path: path, Err: ErrDoesNotOpen}
 	}
-	return string(key), nil
+	return secret.NewKey(string(key)), nil
 }
 
 // Remove clears the key stored for the provider name, reporting whether one

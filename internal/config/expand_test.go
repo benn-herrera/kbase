@@ -77,14 +77,14 @@ apiKeyFile = "~other/key.txt"
 	if len(faults) != 0 {
 		t.Fatalf("faults = %+v, want none: the home key file and the literal one both read", faults)
 	}
-	if got := providers["homekey"].APIKey; got != fakeKey {
+	if got := providers["homekey"].APIKey.Reveal(); got != fakeKey {
 		t.Errorf("homekey.APIKey (len %d), want the key under the home directory", len(got))
 	}
 	if got := keyFilePath(providers["homekey"], dir); got != filepath.Join(home, "keys", "home.txt") {
 		t.Errorf("keyFilePath = %q, want %q — a ~-expanded path is never joined to the config directory",
 			got, filepath.Join(home, "keys", "home.txt"))
 	}
-	if got := providers["tildeuser"].APIKey; got != fakeKey {
+	if got := providers["tildeuser"].APIKey.Reveal(); got != fakeKey {
 		t.Errorf("tildeuser.APIKey (len %d), want the key its literal ~other/ names beside the config file", len(got))
 	}
 	// The report keeps the spelling each entry gives.

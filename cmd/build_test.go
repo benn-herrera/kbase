@@ -166,7 +166,7 @@ func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 	if p.Multichoice != "Some-Decision" || p.Overview != "Some-Text" {
 		t.Errorf("provider = %+v, want each role's own model", p)
 	}
-	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey != "secret-key" {
+	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey.Reveal() != "secret-key" {
 		t.Errorf("endpoints dialled = %+v, want the one entry, once, with its key file read", len(dialled))
 	}
 	if len(p.Roles) != 2 {

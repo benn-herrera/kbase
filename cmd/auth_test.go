@@ -16,6 +16,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // authSentinelKey is a key no test output may carry.
@@ -115,8 +116,8 @@ func TestAuthAddListRemoveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != authSentinelKey+"alpha" {
-		t.Errorf("the stored key does not match the piped one trimmed: length %d, want %d", len(got), len(authSentinelKey+"alpha"))
+	if got.Reveal() != authSentinelKey+"alpha" {
+		t.Errorf("the stored key does not match the piped one trimmed: length %d, want %d", len(got.Reveal()), len(authSentinelKey+"alpha"))
 	}
 	list := func() []any {
 		d := checkDocument(t, "auth list", runAuth(t, "auth list", authList, authOptions{Dir: dir}))
@@ -352,7 +353,7 @@ func TestAuthAddChecksTheConfiguration(t *testing.T) {
 				t.Errorf("refusals %v, want one keyed %v", items, tc.key)
 			}
 			got, err := store.Read(tc.provider)
-			if stored := err == nil && got == authSentinelKey; stored != (tc.outcome == toolresult.Done) {
+			if stored := err == nil && got.Reveal() == authSentinelKey; stored != (tc.outcome == toolresult.Done) {
 				t.Errorf("the piped key stored: %v, want %v (read: %v)", stored, !stored, err)
 			}
 		})
@@ -377,7 +378,7 @@ func TestProviderNameRuleIsOne(t *testing.T) {
 func TestAuthRemoveClearsAnUnconfiguredName(t *testing.T) {
 	const provider = "auth-orphaned"
 	store := cliStore(t)
-	if err := store.Add(provider, authSentinelKey); err != nil {
+	if err := store.Add(provider, secret.NewKey(authSentinelKey)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

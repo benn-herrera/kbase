@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"kbase/internal/secret"
 )
 
 // Client is one endpoint's surface. Its two inference methods are unexported,
@@ -61,9 +63,9 @@ type Endpoint struct {
 	// tolerated.
 	BaseURL string
 	// APIKey is the key. It rides the OpenAI surface as a bearer token and
-	// the Messages surface as `x-api-key`. Empty means send no auth header —
-	// several local servers reject an empty bearer value.
-	APIKey string
+	// the Messages surface as `x-api-key`. The zero Key means send no auth
+	// header — several local servers reject an empty bearer value.
+	APIKey secret.Key
 	// Protocol is which chat wire protocol this endpoint speaks; the zero
 	// value is ProtocolOpenAI. NewClient dispatches on it.
 	Protocol Protocol

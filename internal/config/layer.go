@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"kbase/internal/secret"
 )
 
 // The four layers configuration is read from, in the one vocabulary every
@@ -108,7 +110,7 @@ type Loaded struct {
 // each file that did not open — or, where the store's directory stands and
 // does not list, no key and that directory's fault.
 type StoredKeys struct {
-	Keys   map[string]string
+	Keys   map[string]secret.Key
 	Faults []StoreFault
 }
 

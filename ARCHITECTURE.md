@@ -1481,6 +1481,10 @@ internal/auth             the credentials store: one file per provider,
                           again from config's (`auth.NamePattern`,
                           `config.ProviderNamePattern`) and pinned equal by a cmd test;
                           imported by cmd alone
+internal/secret           `Key`, the type every key travels in: fmt's verbs, a text,
+                          JSON or YAML encoding and a log value render it
+                          `<redacted>`, and `Reveal` alone returns the key; imports
+                          no kbase package
 internal/asks/call        the caller: the multichoice asks through a Slot's Decision behind the multichoice-ask
                           seam, the overview call through a Slot's Chat; captures, answer
                           cache; imported by build alone
@@ -1624,8 +1628,9 @@ through `kb.LoadGraph` or `kb.LoadAuthoredGraph`, over `Source` bytes.
   stays free of `kbload`.
 - `mcp` is imported by `cmd` alone and reaches no `model` or `asks/call` (I9); `mcp/protocol`
   imports `log` only.
-- `internal/model` imports no kbase package and no `os`: it touches no file and knows no role
-  or consumer (`cmd/importpolicy_test.go`, `TestModelImportsNoOS` for `os`).
+- `internal/model` imports no kbase package but `secret`, the key's type, and no `os`: it touches
+  no file and knows no role or consumer (`cmd/importpolicy_test.go`, `TestModelImportsNoOS` for
+  `os`).
 - Only `asks/call`, `build`, `modelclient` and three `cmd` files import `model`: within `cmd`,
   file-level, `cmd/build.go`, the build's role closure, `cmd/score.go`, the score verb's ask, and
   `cmd/probe.go`, the probe's one call. `internal/model/modeltest` imports it as test support, which
@@ -1633,9 +1638,8 @@ through `kb.LoadGraph` or `kb.LoadAuthoredGraph`, over `Source` bytes.
   `modelclient` is the only constructor of a `model.Client`, and a verb opens one only where it is
   about to ask something. `modelclient` imports `model`, `config`, `result` and `log` and nothing
   else of kbase, and `cmd` alone imports it.
-- `internal/config` imports no kbase package but `atomicfile` and `result`: it holds the grammar,
-  the three roles, `Resolve`, `Select`, the loaded files and the
-  templates, and refuses in `result.Refusal`. It holds configure's rules too, in `Configure`: the
+- `internal/config` imports no kbase package but `atomicfile`, `result` and `secret`: it holds the
+  grammar, the three roles, `Resolve`, `Select`, the loaded files and the templates, and refuses in `result.Refusal`. It holds configure's rules too, in `Configure`: the
   `--model-map` grammar (`ParseModelMap`), which scoring reference a rewrite keeps, the match of
   each reference against its provider's catalogue, the refusal of an unassigned category and the
   targeted write — `--create` with no `--provider` dialling nothing. It reads a catalogue through
@@ -1670,7 +1674,12 @@ through `kb.LoadGraph` or `kb.LoadAuthoredGraph`, over `Source` bytes.
   KB and supplies every pandoc call — the preflight and the one `pandoc.RunDefaults` call — as a
   function value `export.Run` calls.
 - `internal/auth` imports nothing of kbase but `atomicfile`, to write its files at their mode, and
-  only `cmd` imports it; `config`'s own rule keeps it from the store.
+  `secret`, and only `cmd` imports it; `config`'s own rule keeps it from the store.
+- `internal/secret` imports no kbase package. A key's text leaves a `secret.Key` through `Reveal`
+  in four files alone — `internal/model/openai_client.go` and `anthropic_client.go`, setting the
+  auth header and scrubbing an echoed key, `internal/model/transport.go`, cutting a status error's
+  body around it, and `internal/auth/auth.go`, sealing it — and `cmd/revealpolicy_test.go`, on
+  the module walk, fails a production file outside them that names `Reveal`.
 
 The dependency rules are enforced by an import-policy test over the transitive import graph
 (`cmd/importpolicy_test.go`), beside the I1 exec-policy test (`cmd/execpolicy_test.go`).

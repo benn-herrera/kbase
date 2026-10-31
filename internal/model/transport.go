@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"kbase/internal/secret"
 )
 
 // userAgent is the User-Agent header value sent with every request.
@@ -70,16 +72,17 @@ func closeIdleConnections(h *http.Client) error {
 // provider's HTML error page cannot become a megabyte of error string), with
 // any key the server echoed scrubbed out. It takes ownership of resp.Body.
 //
-// The scrub runs before the cut, over len(apiKey) bytes past the cap, so a
+// The scrub runs before the cut, over the key's length past the cap, so a
 // key straddling the cap is whole when scrubbed. A read that fills its limit
-// may end inside a key, so its last len(apiKey)-1 bytes are dropped.
-func statusError(resp *http.Response, apiKey string) error {
-	limit := int64(errorBodyLimit + len(apiKey))
+// may end inside a key, so its last length-1 bytes are dropped.
+func statusError(resp *http.Response, apiKey secret.Key) error {
+	keyLen := len(apiKey.Reveal())
+	limit := int64(errorBodyLimit + keyLen)
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
 	_ = resp.Body.Close()
 	body := scrubAuthorization(string(respBody), apiKey)
-	if int64(len(respBody)) == limit && len(apiKey) > 0 {
-		body = body[:max(0, len(body)-(len(apiKey)-1))]
+	if int64(len(respBody)) == limit && keyLen > 0 {
+		body = body[:max(0, len(body)-(keyLen-1))]
 	}
 	return StatusError{
 		Code: resp.StatusCode,

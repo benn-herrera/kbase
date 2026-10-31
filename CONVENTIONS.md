@@ -50,7 +50,8 @@ them. Working rules for packages that carry over:
   provider faults never abort the pool; fault reasons carry no key material. Resolution is pure and
   lives here alone — `Resolve`, `Select` — and reads no file, opens no client and writes no
   stderr (a refusal's remedy may name the command that fixes it, such as `kbase configure`). The package imports no kbase package but
-  `atomicfile` and `result` (it refuses in `result.Refusal`, each item carrying its check), never
+  `atomicfile`, `result` (it refuses in `result.Refusal`, each item carrying its check) and
+  `secret` (a key is a `secret.Key`), never
   `model` or `log`: it returns its faults as data, so each caller decides whether one is a warning
   or a result field. A `[models]` value is parsed by one function,
   `ParseReference` (`<provider>/<model>`, split at the first `/`), and `Reference.String` writes such a

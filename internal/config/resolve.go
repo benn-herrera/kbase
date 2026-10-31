@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // Role is one thing a verb asks a model for on the KB's behalf. A role names
@@ -114,7 +115,7 @@ type Endpoint struct {
 	// package's, and the model package is handed the resolved fact rather than
 	// the string.
 	Protocol string
-	APIKey   string
+	APIKey   secret.Key
 
 	// Temperature and Thinking are the role's sampling as the files state it,
 	// unset where no layer does: nil and "", never kbase's default filled in.

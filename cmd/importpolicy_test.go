@@ -72,12 +72,16 @@ var dependencyRules = []dependencyRule{{
 	why:     "gitledger imports log and nothing else of kbase",
 }, {
 	from:    []string{"internal/model"},
-	allowed: []string{"internal/model"},
-	why:     "model imports no kbase package: it knows nothing of files, roles or consumers, and its test support, modeltest, imports model alone",
+	allowed: []string{"internal/model", "internal/secret"},
+	why:     "model imports no kbase package but secret, the key's type: it knows nothing of files, roles or consumers, and its test support, modeltest, imports model alone",
 }, {
 	from:    []string{"internal/config"},
-	allowed: []string{"internal/atomicfile", "internal/result"},
-	why:     "the configuration is grammar and resolution: it imports atomicfile to write its files and result to refuse, and never model or log — it opens no client, writes no output, and returns its faults as data, so each caller decides whether one is a warning or a result field",
+	allowed: []string{"internal/atomicfile", "internal/result", "internal/secret"},
+	why:     "the configuration is grammar and resolution: it imports atomicfile to write its files, result to refuse and secret for the key's type, and never model or log — it opens no client, writes no output, and returns its faults as data, so each caller decides whether one is a warning or a result field",
+}, {
+	from:    []string{"internal/secret"},
+	allowed: []string{},
+	why:     "the key's type imports no kbase package, so every package that carries a key can import it",
 }, {
 	except:    []string{"internal/build", "internal/mcp", "cmd"},
 	forbidden: []string{"internal/kbdocs"},
@@ -182,8 +186,8 @@ var dependencyRules = []dependencyRule{{
 	why:     "export imports kb and atomicfile and nothing else of kbase: the verb opens the KB and supplies every pandoc call",
 }, {
 	from:    []string{"internal/auth"},
-	allowed: []string{"internal/atomicfile"},
-	why:     "the credentials store imports nothing of kbase but atomicfile, to write its files at their mode",
+	allowed: []string{"internal/atomicfile", "internal/secret"},
+	why:     "the credentials store imports nothing of kbase but atomicfile, to write its files at their mode, and secret, the key's type",
 }, {
 	except:    []string{"cmd"},
 	forbidden: []string{"internal/auth"},

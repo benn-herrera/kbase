@@ -9,8 +9,8 @@ dispatch quotes them. Line numbers are as of `fcb1738`; locate cited text where 
 | R1 | expert | hermetic recipes never reach the user's store, held by a check | `just edit-gate`, `just test-integration-init` | landed |
 | R12 | mechanical (tech-writer) | SPEC: "No result names a key" reads as the stored key | — | landed |
 | R7 | expert | an error body is scrubbed before it is cut | `just test` | landed |
-| R6 | expert | a key is a redacting type; a scan holds where it is revealed | `just checkpoint`, `just test-integration` | in progress |
-| R3 | expert | a store fault has one representation | `just checkpoint`, `just test-integration-config`, `just test-integration-auth` | pending |
+| R6 | expert | a key is a redacting type; a scan holds where it is revealed | `just checkpoint`, `just test-integration` | landed |
+| R3 | expert | a store fault has one representation | `just checkpoint`, `just test-integration-config`, `just test-integration-auth` | in progress |
 | R4 | expert | a refused key is classified once on the `cmd` side | `just checkpoint` | pending |
 | R5 | expert | a scan holds "no production text names apiKeyFile" | `just test` | pending |
 | R8 | expert | store hardening: directory `0700`, symlinked key files, relative `XDG_STATE_HOME` | `just checkpoint`, `just test-integration-auth` | pending |

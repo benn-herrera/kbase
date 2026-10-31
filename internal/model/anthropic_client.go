@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"kbase/internal/secret"
 )
 
 // The Anthropic Messages wire surface: the path chat hangs off
@@ -192,8 +194,8 @@ func (c *AnthropicClient) do(ctx context.Context, method, path, accept string, b
 	httpReq.Header.Set("Accept", accept)
 	httpReq.Header.Set("User-Agent", userAgent)
 	httpReq.Header.Set(headerAnthropicVer, anthropicVersion)
-	if c.endpoint.APIKey != "" {
-		httpReq.Header.Set("x-api-key", c.endpoint.APIKey)
+	if !c.endpoint.APIKey.IsZero() {
+		httpReq.Header.Set("x-api-key", c.endpoint.APIKey.Reveal())
 	}
 
 	resp, err := c.http.Do(httpReq)
@@ -419,7 +421,7 @@ type anthropicStreamReader struct {
 
 	// apiKey is carried only to scrub an error event's message; this reader
 	// sends nothing.
-	apiKey string
+	apiKey secret.Key
 
 	content      strings.Builder
 	finishReason string
@@ -432,7 +434,7 @@ type anthropicStreamReader struct {
 	sawStop bool
 }
 
-func newAnthropicStreamReader(ctx context.Context, cancel context.CancelCauseFunc, body io.ReadCloser, idle time.Duration, apiKey string) *anthropicStreamReader {
+func newAnthropicStreamReader(ctx context.Context, cancel context.CancelCauseFunc, body io.ReadCloser, idle time.Duration, apiKey secret.Key) *anthropicStreamReader {
 	return &anthropicStreamReader{sseScanner: newSSEScanner(ctx, cancel, body, idle), apiKey: apiKey}
 }
 

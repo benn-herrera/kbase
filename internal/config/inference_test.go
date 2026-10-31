@@ -6,10 +6,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // keyFile stages a key file holding key and returns its path.
@@ -116,7 +118,7 @@ func scenario(t *testing.T) Inputs {
 	return Inputs{
 		Cfg: Config{Models: ModelMap{Decision: "lab/d3", Text: "lab/qwen", Scoring: "cloud/clef"},
 			Sources: Sources{Decision: LayerSourceRepository, Text: LayerSourceGlobal, Scoring: LayerSourceRepository}},
-		Providers: Providers{"lab": {Name: "lab", BaseURL: "https://lab.example/v1", APIKey: "lab-key",
+		Providers: Providers{"lab": {Name: "lab", BaseURL: "https://lab.example/v1", APIKey: secret.NewKey("lab-key"),
 			DecisionsFlavor: FlavorDecisions, Layer: LayerSourceRepository}},
 		Faults:   []ProviderFault{{Name: "cloud", Path: "/cfg/providers.toml", Reason: "no baseUrl declared"}},
 		WriteDir: dir,
@@ -133,9 +135,9 @@ func TestResolve(t *testing.T) {
 	}
 	want := Endpoint{Role: RoleDecision, Provider: "lab", Model: "d3", Rule: RuleConfig,
 		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
-		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
-	if ep != want {
-		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", shownEndpoint(ep), shownEndpoint(want), len(ep.APIKey), len(want.APIKey))
+		APIKey: secret.NewKey("lab-key"), BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
+	if !reflect.DeepEqual(ep, want) {
+		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", shownEndpoint(ep), shownEndpoint(want), len(ep.APIKey.Reveal()), len(want.APIKey.Reveal()))
 	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
@@ -155,7 +157,7 @@ func TestResolve(t *testing.T) {
 
 // shownEndpoint is ep with its key left out, for a failure message.
 func shownEndpoint(ep Endpoint) Endpoint {
-	ep.APIKey = ""
+	ep.APIKey = secret.Key{}
 	return ep
 }
 
@@ -298,7 +300,7 @@ func TestCleartextWarning(t *testing.T) {
 		{"https", "https://reaper.local/v1", "k", false},
 		{"non-loopback with key", "http://reaper.local:4000/v1", "secret-key", true},
 	} {
-		got := CleartextWarning(tc.url, tc.key)
+		got := CleartextWarning(tc.url, secret.NewKey(tc.key))
 		if (got != "") != tc.warns || strings.Contains(got, "secret-key") || strings.Contains(got, "\n") {
 			t.Errorf("%s: warning of %d bytes, want warning %t, one line naming no key", tc.name, len(got), tc.warns)
 		}

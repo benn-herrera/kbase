@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kbase/internal/secret"
 )
 
 // fakeKey is the placeholder credential used throughout these tests. It is
@@ -91,8 +93,8 @@ api = "openai"
 		if p.Name != name {
 			t.Errorf("%s: Name = %q, want the table header", name, p.Name)
 		}
-		if p.APIKey != fakeKey {
-			t.Errorf("%s: APIKey not resolved (len %d)", name, len(p.APIKey))
+		if p.APIKey.Reveal() != fakeKey {
+			t.Errorf("%s: APIKey not resolved (len %d)", name, len(p.APIKey.Reveal()))
 		}
 		if p.BaseURL == "" {
 			t.Errorf("%s: BaseURL empty", name)
@@ -119,8 +121,8 @@ apiKeyFile = "`+keyPath+`"
 	if len(faults) != 0 {
 		t.Fatalf("unexpected faults: %+v", faults)
 	}
-	if got["reaper"].APIKey != fakeKey {
-		t.Errorf("absolute apiKeyFile did not resolve (len %d)", len(got["reaper"].APIKey))
+	if got["reaper"].APIKey.Reveal() != fakeKey {
+		t.Errorf("absolute apiKeyFile did not resolve (len %d)", len(got["reaper"].APIKey.Reveal()))
 	}
 }
 
@@ -183,7 +185,7 @@ apiKeyFile = "reaper.key"
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
-	if p, ok := got["reaper"]; !ok || p.APIKey != fakeKey {
+	if p, ok := got["reaper"]; !ok || p.APIKey.Reveal() != fakeKey {
 		t.Fatal("an exposed key file is a warning, not a refusal: the provider must still load with its key")
 	}
 	if len(faults) != 1 || faults[0].Name != "reaper" || !faults[0].Warning {
@@ -241,7 +243,7 @@ apiKeyFile = "readable.key"
 [nokey]
 baseUrl = "http://nokey.example/v1"
 `)
-	stored := map[string]string{"missing": storedKey, "exposed": storedKey, "storedonly": storedKey}
+	stored := map[string]secret.Key{"missing": secret.NewKey(storedKey), "exposed": secret.NewKey(storedKey), "storedonly": secret.NewKey(storedKey)}
 
 	got, faults, err := LoadProviders(path, stored)
 	if err != nil {
@@ -265,8 +267,8 @@ baseUrl = "http://nokey.example/v1"
 			t.Errorf("%s is not in the pool", tc.name)
 			continue
 		}
-		if p.APIKey != tc.key {
-			t.Errorf("%s: the key (len %d) is not the %s key (len %d)", tc.name, len(p.APIKey), tc.kind, len(tc.key))
+		if p.APIKey.Reveal() != tc.key {
+			t.Errorf("%s: the key (len %d) is not the %s key (len %d)", tc.name, len(p.APIKey.Reveal()), tc.kind, len(tc.key))
 		}
 		if k := keyKind(p); k != tc.kind {
 			t.Errorf("%s: key kind %s, want %s", tc.name, k, tc.kind)
@@ -473,7 +475,7 @@ APIKEYFILE = "reaper.key"
 	if len(faults) != 0 {
 		t.Fatalf("unexpected faults: %+v", faults)
 	}
-	if p := got["reaper"]; p.BaseURL == "" || p.APIKey != fakeKey {
+	if p := got["reaper"]; p.BaseURL == "" || p.APIKey.Reveal() != fakeKey {
 		t.Errorf("case-variant field spellings did not decode: %+v", Provider{BaseURL: p.BaseURL})
 	}
 }
@@ -568,7 +570,7 @@ apiKeyFile = "not-here.key"
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
-	if got["reaper"].APIKey != sentinel {
+	if got["reaper"].APIKey.Reveal() != sentinel {
 		t.Fatal("the fixture's key file did not resolve, so the fault text proves nothing")
 	}
 	if len(faults) != 2 {

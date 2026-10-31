@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/secret"
 )
 
 // sentinelKey is the key every test stores. No failure message formats it, or
@@ -24,7 +26,7 @@ func storeFor(t *testing.T, user string) Store {
 
 func addSentinel(t *testing.T, s Store, name string) string {
 	t.Helper()
-	if err := s.Add(name, sentinelKey); err != nil {
+	if err := s.Add(name, secret.NewKey(sentinelKey)); err != nil {
 		t.Fatalf("Add(%q) failed with a %T", name, err)
 	}
 	return filepath.Join(s.dir, name+FileSuffix)
@@ -48,14 +50,14 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read failed with a %T", err)
 	}
-	if got != sentinelKey {
-		t.Errorf("the key read back differs from the one added (length %d, want %d)", len(got), len(sentinelKey))
+	if got.Reveal() != sentinelKey {
+		t.Errorf("the key read back differs from the one added (length %d, want %d)", len(got.Reveal()), len(sentinelKey))
 	}
-	if err := s.Add("cloud", "replacement"); err != nil {
+	if err := s.Add("cloud", secret.NewKey("replacement")); err != nil {
 		t.Fatalf("Add over a stored key failed with a %T", err)
 	}
-	if got, err := s.Read("cloud"); err != nil || got != "replacement" {
-		t.Errorf("after a replace, the key read back is not the replacement (length %d, error %T)", len(got), err)
+	if got, err := s.Read("cloud"); err != nil || got.Reveal() != "replacement" {
+		t.Errorf("after a replace, the key read back is not the replacement (length %d, error %T)", len(got.Reveal()), err)
 	}
 }
 
@@ -112,8 +114,8 @@ func TestRenamedFileOpensUnderItsNewName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.dir, "new-name"+FileSuffix), sealed, FileMode); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Read("new-name"); err != nil || got != sentinelKey {
-		t.Errorf("the copied file read as new-name: key matches %t, error %T; want the key", got == sentinelKey, err)
+	if got, err := s.Read("new-name"); err != nil || got.Reveal() != sentinelKey {
+		t.Errorf("the copied file read as new-name: key matches %t, error %T; want the key", got.Reveal() == sentinelKey, err)
 	}
 }
 
@@ -125,7 +127,7 @@ func TestUnusableNamesRefused(t *testing.T) {
 	for _, name := range []string{"", ".", "..", "a/b", `a\b`, "a\x00b", "../escape",
 		"dotted.name", "with space", "naïve", "-lead", "colon:name"} {
 		var refused *NameError
-		if err := s.Add(name, sentinelKey); !errors.As(err, &refused) {
+		if err := s.Add(name, secret.NewKey(sentinelKey)); !errors.As(err, &refused) {
 			t.Errorf("Add(%q) returned a %T, want a name refusal", name, err)
 		} else if err.Error() != NameRule {
 			t.Errorf("Add(%q) refused with %q, want the rule alone", name, err)
@@ -178,7 +180,7 @@ func TestListAndRemove(t *testing.T) {
 // the file of its lowercase, and read and removed under any other case of it.
 func TestNameCaseSharesOneFile(t *testing.T) {
 	s := storeFor(t, "alice")
-	if err := s.Add("Reaper", sentinelKey); err != nil {
+	if err := s.Add("Reaper", secret.NewKey(sentinelKey)); err != nil {
 		t.Fatalf("Add(Reaper) failed with a %T", err)
 	}
 	entries, err := os.ReadDir(s.dir)
@@ -192,8 +194,8 @@ func TestNameCaseSharesOneFile(t *testing.T) {
 	if !slices.Equal(files, []string{"reaper" + FileSuffix}) {
 		t.Fatalf("the store holds %q, want reaper%s alone", files, FileSuffix)
 	}
-	if got, err := s.Read("reaper"); err != nil || got != sentinelKey {
-		t.Errorf("Read(reaper) after Add(Reaper): key matches %t, error %T; want the key", got == sentinelKey, err)
+	if got, err := s.Read("reaper"); err != nil || got.Reveal() != sentinelKey {
+		t.Errorf("Read(reaper) after Add(Reaper): key matches %t, error %T; want the key", got.Reveal() == sentinelKey, err)
 	}
 	if names, err := s.List(); err != nil || !slices.Equal(names, []string{"reaper"}) {
 		t.Errorf("List = %q, %v; want [reaper]", names, err)
@@ -245,13 +247,13 @@ func TestStoreErrorsCarryNoKey(t *testing.T) {
 		}},
 		{name: "no username", is: ErrNoUsername, fail: func(t *testing.T) error {
 			s := Store{dir: t.TempDir(), username: func() (string, error) { return "", nil }}
-			return s.Add("cloud", sentinelKey)
+			return s.Add("cloud", secret.NewKey(sentinelKey))
 		}},
 		{name: "unusable name", refusal: true, fail: func(t *testing.T) error {
-			return storeFor(t, "alice").Add("a/b", sentinelKey)
+			return storeFor(t, "alice").Add("a/b", secret.NewKey(sentinelKey))
 		}},
 		{name: "key passed as the name", refusal: true, fail: func(t *testing.T) error {
-			return storeFor(t, "alice").Add(sentinelKey+"/x", "k")
+			return storeFor(t, "alice").Add(sentinelKey+"/x", secret.NewKey("k"))
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

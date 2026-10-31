@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"kbase/internal/secret"
 )
 
 // Provider kind and wire protocol. kbase is an inference-only appliance — one
@@ -100,7 +102,7 @@ type Provider struct {
 
 	// APIKey is the resolved key — populated by LoadProviders from the
 	// credentials store or the file APIKeyFile names. Not a TOML field.
-	APIKey string `toml:"-"`
+	APIKey secret.Key `toml:"-"`
 
 	// KeyStored is whether the credentials store holds a key under the
 	// entry's name. Populated by LoadProviders, never by the file.
@@ -236,7 +238,7 @@ func (p Provider) Validate() error {
 // Errors and faults are constructed without TOML value content or key
 // material — a parse error references line/column, and a key-file read
 // failure references the path, so no secret leaks.
-func LoadProviders(path string, storedKeys map[string]string) (Providers, []ProviderFault, error) {
+func LoadProviders(path string, storedKeys map[string]secret.Key) (Providers, []ProviderFault, error) {
 	data, _, err := readProvidersFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -259,7 +261,7 @@ func readProvidersFile(path string) ([]byte, bool, error) {
 
 // parseProviders is LoadProviders over data, the content of the providers.toml
 // at path.
-func parseProviders(path string, data []byte, storedKeys map[string]string) (Providers, []ProviderFault, error) {
+func parseProviders(path string, data []byte, storedKeys map[string]secret.Key) (Providers, []ProviderFault, error) {
 	raw := map[string]Provider{}
 	md, err := toml.Decode(string(data), &raw)
 	if err != nil {
@@ -370,15 +372,15 @@ func caseCollisions(seen map[string]statedName, path string, names []string) []c
 // APIKeyFile names; an entry that names no file resolves to no key. The
 // key file's content is trimmed of surrounding whitespace. The returned
 // error never carries key content — only the file path, on an I/O failure.
-func resolveAPIKey(p Provider, dir string) (string, error) {
+func resolveAPIKey(p Provider, dir string) (secret.Key, error) {
 	if p.APIKeyFile == "" {
-		return "", nil
+		return secret.Key{}, nil
 	}
 	b, err := os.ReadFile(keyFilePath(p, dir))
 	if err != nil {
-		return "", fmt.Errorf("read the key file providers.toml names: %w", err)
+		return secret.Key{}, fmt.Errorf("read the key file providers.toml names: %w", err)
 	}
-	return strings.TrimSpace(string(b)), nil
+	return secret.NewKey(strings.TrimSpace(string(b))), nil
 }
 
 // keyFilePath resolves the provider's apiKeyFile: a leading ~ expands from the

@@ -15,6 +15,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // The key material the fixture configuration carries. No test lets it reach the
@@ -61,7 +62,7 @@ func storeFixture(t *testing.T) (configDir, keyPath, truncated string) {
 	}
 	store := auth.NewStore(storeDir)
 	for _, name := range []string{"both", "stored", "Truncated"} {
-		if err := store.Add(name, storedKey); err != nil {
+		if err := store.Add(name, secret.NewKey(storedKey)); err != nil {
 			t.Fatal(err)
 		}
 	}

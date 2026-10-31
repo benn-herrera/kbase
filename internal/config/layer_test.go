@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/secret"
 )
 
 // homeDir is the directory the global layer resolves under, with HOME pointed
@@ -158,7 +160,7 @@ baseUrl = "http://local.example/v1"
 		t.Errorf("pool = %v, want the union of both layers", names)
 	}
 	shared := providers["shared"]
-	if shared.BaseURL != "http://shared.example/v2" || shared.APIKeyFile != "" || shared.APIKey != "" {
+	if shared.BaseURL != "http://shared.example/v2" || shared.APIKeyFile != "" || !shared.APIKey.IsZero() {
 		t.Errorf("shared = %+v, want the repository entry whole: its URL, and no key inherited from the global entry",
 			Provider{BaseURL: shared.BaseURL, APIKeyFile: shared.APIKeyFile})
 	}
@@ -382,7 +384,7 @@ apiKeyFile = "fallback.key"
 `)
 	writeProviders(t, repoDir, "[shared]\nbaseUrl = \"http://repo.example/v1\"\n")
 	stored := StoredKeys{
-		Keys: map[string]string{"shared": storedKey},
+		Keys: map[string]secret.Key{"shared": secret.NewKey(storedKey)},
 		Faults: []StoreFault{
 			{Name: "broken", Path: storeFile, Reason: "too short", DoesNotOpen: true},
 			{Name: "fallback", Path: "/state/kbase/auth/fallback-key.enc", Reason: "too short", DoesNotOpen: true},
@@ -398,12 +400,12 @@ apiKeyFile = "fallback.key"
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if shared := loaded.Providers["shared"]; shared.Layer != LayerSourceRepository || shared.APIKey != storedKey || keyKind(shared) != KeyKindStore {
+	if shared := loaded.Providers["shared"]; shared.Layer != LayerSourceRepository || shared.APIKey.Reveal() != storedKey || keyKind(shared) != KeyKindStore {
 		t.Errorf("shared from %s, key kind %s, stored key %t; want the repository entry with the stored key",
-			shared.Layer, keyKind(shared), shared.APIKey == storedKey)
+			shared.Layer, keyKind(shared), shared.APIKey.Reveal() == storedKey)
 	}
-	if fallback := loaded.Providers["fallback"]; fallback.APIKey != fakeKey || keyKind(fallback) != KeyKindFile {
-		t.Errorf("fallback key kind %s, file key %t; want its apiKeyFile's key", keyKind(fallback), fallback.APIKey == fakeKey)
+	if fallback := loaded.Providers["fallback"]; fallback.APIKey.Reveal() != fakeKey || keyKind(fallback) != KeyKindFile {
+		t.Errorf("fallback key kind %s, file key %t; want its apiKeyFile's key", keyKind(fallback), fallback.APIKey.Reveal() == fakeKey)
 	}
 	if _, ok := loaded.Providers["Broken"]; ok {
 		t.Error("Broken is in the pool: its store file did not open and its apiKeyFile is missing")

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"kbase/internal/secret"
 )
 
 // The OpenAI-compatible chat path, hanging off Endpoint.BaseURL. The catalogue
@@ -86,8 +88,8 @@ func (c *OpenAIClient) doRequest(ctx context.Context, method, path, accept strin
 	}
 	httpReq.Header.Set("Accept", accept)
 	httpReq.Header.Set("User-Agent", userAgent)
-	if c.endpoint.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.endpoint.APIKey)
+	if !c.endpoint.APIKey.IsZero() {
+		httpReq.Header.Set("Authorization", "Bearer "+c.endpoint.APIKey.Reveal())
 	}
 
 	resp, err := c.http.Do(httpReq)
@@ -186,12 +188,11 @@ func joinURL(base, path string) string {
 }
 
 // scrubAuthorization removes any occurrence of the bearer-token header
-// value (or the bare key) from s. Empty key → no scrubbing.
-func scrubAuthorization(s, apiKey string) string {
-	const placeholder = "<redacted>"
-	if apiKey != "" {
-		s = strings.ReplaceAll(s, "Bearer "+apiKey, "Bearer "+placeholder)
-		s = strings.ReplaceAll(s, apiKey, placeholder)
+// value (or the bare key) from s. The zero Key → no scrubbing.
+func scrubAuthorization(s string, apiKey secret.Key) string {
+	if key := apiKey.Reveal(); key != "" {
+		s = strings.ReplaceAll(s, "Bearer "+key, "Bearer "+secret.Redacted)
+		s = strings.ReplaceAll(s, key, secret.Redacted)
 	}
 	return s
 }

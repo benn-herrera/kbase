@@ -5,13 +5,15 @@ import (
 	"net"
 	"net/url"
 	"strings"
+
+	"kbase/internal/secret"
 )
 
 // CleartextWarning is the one line saying a configured key travels in
 // cleartext — the base URL is http:// to a host other than loopback — and ""
 // otherwise. It names the host, never the key.
-func CleartextWarning(baseURL, apiKey string) string {
-	if apiKey == "" {
+func CleartextWarning(baseURL string, apiKey secret.Key) string {
+	if apiKey.IsZero() {
 		return ""
 	}
 	u, err := url.Parse(baseURL)

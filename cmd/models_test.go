@@ -11,6 +11,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
+	"kbase/internal/secret"
 )
 
 // testAPIKey is the credential every fixture provider carries. Tests assert
@@ -22,7 +23,7 @@ const testAPIKey = "sk-MUST-NOT-APPEAR-0001"
 // it. A test hands the pool to a verb directly, so it sets the layer the
 // merge would have.
 func provider(name, baseURL string) config.Provider {
-	return config.Provider{Name: name, BaseURL: baseURL, APIKey: testAPIKey, Layer: config.LayerSourceRepository}
+	return config.Provider{Name: name, BaseURL: baseURL, APIKey: secret.NewKey(testAPIKey), Layer: config.LayerSourceRepository}
 }
 
 // catalogue builds the ModelInfo slice a mock client serves from ListModels.
@@ -50,7 +51,7 @@ type result struct {
 func shownEndpoints(endpoints []model.Endpoint) []model.Endpoint {
 	shown := slices.Clone(endpoints)
 	for i := range shown {
-		shown[i].APIKey = ""
+		shown[i].APIKey = secret.Key{}
 	}
 	return shown
 }
@@ -138,7 +139,7 @@ func TestRunModelsSortedOutput(t *testing.T) {
 		t.Fatalf("client constructions: got %d, want 1", len(got.endpoints))
 	}
 	e := got.endpoints[0]
-	if e.Name != "solo" || e.BaseURL != "http://provider.example/v1" || e.APIKey != testAPIKey {
+	if e.Name != "solo" || e.BaseURL != "http://provider.example/v1" || e.APIKey.Reveal() != testAPIKey {
 		t.Errorf("endpoint: got %+v, want name/baseURL/key from the pool entry", model.Endpoint{Name: e.Name, BaseURL: e.BaseURL})
 	}
 	if strings.Contains(got.stdout, testAPIKey) || strings.Contains(got.stderr, testAPIKey) {

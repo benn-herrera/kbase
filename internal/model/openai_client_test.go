@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"kbase/internal/secret"
 )
 
 const testAPIKey = "sk-TEST-MUST-NOT-LEAK-1234567890abcdef"
@@ -21,7 +23,7 @@ func newTestEndpoint(baseURL string) Endpoint {
 	return Endpoint{
 		Name:    "test",
 		BaseURL: baseURL,
-		APIKey:  testAPIKey,
+		APIKey:  secret.NewKey(testAPIKey),
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // defaultListTimeout bounds one request when --timeout is not given: one
@@ -228,7 +229,7 @@ func readStoredKeys(dir string) config.StoredKeys {
 		}
 		return config.StoredKeys{Faults: []config.StoreFault{{Path: dir, Reason: reason}}}
 	}
-	stored := config.StoredKeys{Keys: make(map[string]string, len(names))}
+	stored := config.StoredKeys{Keys: make(map[string]secret.Key, len(names))}
 	for _, name := range names {
 		key, err := store.Read(name)
 		if err != nil {

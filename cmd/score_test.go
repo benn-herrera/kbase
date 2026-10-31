@@ -32,6 +32,7 @@ import (
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/score"
+	"kbase/internal/secret"
 )
 
 // scoreRepo is a KB the score verb can walk: one claim recorded and marked in a
@@ -486,7 +487,7 @@ func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
 				}
 				return
 			}
-			line := config.CleartextWarning(tc.url, testAPIKey)
+			line := config.CleartextWarning(tc.url, secret.NewKey(testAPIKey))
 			if line == "" || strings.Count(got.stderr, line) != 1 {
 				t.Errorf("stderr (%d bytes), want one cleartext warning for %s", len(got.stderr), tc.url)
 			}

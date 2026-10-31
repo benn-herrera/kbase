@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"kbase/internal/secret"
 )
 
 // TestStatusErrorLeavesNoKeyPrefix: a key the server echoes across the
@@ -21,7 +23,7 @@ func TestStatusErrorLeavesNoKeyPrefix(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			resp := &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(body))}
 			var se StatusError
-			if !errors.As(statusError(resp, testAPIKey), &se) {
+			if !errors.As(statusError(resp, secret.NewKey(testAPIKey)), &se) {
 				t.Fatal("statusError did not return a StatusError")
 			}
 			if n := longestKeyPrefix(se.Body, testAPIKey); n > 0 {

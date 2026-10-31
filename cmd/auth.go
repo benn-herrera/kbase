@@ -16,6 +16,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/log"
 	toolresult "kbase/internal/result"
+	"kbase/internal/secret"
 	"kbase/internal/statedir"
 )
 
@@ -69,7 +70,7 @@ func authAdd(opts authOptions) (string, []toolresult.Field) {
 		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: config.AuthAddRemedy(opts.Provider),
 			Detail: "stdin held no key: the piped input was empty or whitespace alone"})
 	}
-	if err := auth.NewStore(opts.Dir).Add(opts.Provider, key); err != nil {
+	if err := auth.NewStore(opts.Dir).Add(opts.Provider, secret.NewKey(key)); err != nil {
 		return failed(nil, err)
 	}
 	opts.Logger.Debug("auth add: key stored", "provider", opts.Provider, "dir", opts.Dir)
