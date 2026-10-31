@@ -10,8 +10,8 @@ dispatch quotes them. Line numbers are as of `fcb1738`; locate cited text where 
 | R12 | mechanical (tech-writer) | SPEC: "No result names a key" reads as the stored key | — | landed |
 | R7 | expert | an error body is scrubbed before it is cut | `just test` | landed |
 | R6 | expert | a key is a redacting type; a scan holds where it is revealed | `just checkpoint`, `just test-integration` | landed |
-| R3 | expert | a store fault has one representation | `just checkpoint`, `just test-integration-config`, `just test-integration-auth` | in progress |
-| R4 | expert | a refused key is classified once on the `cmd` side | `just checkpoint` | pending |
+| R3 | expert | a store fault has one representation | `just checkpoint`, `just test-integration-config`, `just test-integration-auth` | landed |
+| R4 | expert | a refused key is classified once on the `cmd` side | `just checkpoint` | in progress |
 | R5 | expert | a scan holds "no production text names apiKeyFile" | `just test` | pending |
 | R8 | expert | store hardening: directory `0700`, symlinked key files, relative `XDG_STATE_HOME` | `just checkpoint`, `just test-integration-auth` | pending |
 | R2 | expert | the live layered leg keeps the store | `just edit-gate` (the live run is the operator's) | pending |
@@ -186,6 +186,9 @@ part of the input, and carries the remedy `config.AuthAddRemedy(<provider>)`. De
   becomes a function building the text by concatenation, `AuthAddRemedy("<name>")` included; the
   comment at `template.go:42` follows. (`configTemplate` keeps its `%d`/`%s` format; it is not
   touched.) `git grep -l providersTemplate -- '*.go'` → `template.go`, `write.go`.
+- `cmd/auth.go` `configuredProviderNames` appends every fault's `Name`, so the store directory's
+  fault (`config.SourceStoreDir`, no name) adds `""`: it takes the names of entry and store-file
+  faults only.
 
 ## R11 — tests
 

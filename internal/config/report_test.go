@@ -30,7 +30,6 @@ func TestReport(t *testing.T) {
 		cfg       Config
 		providers Providers
 		faults    []ProviderFault
-		stored    []StoreFault
 		exists    func(string) bool
 		want      Facts
 	}{
@@ -112,12 +111,8 @@ func TestReport(t *testing.T) {
 				"other": {Name: "other", BaseURL: "https://other.example/v1", Layer: LayerSourceGlobal},
 			},
 			faults: []ProviderFault{
-				{Name: "Lab", Path: storeFile, Reason: storeFile + ": " + truncated, Warning: true},
-				{Name: "other", Path: storeDir, Reason: storeDir + ": " + noUsername, Warning: true},
-			},
-			stored: []StoreFault{
-				{Name: "lab", Path: storeFile, Reason: truncated, DoesNotOpen: true},
-				{Name: "other", Path: storeDir, Reason: noUsername},
+				{Name: "Lab", Source: SourceStoreFile, Path: storeFile, Reason: truncated, Warning: true, DoesNotOpen: true},
+				{Name: "other", Source: SourceStoreFile, Path: storeDir, Reason: noUsername, Warning: true},
 			},
 			exists: func(string) bool { return false },
 			want: Facts{
@@ -142,8 +137,7 @@ func TestReport(t *testing.T) {
 			providers: Providers{
 				"lab": {Name: "lab", BaseURL: "https://lab.example/v1", Layer: LayerSourceGlobal},
 			},
-			faults: []ProviderFault{{Path: storeDir, Reason: storeDir + ": permission denied", Warning: true}},
-			stored: []StoreFault{{Path: storeDir, Reason: "permission denied"}},
+			faults: []ProviderFault{{Source: SourceStoreDir, Path: storeDir, Reason: "permission denied", Warning: true}},
 			exists: func(string) bool { return false },
 			want: Facts{
 				Layers: []Layer{
@@ -158,7 +152,7 @@ func TestReport(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Report(tc.cfg, tc.providers, tc.faults, tc.stored, layers, tc.exists); !reflect.DeepEqual(got, tc.want) {
+			if got := Report(tc.cfg, tc.providers, tc.faults, layers, tc.exists); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("Report = %+v\nwant %+v", got, tc.want)
 			}
 		})

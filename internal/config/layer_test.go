@@ -287,7 +287,7 @@ apiKeyFile = "not-here.key"
 				t.Errorf("fault = %+v, want the dropped repository entry naming %s", faults[0], brokenPath)
 			}
 
-			facts := Report(cfg, providers, faults, nil, layers, func(string) bool { return false })
+			facts := Report(cfg, providers, faults, layers, func(string) bool { return false })
 			usable, dropped := 0, 0
 			for _, e := range facts.Entries {
 				switch {
@@ -412,22 +412,26 @@ apiKeyFile = "fallback.key"
 	}
 
 	type fault struct {
-		name, path string
-		warning    bool
+		name, path           string
+		source               FaultSource
+		warning, doesNotOpen bool
 	}
 	var got []fault
 	for _, f := range loaded.Faults {
-		got = append(got, fault{f.Name, f.Path, f.Warning})
+		got = append(got, fault{f.Name, f.Path, f.Source, f.Warning, f.DoesNotOpen})
+		if f.Source != SourceEntry && f.Reason != "too short" && f.Reason != "permission denied" {
+			t.Errorf("the store fault at %s has reason %q, want the store's reason unprefixed", f.Path, f.Reason)
+		}
 		if strings.Contains(f.Reason, storedKey) || strings.Contains(f.Reason, fakeKey) {
 			t.Errorf("the fault naming %s carries key material", f.Name)
 		}
 	}
 	// The layers' faults, then the store's.
 	want := []fault{
-		{"Broken", globalPath, false},
-		{"Broken", storeFile, true},
-		{"fallback", "/state/kbase/auth/fallback-key.enc", true},
-		{"", "/state/kbase/auth", true},
+		{"Broken", globalPath, SourceEntry, false, false},
+		{"Broken", storeFile, SourceStoreFile, true, true},
+		{"fallback", "/state/kbase/auth/fallback-key.enc", SourceStoreFile, true, true},
+		{"", "/state/kbase/auth", SourceStoreDir, true, false},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("faults = %+v, want %+v", got, want)

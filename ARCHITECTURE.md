@@ -1037,11 +1037,15 @@ the context stopped the walk — its `cancelled` record naming the first item it
   layer supplied the entry; else the entry's `apiKeyFile`, which `LoadProviders` then reads, and
   which an entry with a stored key never reads, so it raises neither a read fault nor a permission
   warning; else none. `config.Load` turns each store fault whose name a configured entry carries
-  into a warning `ProviderFault` naming that entry as spelled, its `Path` the store file, so every
-  configuration-loading verb's `warnFaults` writes it; a file no entry names is read by nothing and
-  not reported. The nameless directory fault names no entry and becomes a warning `ProviderFault`
-  with an empty `Name`, its `Path` the directory, which `warnFaults` writes as the credentials
-  store's. `config.Report` is given the store faults too, and reports each from its parts with
+  into a warning `ProviderFault` naming that entry as spelled, `Source` `SourceStoreFile`, its
+  `Path` the store file and its `DoesNotOpen` the store fault's, so every configuration-loading
+  verb's `warnFaults` writes it; a file no entry names is read by nothing and not reported. The
+  nameless directory fault names no entry and becomes a warning `ProviderFault` with `Source`
+  `SourceStoreDir`, its `Path` the directory, which `warnFaults` writes as the credentials store's.
+  A `ProviderFault`'s `Reason` never repeats its `Path`; `LocatedReason` leads a store fault's
+  reason with its path, for a line that stands on its own — `warnFaults`' and an entry's `fault`
+  in `show-config`. `config.Report` reads the faults alone, and reports a store fault's
+  diagnostic as its path and reason with
   `config.AuthAddRemedy` — the piped form, also `kbase auth add`'s own input-refusal remedy and a
   refused key's failure remedy — as the
   remedy where the file does not open, and for an entry dropped because its `apiKeyFile` could not

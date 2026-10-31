@@ -194,8 +194,7 @@ func Load(layers []Layer, stored StoredKeys) (Loaded, error) {
 
 // storeFaults is a warning fault for each stored key file in faults whose name
 // an entry carries — in pool, or dropped from it by one of dropped — named as
-// the entry spells it, and for each nameless fault, named by nobody; each
-// reason is led by the fault's path.
+// the entry spells it, and for each nameless fault, the store's directory's.
 func storeFaults(faults []StoreFault, pool Providers, dropped []ProviderFault) []ProviderFault {
 	spelled := make(map[string]string, len(pool)+len(dropped))
 	for name := range pool {
@@ -206,9 +205,15 @@ func storeFaults(faults []StoreFault, pool Providers, dropped []ProviderFault) [
 	}
 	var out []ProviderFault
 	for _, sf := range faults {
-		if name, ok := spelled[sf.Name]; ok || sf.Name == "" {
-			out = append(out, ProviderFault{Name: name, Path: sf.Path, Reason: sf.Path + ": " + sf.Reason, Warning: true})
+		fault := ProviderFault{Path: sf.Path, Reason: sf.Reason, Warning: true, DoesNotOpen: sf.DoesNotOpen}
+		if sf.Name == "" {
+			fault.Source = SourceStoreDir
+		} else if name, ok := spelled[sf.Name]; ok {
+			fault.Name, fault.Source = name, SourceStoreFile
+		} else {
+			continue
 		}
+		out = append(out, fault)
 	}
 	return out
 }

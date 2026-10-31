@@ -128,6 +128,10 @@ type ProviderFault struct {
 	Name   string
 	Reason string // never carries key content — path/IO detail only
 
+	// Source is what the fault is against: a providers.toml entry, a stored
+	// key file, or the store's directory.
+	Source FaultSource
+
 	// Path is the providers.toml this fault came from: the layer's own file,
 	// never the single path a one-directory report used to assume — or, for a
 	// stored key file that did not open, that file, and for the store's
@@ -145,6 +149,33 @@ type ProviderFault struct {
 	// KeyFileUnread is the dropping fault of an entry whose apiKeyFile could
 	// not be read. A stored key outranks that file, so storing one clears it.
 	KeyFileUnread bool
+
+	// DoesNotOpen is a stored key file that stands and is truncated or does
+	// not decrypt, so adding the key again, which replaces the file, clears it.
+	DoesNotOpen bool
+}
+
+// FaultSource is what a ProviderFault is against.
+type FaultSource int
+
+const (
+	// SourceEntry is a providers.toml entry, the file being Path.
+	SourceEntry FaultSource = iota
+	// SourceStoreFile is the stored key file at Path, read for the entry Name.
+	SourceStoreFile
+	// SourceStoreDir is the store's directory at Path, which did not list;
+	// Name is empty.
+	SourceStoreDir
+)
+
+// LocatedReason is the fault's reason as a line that stands on its own states
+// it: a store fault's led by its path, which its reason does not name; an
+// entry's as it is.
+func (f ProviderFault) LocatedReason() string {
+	if f.Source == SourceEntry {
+		return f.Reason
+	}
+	return f.Path + ": " + f.Reason
 }
 
 // Kind returns the normalized (trimmed, lower-cased) provider type,

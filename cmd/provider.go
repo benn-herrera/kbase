@@ -46,13 +46,9 @@ type providerOptions struct {
 	WriteDir string
 
 	// Providers and Faults are the loaded pool and the entries that dropped
-	// out of it, or warn. StoreFaults are the credentials store's files that
-	// did not open, and its directory where it did not list, as read: Faults
-	// carries each a configured entry names and the directory's, and
-	// show-config's report states each from its parts.
-	Providers   config.Providers
-	Faults      []config.ProviderFault
-	StoreFaults []config.StoreFault
+	// out of it, or warn — the credentials store's faults among them.
+	Providers config.Providers
+	Faults    []config.ProviderFault
 
 	// ProvidersFiles is each layer's providers.toml that stood when loaded.
 	ProvidersFiles []string
@@ -90,19 +86,19 @@ func (o providerOptions) inputs() config.Inputs {
 // material.
 func warnFaults(stderr io.Writer, faults []config.ProviderFault) {
 	for _, f := range faults {
-		if f.Name == "" {
+		if f.Source == config.SourceStoreDir {
 			// The credentials store's own fault: it names no provider.
-			fmt.Fprintf(stderr, "credentials store: %s\n", f.Reason)
+			fmt.Fprintf(stderr, "credentials store: %s\n", f.LocatedReason())
 			continue
 		}
 		if f.Warning {
 			// The provider SURVIVED this one: it is in the pool and
 			// selectable, so saying "unavailable" would send the user
 			// looking for an endpoint that is not missing.
-			fmt.Fprintf(stderr, "provider %q: %s\n", f.Name, f.Reason)
+			fmt.Fprintf(stderr, "provider %q: %s\n", f.Name, f.LocatedReason())
 			continue
 		}
-		fmt.Fprintf(stderr, "provider %q unavailable: %s\n", f.Name, f.Reason)
+		fmt.Fprintf(stderr, "provider %q unavailable: %s\n", f.Name, f.LocatedReason())
 	}
 }
 
@@ -206,7 +202,6 @@ func loadConfigContext(layers []config.Layer) (providerOptions, error) {
 		Layers:         layers,
 		Providers:      loaded.Providers,
 		Faults:         loaded.Faults,
-		StoreFaults:    stored.Faults,
 		ProvidersFiles: loaded.ProvidersFiles,
 		Config:         loaded.Cfg,
 		Stderr:         os.Stderr,

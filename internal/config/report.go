@@ -62,10 +62,8 @@ type Facts struct {
 // Report describes configuration loaded from layers. It reads no file of its
 // own: file existence arrives as the seam the caller passes, so a report
 // describes a configuration without this process having to be the one that
-// holds it. stored is the store's faults as the caller read them — each file
-// that did not open, and the directory where it did not list; a fault Load
-// raised for one is reported from its parts.
-func Report(cfg Config, providers Providers, faults []ProviderFault, stored []StoreFault, layers []Layer, exists func(string) bool) Facts {
+// holds it.
+func Report(cfg Config, providers Providers, faults []ProviderFault, layers []Layer, exists func(string) bool) Facts {
 	f := Facts{Models: cfg.Models, Sampling: cfg.Sampling}
 	for _, layer := range layers {
 		layer.Exists = exists(layer.Path)
@@ -74,15 +72,11 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, stored []St
 		f.Layers = append(f.Layers, layer)
 	}
 
-	storeFiles := make(map[string]StoreFault, len(stored))
-	for _, sf := range stored {
-		storeFiles[sf.Path] = sf
-	}
 	warned := make(map[string][]string, len(faults))
 	for _, fault := range faults {
-		f.Diagnostics = append(f.Diagnostics, faultItem(fault, storeFiles))
+		f.Diagnostics = append(f.Diagnostics, faultItem(fault))
 		if fault.Warning {
-			warned[fault.Name] = append(warned[fault.Name], fault.Reason)
+			warned[fault.Name] = append(warned[fault.Name], fault.LocatedReason())
 			continue
 		}
 		f.Entries = append(f.Entries, Entry{Name: fault.Name, Layer: faultLayer(layers, fault.Path), Fault: fault.Reason})
@@ -105,22 +99,14 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, stored []St
 	return f
 }
 
-// faultItem is the diagnostic a fault reports as: the file that carries it and
-// its reason — or, where storeFiles holds the store file or directory it
-// names, that path and what went wrong with it, and where a stored key file
-// does not open, adding the key again as the remedy, since adding replaces the file.
-// An apiKeyFile that could not be read has adding a key as its remedy too: the
-// stored key outranks the file.
-func faultItem(fault ProviderFault, storeFiles map[string]StoreFault) result.Item {
+// faultItem is the diagnostic a fault reports as: the file or directory it is
+// against and its reason. A stored key file that does not open has adding the
+// key again as its remedy, since adding replaces the file; an apiKeyFile that
+// could not be read has it too, the stored key outranking the file.
+func faultItem(fault ProviderFault) result.Item {
 	item := result.Item{Check: CheckProvider, Path: fault.Path, Detail: fault.Reason}
-	if fault.KeyFileUnread {
+	if fault.KeyFileUnread || fault.DoesNotOpen {
 		item.Remedy = AuthAddRemedy(fault.Name)
-	}
-	if sf, ok := storeFiles[fault.Path]; ok && fault.Warning {
-		item.Detail = sf.Reason
-		if sf.DoesNotOpen {
-			item.Remedy = AuthAddRemedy(fault.Name)
-		}
 	}
 	return item
 }

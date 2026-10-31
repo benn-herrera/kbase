@@ -46,7 +46,7 @@ func showConfigFields(opts showConfigOptions) []toolresult.Field {
 	slices.SortStableFunc(faults, func(a, b config.ProviderFault) int {
 		return strings.Compare(a.Name, b.Name)
 	})
-	facts := config.Report(opts.Config, opts.Providers, faults, opts.StoreFaults, opts.Layers, fileExists)
+	facts := config.Report(opts.Config, opts.Providers, faults, opts.Layers, fileExists)
 	s := opts.inputs()
 	roles, roleItems := resolvedRoles(s)
 	// The configuration's own diagnostics, then one per role that does not
