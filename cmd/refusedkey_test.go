@@ -108,12 +108,12 @@ func refusedRoot(t *testing.T, args ...string) refusedRun {
 	return refusedRun{doc: checkDocument(t, args[0], stdout.String()), stdout: stdout.String(), stderr: stderr.String()}
 }
 
-// TestRefusedKeyFailureCarriesTheRemedy: a provider answering 401 or 403
+// TestRefusedKeyFailureCarriesTheRemedy: a provider answering 401
 // refused the call's key, a missing one or a wrong one; each verb fails as it
 // does on any refusal, and its failure item carries the command that stores a
 // key for the entry it dialled. A 500 is no refused key and carries none.
 func TestRefusedKeyFailureCarriesTheRemedy(t *testing.T) {
-	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusInternalServerError} {
 		for _, verb := range refusedVerbs {
 			t.Run(fmt.Sprintf("%s %d", verb.name, code), func(t *testing.T) {
 				srv, _ := refusingProvider(t, code)

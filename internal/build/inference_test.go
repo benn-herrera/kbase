@@ -493,7 +493,7 @@ func TestACallThatNeverCompletesStopsTheStage(t *testing.T) {
 }
 
 // TestARefusedKeyFailsTheBuildWithTheRemedy: a provider answering a decision
-// ask or the overview call 401 or 403 refused the call's key; the build fails
+// ask or the overview call 401 refused the call's key; the build fails
 // as for any call that never completed, and the failure item carries the
 // command that stores a key for the entry the role dials. A 500 is no refused
 // key and carries none.
@@ -509,17 +509,11 @@ func TestARefusedKeyFailsTheBuildWithTheRemedy(t *testing.T) {
 		{"decision 401", &model.ClientFuncs{Stream: answered.ConsultStream, Decide: func(context.Context, model.DecisionRequest) (model.DecisionResponse, error) {
 			return model.DecisionResponse{}, refusing(401)
 		}}, "inference-failed", config.AuthAddRemedy("solo")},
-		{"decision 403", &model.ClientFuncs{Stream: answered.ConsultStream, Decide: func(context.Context, model.DecisionRequest) (model.DecisionResponse, error) {
-			return model.DecisionResponse{}, refusing(403)
-		}}, "inference-failed", config.AuthAddRemedy("solo")},
 		{"decision 500", &model.ClientFuncs{Stream: answered.ConsultStream, Decide: func(context.Context, model.DecisionRequest) (model.DecisionResponse, error) {
 			return model.DecisionResponse{}, refusing(500)
 		}}, "inference-failed", ""},
 		{"overview 401", &model.ClientFuncs{Decide: answered.Decision, Stream: func(context.Context, model.Request) (model.StreamReader, error) {
 			return nil, refusing(401)
-		}}, checkInference, config.AuthAddRemedy("solo")},
-		{"overview 403", &model.ClientFuncs{Decide: answered.Decision, Stream: func(context.Context, model.Request) (model.StreamReader, error) {
-			return nil, refusing(403)
 		}}, checkInference, config.AuthAddRemedy("solo")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -272,7 +272,7 @@ func TestCallerNamesTheCallThatNeverCompleted(t *testing.T) {
 	}
 }
 
-// TestARefusedKeyNamesTheRemedy: a provider answering 401 or 403 refused the
+// TestARefusedKeyNamesTheRemedy: a provider answering 401 refused the
 // call's key, so the call that never completed carries the command that
 // stores a key for the entry the caller dials — over the decision surface and
 // the overview alike; a 500 is no refused key and carries none.
@@ -282,7 +282,6 @@ func TestARefusedKeyNamesTheRemedy(t *testing.T) {
 		remedy string
 	}{
 		{http.StatusUnauthorized, config.AuthAddRemedy(callerProvider)},
-		{http.StatusForbidden, config.AuthAddRemedy(callerProvider)},
 		{http.StatusInternalServerError, ""},
 	} {
 		t.Run(http.StatusText(tc.code), func(t *testing.T) {

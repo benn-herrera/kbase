@@ -200,6 +200,7 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 		{http.StatusUnauthorized, 1, true},
 		{http.StatusForbidden, 1, true},
 		{http.StatusNotFound, 1, false},
+		{http.StatusInternalServerError, model.ChatAttempts, false},
 		{http.StatusTooManyRequests, model.ChatAttempts, false},
 		{http.StatusServiceUnavailable, model.ChatAttempts, false},
 	} {

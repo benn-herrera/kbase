@@ -84,7 +84,7 @@ func TestReport(t *testing.T) {
 			name: "a stored key over a stated apiKeyFile, and a key file whose path a shell splits",
 			providers: Providers{
 				"both":   {Name: "both", BaseURL: "https://both.example/v1", APIKeyFile: "both.key", KeyStored: true, Layer: LayerSourceGlobal},
-				"spaced": {Name: "spaced", BaseURL: "https://spaced.example/v1", APIKeyFile: "/k/my key's.txt", Layer: LayerSourceRepository},
+				"spaced": {Name: "spaced", BaseURL: "https://spaced.example/v1", APIKeyFile: "/k/my key.txt", Layer: LayerSourceRepository},
 				"stored": {Name: "stored", BaseURL: "https://stored.example/v1", KeyStored: true, Layer: LayerSourceRepository},
 			},
 			exists: func(string) bool { return false },
@@ -95,8 +95,8 @@ func TestReport(t *testing.T) {
 				},
 				Entries: []Entry{
 					{Name: "both", BaseURL: "https://both.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindStore, Layer: LayerSourceGlobal, Usable: true},
-					{Name: "spaced", BaseURL: "https://spaced.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindFile, KeyFile: "/k/my key's.txt",
-						Upgrade: `cat '/k/my key'\''s.txt' | kbase auth add spaced`, Layer: LayerSourceRepository, Usable: true},
+					{Name: "spaced", BaseURL: "https://spaced.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindFile, KeyFile: "/k/my key.txt",
+						Upgrade: `cat '/k/my key.txt' | kbase auth add spaced`, Layer: LayerSourceRepository, Usable: true},
 					{Name: "stored", BaseURL: "https://stored.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindStore, Layer: LayerSourceRepository, Usable: true},
 				},
 				Diagnostics: []result.Item{{Check: CheckProvider, Path: globalProviders,

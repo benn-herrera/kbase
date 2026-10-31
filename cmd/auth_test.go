@@ -444,6 +444,40 @@ func TestAuthRemoveClearsAnUnconfiguredName(t *testing.T) {
 	}
 }
 
+// TestAuthRemoveRefusesAnUnusableName: a name that breaks the provider-name
+// rule is a usage refusal keyed by the name, its remedy listing the stored
+// providers, and touches nothing.
+func TestAuthRemoveRefusesAnUnusableName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "auth")
+	d := checkDocument(t, "auth remove", runAuth(t, "auth remove", authRemove, authOptions{Provider: "a/b", Dir: dir}))
+	items := d.items(toolresult.RefusalsKey)
+	if d.Outcome != toolresult.Refused || len(items) != 1 {
+		t.Fatalf("outcome %s with %d refusals, want one refusal", d.Outcome, len(items))
+	}
+	if items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "a/b" || items[0]["remedy"] != "kbase auth list" {
+		t.Errorf("check %v key %v remedy %v, want a usage refusal keyed a/b with remedy kbase auth list",
+			items[0]["check"], items[0]["key"], items[0]["remedy"])
+	}
+	if files := storeFiles(t, dir); len(files) != 0 {
+		t.Errorf("a refused remove left %v", files)
+	}
+}
+
+// TestAuthRemoveRefusesAWrongArgumentCount: remove without its one argument is
+// a usage refusal whose remedy is the command spelled with the provider
+// placeholder.
+func TestAuthRemoveRefusesAWrongArgumentCount(t *testing.T) {
+	stdout, _ := executeAuth(t, "", "auth", "remove")
+	d := parseResult(t, stdout)
+	items := d.items(toolresult.RefusalsKey)
+	if d.Outcome != toolresult.Refused || len(items) != 1 {
+		t.Fatalf("outcome %s with %d refusals, want one refusal", d.Outcome, len(items))
+	}
+	if want := config.AuthRemoveCommand(authProviderArg); items[0]["check"] != toolresult.CheckUsage || items[0]["remedy"] != want {
+		t.Errorf("check %v remedy %v, want a usage refusal with remedy %q", items[0]["check"], items[0]["remedy"], want)
+	}
+}
+
 func TestConfiguredProviderNamesSkipTheStoreDirectoryFault(t *testing.T) {
 	opts := providerOptions{
 		Providers: config.Providers{"local": {}},

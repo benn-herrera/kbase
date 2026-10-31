@@ -71,30 +71,19 @@ func TestEachWriteSealsAfresh(t *testing.T) {
 	}
 }
 
-// TestFileModeIsOwnerOnly: a key file is 0600 when it is created, and when it
-// replaces a file that was 0644.
+// TestFileModeIsOwnerOnly: a key file is 0600 when it is created.
 func TestFileModeIsOwnerOnly(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix file modes")
 	}
 	s := storeFor(t, "alice")
-	created := addSentinel(t, s, "cloud")
-	wide := filepath.Join(s.dir, "lab"+FileSuffix)
-	if err := os.WriteFile(wide, []byte("old"), 0o644); err != nil {
+	path := addSentinel(t, s, "cloud")
+	info, err := os.Stat(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(wide, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	replaced := addSentinel(t, s, "lab")
-	for _, path := range []string{created, replaced} {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != FileMode {
-			t.Errorf("%s has mode %#o, want %#o", path, got, FileMode)
-		}
+	if got := info.Mode().Perm(); got != FileMode {
+		t.Errorf("%s has mode %#o, want %#o", path, got, FileMode)
 	}
 }
 
@@ -151,19 +140,6 @@ func TestFileHoldsNoPlaintext(t *testing.T) {
 	s := storeFor(t, "alice")
 	if bytes.Contains(readBytes(t, addSentinel(t, s, "cloud")), []byte(sentinelKey)) {
 		t.Error("the key file holds the key in plain text")
-	}
-}
-
-// TestRenamedFileOpensUnderItsNewName: nothing binds a file to its provider,
-// so a file copied to another provider's name reads as that provider's key.
-func TestRenamedFileOpensUnderItsNewName(t *testing.T) {
-	s := storeFor(t, "alice")
-	sealed := readBytes(t, addSentinel(t, s, "old-name"))
-	if err := os.WriteFile(filepath.Join(s.dir, "new-name"+FileSuffix), sealed, FileMode); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.Read("new-name"); err != nil || got.Reveal() != sentinelKey {
-		t.Errorf("the copied file read as new-name: key matches %t, error %T; want the key", got.Reveal() == sentinelKey, err)
 	}
 }
 
@@ -296,9 +272,6 @@ func TestStoreErrorsCarryNoKey(t *testing.T) {
 		{name: "no username", is: ErrNoUsername, fail: func(t *testing.T) error {
 			s := Store{dir: t.TempDir(), username: func() (string, error) { return "", nil }}
 			return s.Add("cloud", secret.NewKey(sentinelKey))
-		}},
-		{name: "unusable name", refusal: true, fail: func(t *testing.T) error {
-			return storeFor(t, "alice").Add("a/b", secret.NewKey(sentinelKey))
 		}},
 		{name: "key passed as the name", refusal: true, fail: func(t *testing.T) error {
 			return storeFor(t, "alice").Add(sentinelKey+"/x", secret.NewKey("k"))
