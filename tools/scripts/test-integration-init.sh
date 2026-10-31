@@ -22,12 +22,14 @@ kbase="${root}/${BIN_DIR}/kbase"
 repo="${out}/repo"
 docs="${out}/docs"
 nodot="${out}/repo-nodot"
-rm -rf "${repo}" "${docs}" "${nodot}" "${out}/outside" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/mc.json" "${out}/mc-run.json" "${out}/init.tsv" "${out}/state" "${out}/home" "${out}/xdg" "${out}/config"
-mkdir -p "${docs}" "${out}/home" "${out}/config"
+rm -rf "${repo}" "${docs}" "${nodot}" "${out}/outside" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/mc.json" "${out}/mc-run.json" "${out}/init.tsv" "${out}/state" "${out}/xdg" "${out}/config"
+mkdir -p "${docs}" "${out}/config"
 # Every verb that reads the configuration also reads the credentials store, so
-# the user's home, state home and configuration directory are replaced by empty
-# ones under the evidence directory.
-export HOME="${out}/home" XDG_STATE_HOME="${out}/xdg" KBASE_CONFIG_DIR="${out}/config"
+# the state home and configuration directory are replaced by empty ones under
+# the evidence directory. HOME stays the user's: the verbs here read nothing
+# beneath it once KBASE_CONFIG_DIR is set, and moving it would send `go test`
+# into a fresh read-only module cache that the next run cannot delete.
+export XDG_STATE_HOME="${out}/xdg" KBASE_CONFIG_DIR="${out}/config"
 export GIT_AUTHOR_NAME=init-integration GIT_AUTHOR_EMAIL=init@invalid GIT_COMMITTER_NAME=init-integration GIT_COMMITTER_EMAIL=init@invalid GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${out}/gitconfig"
 status=0
 fail() { printf '  fail: %s\n' "$*"; status=1; }
