@@ -145,6 +145,9 @@ func TestStatusFollowsTheOperationLock(t *testing.T) {
 	}
 }
 
+// refusedNote stands for the note cmd supplies with a refused key's remedy.
+const refusedNote = "a note on how the key reaches the store"
+
 // TestReadRunOverlaysTheResultFilesOnTheLedger: a run that was killed before its
 // flush has result files and no lines for them. They count under the status
 // they record: a result overrides the ledger's last status for its item, and an
@@ -161,7 +164,7 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 	}{
 		{landedAgain, Entry{Status: StatusFailed, Reply: "the provider closed the connection", Started: at, Ended: at}},
 		{answered, Entry{Status: StatusDone, Value: "0.40", Faults: []Charge{}, Started: at, Ended: at}},
-		{outside, Entry{Status: StatusFailed, Reply: "http 401", Remedy: "the command that lets the call through", Started: at, Ended: at}},
+		{outside, Entry{Status: StatusFailed, Reply: "http 401: " + strings.Repeat("a long provider body ", 40), Remedy: "the command that lets the call through", Note: refusedNote, Started: at, Ended: at}},
 	} {
 		if err := l.writeResult(i, resultRecord{Line: l.line(r.it, r.e)}); err != nil {
 			t.Fatal(err)
@@ -186,6 +189,13 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 	remedies := map[string]string{}
 	for _, f := range st.Failures {
 		remedies[strings.SplitN(f.Detail, ":", 2)[0]] = f.Remedy
+	}
+	// The reply is longer than the summary's bound; the note the line recorded
+	// still ends the detail.
+	for _, f := range st.Failures {
+		if f.Remedy != "" && !strings.HasSuffix(f.Detail, "; "+refusedNote) {
+			t.Errorf("failure detail %q does not end with the note its line recorded", f.Detail)
+		}
 	}
 	if want := map[string]string{"clm-aaaaaa": "", "clm-cccccc": "the command that lets the call through"}; !maps.Equal(remedies, want) {
 		t.Errorf("failure remedies %v, want %v", remedies, want)

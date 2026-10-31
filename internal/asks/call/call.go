@@ -76,6 +76,17 @@ func (c *Caller) keyRemedy(err error) string {
 	return ""
 }
 
+// incomplete is the call that never completed on err: detail as given, and
+// where the provider refused the call for its key, the remedy and the note
+// that ends the detail.
+func (c *Caller) incomplete(subject, detail string, err error) asks.IncompleteError {
+	remedy := c.keyRemedy(err)
+	if remedy != "" {
+		detail += "; " + config.RefusedKeyNote
+	}
+	return asks.IncompleteError{Subject: subject, Detail: detail, Remedy: remedy}
+}
+
 func (c *Caller) answers() string { return filepath.Join(c.trail(), asks.AnswersDir) }
 
 func (c *Caller) captures() string { return filepath.Join(c.trail(), asks.CapturesDir) }
@@ -244,8 +255,7 @@ func (c *Caller) decide(ctx context.Context, slot *model.Slot, held *heldFiles, 
 	case err != nil:
 		// Decision has re-issued identically to its attempt count; a call
 		// past it never completed, and no answer is assumed for one.
-		return nil, asks.IncompleteError{Subject: fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), Detail: fmt.Sprintf("%v; capture: %s", err, capturePath),
-			Remedy: c.keyRemedy(err)}
+		return nil, c.incomplete(fmt.Sprintf("%s-%s-%s", q.Kind, q.Group, q.Item), fmt.Sprintf("%v; capture: %s", err, capturePath), err)
 	case captureErr != nil:
 		return nil, captureErr
 	}
@@ -523,8 +533,7 @@ func (c *Caller) ask(ctx context.Context, slot *model.Slot, held *heldFiles, mod
 		if captureErr != nil {
 			captured = captureErr.Error()
 		}
-		return asks.Reply{}, asks.IncompleteError{Subject: name, Detail: fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. %s", err, res.Final.Error, captured),
-			Remedy: c.keyRemedy(err)}
+		return asks.Reply{}, c.incomplete(name, fmt.Sprintf("%v (%s); no answer is assumed for a call that did not complete. %s", err, res.Final.Error, captured), err)
 	case err != nil:
 		return asks.Reply{}, err
 	case captureErr != nil:

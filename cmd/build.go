@@ -130,6 +130,7 @@ func failed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
 	var refused modelclient.KeyRefusedError
 	if errors.As(err, &refused) {
 		item.Remedy = refused.Remedy
+		item.Detail += "; " + config.RefusedKeyNote
 	}
 	return toolresult.Failed, append(fields, toolresult.Field{Key: toolresult.FailuresKey, Value: []toolresult.Item{item}})
 }

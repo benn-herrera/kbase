@@ -315,6 +315,9 @@ func TestARefusedKeyNamesTheRemedy(t *testing.T) {
 				if incomplete.Remedy != tc.remedy {
 					t.Errorf("%s's remedy = %q, want %q", name, incomplete.Remedy, tc.remedy)
 				}
+				if noted := strings.HasSuffix(incomplete.Detail, "; "+config.RefusedKeyNote); noted != (tc.remedy != "") {
+					t.Errorf("%s's detail %q ends with the refused-key note: %v, want %v", name, incomplete.Detail, noted, tc.remedy != "")
+				}
 			}
 		})
 	}

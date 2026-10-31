@@ -101,8 +101,8 @@ digits (`statedir.KeyHexDigits`), so `auth` never collides with a store's name.
 | D | expert | resolution reads the store first; `show-config` reports `store`, the upgrade and the unread-file warning; hermetic recipes isolate the store | C2 | landed |
 | E | expert | a 401 or 403 from the provider fails with the piped `kbase auth add` remedy | D | landed |
 | E2 | mechanical | the remedy's key source is generic: `<command-that-prints-the-key>` | E | landed |
-| E3 | mechanical | a refused-key item's detail says to ask for the command, never the key; SPEC cites the remedy once | E2 | in progress |
-| F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E | pending |
+| E3 | mechanical | a refused-key item's detail says to ask for the command, never the key; SPEC cites the remedy once | E2 | landed |
+| F | expert | the served surface stops naming `apiKeyFile`, except in `show-config`'s report | E3 | in progress |
 
 **Order:** one package at a time, A through F, with one agent editing the tree at once.
 

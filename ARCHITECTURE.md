@@ -711,9 +711,10 @@ before the attempt wrote: a before/after pair on the line itself, absent where t
 value. `[]` is written for one reply alone, the word `none`, so an empty list always carries the
 model's positive statement that it found no fault. A failed attempt carries neither charge list, and no text:
 its `reply` is the reason, and its `before` stands all the same, and its `remedy` is the one the
-call's failure named — a provider refusing the call's key (§7) — absent otherwise; the field is
-optional, so a ledger written before it reads under the same format, and the run's failure items
-and `status`'s carry it from the line. `backend` sits on every
+call's failure named — a provider refusing the call's key (§7) — absent otherwise, and its optional `note` is the refused-key note
+that goes with it, which a failure item appends after the bounded reason so the bound never cuts it;
+the fields are optional, so a ledger written before them reads under the same format, and the run's
+failure items and `status`'s carry them from the line. `backend` sits on every
 line, because a resumed or mixed run's lines must say what answered each item. `pass` sits on every
 line beside it, naming its own item's class: the header states the set the run walks, and a `both`
 run's lines say which class each judgement came from. `Create` also stamps
@@ -999,7 +1000,7 @@ the context stopped the walk — its `cancelled` record naming the first item it
   `StatusError` with `errors.As` and attach `config.AuthAddRemedy`, the name the dialled entry
   carries filled in, to what travels out: `asks.IncompleteError.Remedy`, which `claimgraph`'s
   inference stop and the build's overview failure carry onto their items; `score.RemedyError`,
-  whose remedy the attempt's ledger line records; and `modelclient.KeyRefusedError`, which
+  whose remedy and `config.RefusedKeyNote` the attempt's ledger line records; and `modelclient.KeyRefusedError`, which
   `cmd`'s `failed` reads onto the failure item of `probe`, `models` and `configure`. `asks/call`
   is told the entry it dials by `call.New`, from `build.Provider`'s per-role entry names. No site
   recovers a status from a reason's text, and nothing checks a key before the call (SPEC §9).

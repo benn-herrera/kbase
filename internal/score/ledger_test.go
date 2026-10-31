@@ -426,7 +426,7 @@ func TestAFailedLineCarriesItsRemedy(t *testing.T) {
 	dir := t.TempDir()
 	l := kept(t, dir)
 	refused, other := node(kb.NodeKindClaim, "clm-1"), node(kb.NodeKindClaim, "clm-2")
-	if err := l.Append(refused, Entry{Status: StatusFailed, Reply: "http 401", Remedy: "the command that lets the call through"}); err != nil {
+	if err := l.Append(refused, Entry{Status: StatusFailed, Reply: "http 401", Remedy: "the command that lets the call through", Note: "the note"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.Append(other, Entry{Status: StatusFailed, Reply: "http 500"}); err != nil {
@@ -442,6 +442,12 @@ func TestAFailedLineCarriesItsRemedy(t *testing.T) {
 	if _, carried := recs[1]["remedy"]; carried {
 		t.Errorf("a line naming no remedy carries the key: %v", recs[1])
 	}
+	if recs[0]["note"] != "the note" {
+		t.Errorf("the refused line = %v, want its note", recs[0])
+	}
+	if _, carried := recs[1]["note"]; carried {
+		t.Errorf("a line naming no note carries the key: %v", recs[1])
+	}
 	back := reopened(t, dir)
 	for _, tc := range []struct {
 		it   query.Item
@@ -450,6 +456,12 @@ func TestAFailedLineCarriesItsRemedy(t *testing.T) {
 		if got, ok := back.Last(tc.it); !ok || got.Remedy != tc.want {
 			t.Errorf("%s read back with remedy %q, %t; want %q", ItemName(tc.it), got.Remedy, ok, tc.want)
 		}
+	}
+	if got, _ := back.Last(refused); got.Note != "the note" {
+		t.Errorf("the refused line read back with note %q", got.Note)
+	}
+	if got, _ := back.Last(other); got.Note != "" {
+		t.Errorf("a line naming no note read back with note %q", got.Note)
 	}
 }
 

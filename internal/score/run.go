@@ -45,11 +45,12 @@ type Reply struct {
 }
 
 // RemedyError is an Ask's failure that names the command letting the call
-// through, which the failed attempt's line records. Its text is the call's
-// error.
+// through, which the failed attempt's line records, with the note that goes
+// with it where there is one. Its text is the call's error.
 type RemedyError struct {
 	Err    error
 	Remedy string
+	Note   string
 }
 
 func (e RemedyError) Error() string { return e.Err.Error() }
@@ -358,7 +359,7 @@ func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, i
 		e.Status, e.Reply = StatusFailed, err.Error()
 		var remedied RemedyError
 		if errors.As(err, &remedied) {
-			e.Remedy = remedied.Remedy
+			e.Remedy, e.Note = remedied.Remedy, remedied.Note
 		}
 		return Answer{}, false, false
 	}

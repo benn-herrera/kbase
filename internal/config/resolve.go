@@ -229,6 +229,11 @@ func AuthAddRemedy(provider string) string {
 	return "<command-that-prints-the-key> | " + authAddCommand(provider)
 }
 
+// RefusedKeyNote ends the detail of a call failure that carries AuthAddRemedy,
+// after "; ": it tells an agent reading the failure how the key reaches the
+// store without entering the conversation.
+const RefusedKeyNote = "`remedy` stores a key: the user runs it, or an agent runs it with a key-printing command the user names or show-config's `upgrade` gives; no one asks for the key or reads a key file into the conversation"
+
 // temperatureMax is the top of the temperature range each chat protocol
 // accepts; the bottom is 0 for both.
 func temperatureMax(protocol string) float64 {

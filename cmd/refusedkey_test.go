@@ -128,9 +128,18 @@ func TestRefusedKeyFailureCarriesTheRemedy(t *testing.T) {
 				if got.doc.Outcome != toolresult.Failed || len(items) != 1 || items[0]["remedy"] != nilIfEmpty(want) {
 					t.Errorf("outcome %s, failure remedies %v, want failed with one item whose remedy is %q", got.doc.Outcome, remedies(items), want)
 				}
+				if len(items) == 1 && endsWithNote(items[0]) != (want != "") {
+					t.Errorf("the failure's detail ends with the refused-key note: %v, want %v", endsWithNote(items[0]), want != "")
+				}
 			})
 		}
 	}
+}
+
+// endsWithNote reports whether item's detail ends with the refused-key note.
+func endsWithNote(item map[string]any) bool {
+	detail, _ := item["detail"].(string)
+	return strings.HasSuffix(detail, "; "+config.RefusedKeyNote)
 }
 
 // nilIfEmpty is s as a decoded document holds it: an omitted key reads nil.
@@ -187,6 +196,8 @@ func TestScoreResumeKeepsTheRefusedKeyRemedy(t *testing.T) {
 	want := config.AuthAddRemedy("solo")
 	if items := resumed.doc.items(toolresult.FailuresKey); resumed.doc.Outcome != toolresult.Failed || len(items) != 1 || items[0]["remedy"] != want {
 		t.Errorf("the resumed run: outcome %s, failure remedies %v, want failed with one item whose remedy is %q", resumed.doc.Outcome, remedies(items), want)
+	} else if !endsWithNote(items[0]) {
+		t.Errorf("the resumed run's failure detail does not end with the refused-key note")
 	}
 }
 
@@ -223,6 +234,8 @@ func TestBuildRefusedKeyNamesTheRolesEntry(t *testing.T) {
 	want := config.AuthAddRemedy("lab")
 	if items := doc.items(toolresult.FailuresKey); doc.Outcome != toolresult.Failed || len(items) != 1 || items[0]["remedy"] != want {
 		t.Errorf("outcome %s, failure remedies %v, want failed with one item whose remedy is %q", doc.Outcome, remedies(items), want)
+	} else if !endsWithNote(items[0]) {
+		t.Errorf("the build's failure detail does not end with the refused-key note")
 	}
 	if !sawKey() {
 		t.Fatal("the provider never received the key, so its absence proves nothing")

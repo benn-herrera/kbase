@@ -236,9 +236,14 @@ func failures(walked []query.Item, l *Ledger) []result.Item {
 // failureItem is the item a failed line reports for the item named name: the
 // name and the reason the line recorded in the detail, and the remedy it
 // recorded. The reason is the line's reply as a summary — bounded and
-// stripped of control characters — where the line itself holds it whole.
+// stripped of control characters — where the line itself holds it whole. The
+// line's note follows the summary, so the bound never cuts it.
 func failureItem(name string, e Entry) result.Item {
-	return result.Item{Check: checkError, Remedy: e.Remedy, Detail: name + ": " + ReplySummary(e.Reply)}
+	detail := name + ": " + ReplySummary(e.Reply)
+	if e.Note != "" {
+		detail += "; " + e.Note
+	}
+	return result.Item{Check: checkError, Remedy: e.Remedy, Detail: detail}
 }
 
 // The ops a landing writes through: a node's rigor, and an edge's bearing.
