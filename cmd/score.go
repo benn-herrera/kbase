@@ -322,9 +322,9 @@ func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpo
 				callCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				res, err := slot.Chat(callCtx, client, model.ChatRequest{Model: ep.Model, Prompt: prompt, Backoff: backoff})
-				var se model.StatusError
-				if errors.As(err, &se) && se.RefusedKey() {
-					return score.Reply{}, score.RemedyError{Err: err, Remedy: config.AuthAddRemedy(ep.Provider), Note: config.RefusedKeyNote}
+				var refused modelclient.KeyRefusedError
+				if err = modelclient.KeyRefused(err, ep.Provider); errors.As(err, &refused) {
+					return score.Reply{}, score.RemedyError{Err: err, Remedy: refused.Remedy, Note: config.RefusedKeyNote}
 				}
 				if err != nil {
 					return score.Reply{}, err

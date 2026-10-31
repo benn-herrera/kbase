@@ -237,6 +237,11 @@ func AuthAddRemedy(provider string) string {
 // store without entering the conversation.
 const RefusedKeyNote = "`remedy` stores a key: the user runs it, or an agent runs it with a key-printing command the user names or show-config's `upgrade` gives; no one asks for the key or reads a key file into the conversation"
 
+// WithRefusedKeyNote is detail ended by RefusedKeyNote, joined by "; ".
+func WithRefusedKeyNote(detail string) string {
+	return detail + "; " + RefusedKeyNote
+}
+
 // temperatureMax is the top of the temperature range each chat protocol
 // accepts; the bottom is 0 for both.
 func temperatureMax(protocol string) float64 {

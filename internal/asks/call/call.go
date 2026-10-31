@@ -82,7 +82,7 @@ func (c *Caller) keyRemedy(err error) string {
 func (c *Caller) incomplete(subject, detail string, err error) asks.IncompleteError {
 	remedy := c.keyRemedy(err)
 	if remedy != "" {
-		detail += "; " + config.RefusedKeyNote
+		detail = config.WithRefusedKeyNote(detail)
 	}
 	return asks.IncompleteError{Subject: subject, Detail: detail, Remedy: remedy}
 }
