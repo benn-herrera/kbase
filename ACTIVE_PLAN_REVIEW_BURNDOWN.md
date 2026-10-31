@@ -7,8 +7,8 @@ dispatch quotes them. Line numbers are as of `fcb1738`; locate cited text where 
 | id | rating | item | done-line | status |
 |---|---|---|---|---|
 | R1 | expert | hermetic recipes never reach the user's store, held by a check | `just edit-gate`, `just test-integration-init` | landed |
-| R12 | mechanical (tech-writer) | SPEC: "No result names a key" reads as the stored key | — | pending |
-| R7 | expert | an error body is scrubbed before it is cut | `just test` | pending |
+| R12 | mechanical (tech-writer) | SPEC: "No result names a key" reads as the stored key | — | landed |
+| R7 | expert | an error body is scrubbed before it is cut | `just test` | in progress |
 | R6 | expert | a key is a redacting type; a scan holds where it is revealed | `just checkpoint`, `just test-integration` | pending |
 | R3 | expert | a store fault has one representation | `just checkpoint`, `just test-integration-config`, `just test-integration-auth` | pending |
 | R4 | expert | a refused key is classified once on the `cmd` side | `just checkpoint` | pending |

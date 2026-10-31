@@ -1327,7 +1327,7 @@ its `remedy`. A refusal writes nothing, and the name refusals come before stdin 
 configuration, so a key file whose entry is gone is still removed. A name that breaks the
 provider-name rule (§9.1) is a usage refusal, `key` the name as given and the detail the rule,
 never the name; its `remedy` is `kbase show-config` on `add`, `kbase auth list` on `remove`. A
-refusal of the argument count names no argument given. No result names a key.
+refusal of the argument count names no argument given. No result names a stored key.
 
 **A refused key.** Nothing checks a key before a call. A provider that answers a call 401 or 403
 has refused the call's key — a missing key and a wrong one alike — and the call fails as any
