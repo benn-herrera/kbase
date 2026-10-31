@@ -60,8 +60,9 @@ func storeFiles(t *testing.T, dir string) []string {
 }
 
 // TestAuthAddRefusesBeforeWriting: each refusal of add fires in its order —
-// the name rule, the configured check, a terminal, empty input — and leaves
-// the store empty; the first two fire before stdin is read.
+// the name rule, the configured check, a terminal, input over the bound, empty
+// input, a key holding whitespace or a control character — and leaves the
+// store empty; the first three fire before stdin is read.
 func TestAuthAddRefusesBeforeWriting(t *testing.T) {
 	const pipedP = "<command-that-prints-the-key> | kbase auth add p"
 	for _, tc := range []struct {
@@ -79,6 +80,12 @@ func TestAuthAddRefusesBeforeWriting(t *testing.T) {
 		{"a terminal", "p", []string{"p"}, authSentinelKey, true, nil, pipedP, true},
 		{"empty input", "p", []string{"p"}, "", false, nil, pipedP, false},
 		{"whitespace alone", "p", []string{"p"}, " \n\t \r\n", false, nil, pipedP, false},
+		{"one byte over the bound", "p", []string{"p"}, strings.Repeat("k", authAddInputLimit+1), false, nil, pipedP, false},
+		{"whitespace over the bound", "p", []string{"p"}, strings.Repeat(" ", authAddInputLimit+1), false, nil, pipedP, false},
+		{"an interior space", "p", []string{"p"}, "sk-a b\n", false, nil, pipedP, false},
+		{"an interior tab", "p", []string{"p"}, "sk-a\tb", false, nil, pipedP, false},
+		{"a newline inside after the trim", "p", []string{"p"}, "sk-a\nsk-b\n", false, nil, pipedP, false},
+		{"a control character", "p", []string{"p"}, "sk-a\x7fb", false, nil, pipedP, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "auth")
@@ -98,6 +105,32 @@ func TestAuthAddRefusesBeforeWriting(t *testing.T) {
 			}
 			if files := storeFiles(t, dir); len(files) != 0 {
 				t.Errorf("a refused add wrote %v", files)
+			}
+		})
+	}
+}
+
+// TestAuthAddAcceptsTheBound: input of exactly the bound is stored whole, and
+// surrounding whitespace is trimmed from the key stored.
+func TestAuthAddAcceptsTheBound(t *testing.T) {
+	atBound := strings.Repeat("k", authAddInputLimit)
+	for _, tc := range []struct{ name, stdin, want string }{
+		{"exactly the bound", atBound, atBound},
+		{"surrounding whitespace", " \t" + authSentinelKey + " \r\n", authSentinelKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "auth")
+			d := checkDocument(t, "auth add", runAuth(t, "auth add", authAdd, authOptions{Provider: "p", Dir: dir,
+				Configured: []string{"p"}, Stdin: strings.NewReader(tc.stdin)}))
+			if d.Outcome != toolresult.Done {
+				t.Fatalf("outcome %s, want done", d.Outcome)
+			}
+			got, err := auth.NewStore(dir).Read("p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Reveal() != tc.want {
+				t.Errorf("the stored key does not match the piped one trimmed: length %d, want %d", len(got.Reveal()), len(tc.want))
 			}
 		})
 	}
@@ -139,7 +172,8 @@ func TestAuthAddListRemoveRoundTrip(t *testing.T) {
 }
 
 // TestAuthKeyAppearsNowhere: a key piped to add, with debug logging teed to a
-// file, appears on neither stream, in the log, nor in any file of the store.
+// file, appears on neither stream, in the log, nor in any file of the store;
+// nor does any part of an input add refuses.
 func TestAuthKeyAppearsNowhere(t *testing.T) {
 	tmp := t.TempDir()
 	dir, logPath := filepath.Join(tmp, "auth"), filepath.Join(tmp, "debug.log")
@@ -168,6 +202,21 @@ func TestAuthKeyAppearsNowhere(t *testing.T) {
 				t.Errorf("after %s, store file %s holds the key", v.name, f)
 			}
 		}
+	}
+	for _, input := range []string{
+		authSentinelKey + " " + authSentinelKey,
+		authSentinelKey + "\x00",
+		authSentinelKey + strings.Repeat("k", authAddInputLimit),
+	} {
+		opts.Stdin = strings.NewReader(input)
+		out := runAuth(t, "auth add", authAdd, opts)
+		if d := checkDocument(t, "auth add", out); d.Outcome != toolresult.Refused {
+			t.Errorf("an input of length %d: outcome %s, want refused", len(input), d.Outcome)
+		}
+		stdout += out
+	}
+	if files := storeFiles(t, dir); len(files) != 0 {
+		t.Errorf("a refused add left %d store files", len(files))
 	}
 	if err := closer.Close(); err != nil {
 		t.Fatal(err)

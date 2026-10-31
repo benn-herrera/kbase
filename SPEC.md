@@ -1320,9 +1320,10 @@ readable by its owner alone. `add` reads the configuration as the provider verbs
 configuration that does not load refuses as it does for them; a name no `providers.toml` entry
 carries exactly, case included — in the pool or dropped from it by a fault — is refused,
 `check: usage`, `key` the name as given, `remedy: kbase show-config`. The key arrives on stdin and
-no other way: stdin that is a terminal is refused, as is input that is empty once surrounding
-whitespace is trimmed, each `check: usage` with the piped form, the provider's name filled in, as
-its `remedy`. A refusal writes nothing, and the name refusals come before stdin is read. `kbase auth remove <provider>` clears the stored key, `unchanged` where none was stored, and
+no other way: stdin that is a terminal is refused, as is input of more than 65536 bytes, input that
+is empty once surrounding whitespace is trimmed, and a key that, so trimmed, still holds a
+whitespace or control character, each `check: usage`, naming no part of the input, with the piped
+form, the provider's name filled in, as its `remedy`. A refusal writes nothing, and the name refusals come before stdin is read. `kbase auth remove <provider>` clears the stored key, `unchanged` where none was stored, and
 `kbase auth list` names the providers with a stored key, in lowercase; neither reads the
 configuration, so a key file whose entry is gone is still removed. A name that breaks the
 provider-name rule (§9.1) is a usage refusal, `key` the name as given and the detail the rule,

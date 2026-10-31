@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -44,11 +45,15 @@ func runAuthVerb(name string, verb func(authOptions) (string, []toolresult.Field
 	return emitResult(name, opts.Stdout, outcome, fields)
 }
 
+// authAddInputLimit is the most bytes of stdin auth add accepts as a key.
+const authAddInputLimit = 65536
+
 // authAdd stores the key piped on stdin for the provider, replacing any stored
 // for it. An unusable name, a name no configured entry carries, a terminal on
-// stdin and input holding nothing but whitespace are refused, in that order,
-// before stdin is read or anything is written; the key is trimmed as a key
-// file's is.
+// stdin, input over authAddInputLimit, input holding nothing but whitespace and
+// a trimmed key holding a whitespace or control character are refused, in that
+// order, before anything is written; the first three before stdin is read. The
+// key is trimmed as a key file's is.
 func authAdd(opts authOptions) (string, []toolresult.Field) {
 	if err := auth.CheckName(opts.Provider); err != nil {
 		return authStoreFailure(err, "kbase show-config")
@@ -57,18 +62,25 @@ func authAdd(opts authOptions) (string, []toolresult.Field) {
 		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: opts.Provider, Remedy: "kbase show-config",
 			Detail: fmt.Sprintf("%q is no providers.toml entry's name: give the name exactly as the entry spells it, case included", opts.Provider)})
 	}
-	if opts.StdinIsTerminal {
-		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: config.AuthAddRemedy(opts.Provider),
-			Detail: "stdin is a terminal: kbase never prompts for a key, so it reads one from a pipe alone"})
+	inputRefused := func(detail string) (string, []toolresult.Field) {
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: config.AuthAddRemedy(opts.Provider), Detail: detail})
 	}
-	b, err := io.ReadAll(opts.Stdin)
+	if opts.StdinIsTerminal {
+		return inputRefused("stdin is a terminal: kbase never prompts for a key, so it reads one from a pipe alone")
+	}
+	b, err := io.ReadAll(io.LimitReader(opts.Stdin, authAddInputLimit+1))
 	if err != nil {
 		return failed(nil, fmt.Errorf("read the key from stdin: %w", err))
 	}
+	if len(b) > authAddInputLimit {
+		return inputRefused("stdin held more than 64 KiB: pipe the key alone, not a file or stream that holds it")
+	}
 	key := strings.TrimSpace(string(b))
 	if key == "" {
-		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Remedy: config.AuthAddRemedy(opts.Provider),
-			Detail: "stdin held no key: the piped input was empty or whitespace alone"})
+		return inputRefused("stdin held no key: the piped input was empty or whitespace alone")
+	}
+	if strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return inputRefused("stdin held whitespace or a control character inside the key: pipe the key alone, not a file or record that contains it")
 	}
 	if err := auth.NewStore(opts.Dir).Add(opts.Provider, secret.NewKey(key)); err != nil {
 		return failed(nil, err)
@@ -234,8 +246,9 @@ for a key copied there by hand or by a program.
 A command that spells the key out, such as echo, puts it on a command line.
 Surrounding whitespace is trimmed. Stdin that is a terminal is refused: kbase
 never prompts for a key, so none is typed where a scrollback or a transcript
-keeps it. Input that is empty or whitespace alone is refused. A refusal writes
-nothing.
+keeps it. Input that is empty or whitespace alone is refused, as are input over
+64 KiB and a key with whitespace or a control character inside it. A refusal
+writes nothing.
 
 The result names the provider, never the key.`,
 		authArgs(1, toolresult.Item{Check: toolresult.CheckUsage, Key: authProviderArg, Remedy: config.AuthAddRemedy(authProviderArg),
