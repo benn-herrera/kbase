@@ -111,9 +111,6 @@ func authList(opts authOptions) (string, []toolresult.Field) {
 	return toolresult.Done, []toolresult.Field{{Key: "providers", Value: names}}
 }
 
-// authRemoveForm is remove's invocation, the remedy of its usage refusals.
-const authRemoveForm = "kbase auth remove " + authProviderArg
-
 // authStoreFailure is the result of a store error: a name that cannot name a
 // key file is a usage refusal keyed by the name as given and carrying remedy,
 // anything else a failure.
@@ -158,12 +155,15 @@ func authArgs(n int, refusal toolresult.Item) cobra.PositionalArgs {
 }
 
 // configuredProviderNames is every providers.toml entry name the loaded
-// configuration carries: the pool's, and each a fault names, so an entry a
-// fault dropped from the pool can still be given a key. A name may repeat.
+// configuration carries: the pool's, and each an entry or store-file fault
+// names, so an entry a fault dropped from the pool can still be given a key.
+// The store directory's fault names none. A name may repeat.
 func configuredProviderNames(opts providerOptions) []string {
 	names := slices.Collect(maps.Keys(opts.Providers))
 	for _, f := range opts.Faults {
-		names = append(names, f.Name)
+		if f.Source != config.SourceStoreDir {
+			names = append(names, f.Name)
+		}
 	}
 	return names
 }
@@ -261,7 +261,7 @@ func authRemoveCommand() *cobra.Command {
 		"clear the API key stored for a providers.toml entry",
 		`Remove the API key stored for <provider>, a providers.toml entry name. Where
 none is stored the outcome is unchanged and nothing is removed.`,
-		authArgs(1, toolresult.Item{Check: toolresult.CheckUsage, Key: authProviderArg, Remedy: authRemoveForm,
+		authArgs(1, toolresult.Item{Check: toolresult.CheckUsage, Key: authProviderArg, Remedy: config.AuthRemoveCommand(authProviderArg),
 			Detail: "kbase auth remove takes one argument, the provider name"}),
 		false, authRemove)
 }

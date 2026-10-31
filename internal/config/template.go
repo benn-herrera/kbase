@@ -39,17 +39,18 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 // resolves without a choice; the rest is commented, so a fresh install never
 // has two usable entries and no selection between them. It names no key
 // field, because a key is added with `kbase auth add`; an apiKeyFile an entry
-// states still loads. The %s is AuthAddRemedy's form for a placeholder name,
-// filled in by freshProviders. The live base URL is a lab
-// host, and .example is a reserved TLD that can never resolve, so no
-// placeholder can reach a real vendor.
-const providersTemplate = `# Each provider is one top-level table; ` + ProviderNameRule + `;
+// states still loads. It is built by concatenation, so no character in it is
+// a format verb; it carries AuthAddRemedy's form for a placeholder name. The
+// live base URL is a lab host, and .example is a reserved TLD that can never
+// resolve, so no placeholder can reach a real vendor.
+func providersTemplate() string {
+	return `# Each provider is one top-level table; ` + ProviderNameRule + `;
 # no two names may differ by case alone. The name is what a [models]
 # reference's provider part and --provider name. An entry here replaces the
 # entry of exactly the same name from ~/.config/kbase/providers.toml whole.
 # This file holds no API key: an entry's key goes in kbase's store, under the
 # entry's name:
-#   %s
+#   ` + AuthAddRemedy("<name>") + `
 
 [local]
 baseUrl = "http://lab-server.local:8000/v1"
@@ -63,3 +64,4 @@ baseUrl = "http://lab-server.local:8000/v1"
 # [cloud]
 # baseUrl = "https://api.inference.example/v1"
 `
+}

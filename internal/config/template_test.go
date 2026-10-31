@@ -60,7 +60,7 @@ func TestTemplatesSpellEveryModeledKey(t *testing.T) {
 		template string
 		omitted  string
 	}{
-		{ProvidersFileName, reflect.TypeOf(Provider{}), freshProviders(), "apiKeyFile"},
+		{ProvidersFileName, reflect.TypeOf(Provider{}), providersTemplate(), "apiKeyFile"},
 		{ConfigFileName, reflect.TypeOf(Config{}), freshConfig(Config{}), ""},
 	} {
 		t.Run(tc.file, func(t *testing.T) {

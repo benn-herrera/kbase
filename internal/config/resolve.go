@@ -232,6 +232,9 @@ func AuthAddRemedy(provider string) string {
 	return "<command-that-prints-the-key> | " + authAddCommand(provider)
 }
 
+// AuthRemoveCommand is the command that clears the key stored for provider.
+func AuthRemoveCommand(provider string) string { return "kbase auth remove " + provider }
+
 // RefusedKeyNote ends the detail of a call failure that carries AuthAddRemedy,
 // after "; ": it tells an agent reading the failure how the key reaches the
 // store without entering the conversation.

@@ -443,3 +443,19 @@ func TestAuthRemoveClearsAnUnconfiguredName(t *testing.T) {
 		t.Errorf("after remove the store lists %v (%v), want no %s", names, err, provider)
 	}
 }
+
+func TestConfiguredProviderNamesSkipTheStoreDirectoryFault(t *testing.T) {
+	opts := providerOptions{
+		Providers: config.Providers{"local": {}},
+		Faults: []config.ProviderFault{
+			{Name: "bad", Source: config.SourceEntry},
+			{Name: "stored", Source: config.SourceStoreFile},
+			{Source: config.SourceStoreDir},
+		},
+	}
+	got := configuredProviderNames(opts)
+	slices.Sort(got)
+	if want := []string{"bad", "local", "stored"}; !slices.Equal(got, want) {
+		t.Errorf("configuredProviderNames = %q, want %q", got, want)
+	}
+}

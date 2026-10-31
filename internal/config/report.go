@@ -117,7 +117,7 @@ func faultItem(fault ProviderFault) result.Item {
 func unreadKeyFileItem(name, keyFile, path string) result.Item {
 	return result.Item{Check: CheckProvider, Path: path,
 		Detail: fmt.Sprintf("provider %q has a stored key, which outranks its apiKeyFile %q: that file is not read", name, keyFile),
-		Remedy: fmt.Sprintf("remove the apiKeyFile line from %q, or run kbase auth remove %s to use the file", path, name)}
+		Remedy: fmt.Sprintf("remove the apiKeyFile line from %q, or run %s to use the file", path, AuthRemoveCommand(name))}
 }
 
 // faultLayer names the layer whose providers.toml carries the fault at path,
