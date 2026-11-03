@@ -2,7 +2,8 @@
 # §8.3 Direction 1: a kbase-built KB. Per slice paper, a fresh fixture
 # repository (the sources as fetched, a stub Makefile, a .gitignore) is built
 # by ./bin/kbase --no-inference to completion; the build's ledger, its owned
-# paths and the readiness documents are checked as built, and ./bin/kbase
+# paths, the build records its last boundary commits under kb-root/.build/ and
+# the readiness documents are checked as built, and ./bin/kbase
 # status and the build result are parsed against their documented keys. On
 # BUILD_ARXIV_SPECIAL_ID: a build killed with SIGKILL while
 # claims-declared's writes are in flight, its status read, then resumed; a fresh
@@ -27,6 +28,10 @@ cd "${script_dir}/../.." || exit 1
 root="$(pwd)"
 out="${BUILD_ARXIV_OUT_DIR}"
 kbase="${root}/${BIN_DIR}/kbase"
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${root}/${out}/xdg"
+rm -rf "${XDG_STATE_HOME}"
 pandoc_version="$(pandoc --version | head -n 1)"
 printf 'pandoc: %s\n' "${pandoc_version}"
 # capture <stem> <dir> <command...>: run the command in dir, stdout to
@@ -90,9 +95,11 @@ for id in ${BUILD_ARXIV_IDS}; do
     check build "$([[ "$(rc "${ck}/kbase-build")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-build.out" && echo 0 || echo 1)" \
         "exit $(rc "${ck}/kbase-build"), $(grep -m1 '^outcome:' "${ck}/kbase-build.out" || echo 'no outcome')" "${ck}/kbase-build.out"
     cp -R "${repo}/kb-root" "${dir}/built/"
-    cp "${repo}"/kb-build-*.yaml "${dir}/built/" 2>/dev/null || true
-    check ledger-scope "$(ok test -z "$(git -C "${repo}" status --porcelain -- kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml)")" \
+    check ledger-scope "$(ok test -z "$(git -C "${repo}" status --porcelain -- kb-root)")" \
         "the owned paths are clean after the build" "${repo}"
+    git -C "${repo}" ls-tree -r --name-only HEAD > "${ck}/committed.txt"
+    check records-committed "$(ok test "$(grep -cE '^kb-root/\.build/kb-build-(node-pass|classification|unmarked|cull)\.yaml$' "${ck}/committed.txt")" -eq 4 -a -z "$(grep -E '^kb-build-' "${ck}/committed.txt")")" \
+        "the last boundary commits the four build records under kb-root/.build/ and none at the repository root" "${ck}/committed.txt"
 
     # readiness documents, as built
     check claude-redirect "$(ok cmp -s <(printf '@AGENTS.md\n') "${dir}/built/kb-root/CLAUDE.md")" "kb-root/CLAUDE.md is exactly @AGENTS.md" "${dir}/built/kb-root/CLAUDE.md"
@@ -121,14 +128,14 @@ for id in ${BUILD_ARXIV_IDS}; do
         landed=missed
         for _ in $(seq 1 20000); do
             if grep -q '"stage":"claims-declared"' "${kill_dir}/state/progress.jsonl" 2>/dev/null \
-                && [[ -n "$(git -C "${kill_dir}/repo" status --porcelain -- kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml 2>/dev/null)" ]]; then
+                && [[ -n "$(git -C "${kill_dir}/repo" status --porcelain -- kb-root 2>/dev/null)" ]]; then
                 kill -9 "${pid}" 2>/dev/null && landed=mid-stage
                 break
             fi
             kill -0 "${pid}" 2>/dev/null || break
         done
         wait "${pid}" 2>/dev/null || true
-        dirt="$(git -C "${kill_dir}/repo" status --porcelain -- kb-root kb-build-node-pass.yaml kb-build-classification.yaml kb-build-unmarked.yaml)"
+        dirt="$(git -C "${kill_dir}/repo" status --porcelain -- kb-root)"
         recorded="$(git -C "${kill_dir}/repo" log --format=%s --grep='^kb-build: claims-declared ')"
         printf 'landed: %s\ndirt:\n%s\nclaims-declared recorded: %s\n' "${landed}" "${dirt}" "${recorded:-no}" > "${kill_dir}/kill.txt"
         check kill-mid-stage "$(ok test "${landed}" = mid-stage -a -n "${dirt}" -a -z "${recorded}")" \
@@ -139,9 +146,9 @@ for id in ${BUILD_ARXIV_IDS}; do
         check status-killed "$?" "status after the kill parses and reports interrupted in claims-declared with a resume command" "${kill_dir}/status.check.log"
         set -e
         capture "${kill_dir}/plain-over-trail" "${kill_dir}/repo" "${kbase}" "${build_args[@]}" --state-dir "${root}/${kill_dir}/state"
-        check plain-over-trail "$([[ "$(rc "${kill_dir}/plain-over-trail")" -eq 1 ]] && grep -q 'check: "inputs"' "${kill_dir}/plain-over-trail.out" \
-            && grep 'remedy:' "${kill_dir}/plain-over-trail.out" | grep 'kbase build --resume' | grep 'git reset --hard' | grep -q 'started-at' && echo 0 || echo 1)" \
-            "exit $(rc "${kill_dir}/plain-over-trail"), a plain build over the interrupted trail refused, its remedy naming --resume and the start-over commit" "${kill_dir}/plain-over-trail.out"
+        check plain-over-trail "$([[ "$(rc "${kill_dir}/plain-over-trail")" -eq 1 ]] && grep -q 'check: "kb-root"' "${kill_dir}/plain-over-trail.out" \
+            && ! grep -q 'remedy:' "${kill_dir}/plain-over-trail.out" && echo 0 || echo 1)" \
+            "exit $(rc "${kill_dir}/plain-over-trail"), a plain build over the interrupted build's kb-root/ refused, check kb-root and no remedy, as init refuses it" "${kill_dir}/plain-over-trail.out"
         capture "${kill_dir}/resume" "${kill_dir}/repo" "${kbase}" "${resume_args[@]}" --state-dir "${root}/${kill_dir}/state"
         check kill-resume "$([[ "$(rc "${kill_dir}/resume")" -eq 0 ]] && grep -qx 'resumed: true' "${kill_dir}/resume.out" \
             && grep -A1 '^restored:' "${kill_dir}/resume.out" | grep -q '^    - ' && echo 0 || echo 1)" \
@@ -152,8 +159,8 @@ for id in ${BUILD_ARXIV_IDS}; do
         stage "${guard_dir}/repo" "${name}"
         cp -R "${dir}/built/kb-root" "${guard_dir}/repo/"
         capture "${guard_dir}/build" "${guard_dir}/repo" "${kbase}" "${build_args[@]}" --state-dir "${root}/${guard_dir}/state"
-        check double-run-guard "$([[ "$(rc "${guard_dir}/build")" -eq 1 ]] && grep -q 'is populated' "${guard_dir}/build.out" && echo 0 || echo 1)" \
-            "exit $(rc "${guard_dir}/build"), refused over a populated kb-root/ with no trail" "${guard_dir}/build.out"
+        check double-run-guard "$([[ "$(rc "${guard_dir}/build")" -eq 1 ]] && grep -q 'check: "kb-root"' "${guard_dir}/build.out" && echo 0 || echo 1)" \
+            "exit $(rc "${guard_dir}/build"), refused over a standing kb-root/ with no trail, check kb-root" "${guard_dir}/build.out"
 
         # stamping only if absent
         stamp_dir="${dir}/stamp"
@@ -182,7 +189,7 @@ for id in ${BUILD_ARXIV_IDS}; do
     } >> "${comparison}"
 done
 
-OUT_DIR="${out}" RECIPE="test-integration-build-arxiv" INVOCATION="per paper <id> of ${BUILD_ARXIV_IDS}, staged into <id>/repo (sources as fetched, stub Makefile, .gitignore, one commit):\n(cd <id>/repo && ${kbase} build <volume-root> --no-inference --config-dir <id>/config --state-dir <id>/state [--bibliography <each .bib beside the volume root, sorted>]) into <id>/checks/kbase-build.*\n<id>/built/kb-root and the three kb-build-*.yaml files as the build left them; the ledger read from <id>/repo/.git\n<id>/built/kb-root's AGENTS.md, CONVENTIONS.md and CLAUDE.md as built, checked against the readiness rules\n${kbase} status --state-dir <id>/state, parsed by go test -run '^TestStatusDocument\$' ./internal/build; the build and status results parsed by go test -run '^TestResultDocument\$' ./cmd\non ${BUILD_ARXIV_SPECIAL_ID}: kill -9 inside claims-declared, status, a plain build over the interrupted trail refused (<id>/kill/plain-over-trail.*), then ${kbase} build --resume --no-inference --config-dir <id>/config --state-dir <id>/state (<id>/kill/); a fresh build over the built tree with no trail (<id>/guard/); --through depends-attributed, an authored CONVENTIONS.md committed, then the same build --resume (<id>/stamp/)" \
+OUT_DIR="${out}" RECIPE="test-integration-build-arxiv" INVOCATION="per paper <id> of ${BUILD_ARXIV_IDS}, staged into <id>/repo (sources as fetched, stub Makefile, .gitignore, one commit):\n(cd <id>/repo && ${kbase} build <volume-root> --no-inference --config-dir <id>/config --state-dir <id>/state [--bibliography <each .bib beside the volume root, sorted>]) into <id>/checks/kbase-build.*\n<id>/built/kb-root, its build records under .build/ included, as the build left it; the ledger read from <id>/repo/.git, the files of its HEAD in <id>/checks/committed.txt\n<id>/built/kb-root's AGENTS.md, CONVENTIONS.md and CLAUDE.md as built, checked against the readiness rules\n${kbase} status --state-dir <id>/state, parsed by go test -run '^TestStatusDocument\$' ./internal/build; the build and status results parsed by go test -run '^TestResultDocument\$' ./cmd\non ${BUILD_ARXIV_SPECIAL_ID}: kill -9 inside claims-declared, status, a plain build over the interrupted build's kb-root/ refused, check kb-root (<id>/kill/plain-over-trail.*), then ${kbase} build --resume --no-inference --config-dir <id>/config --state-dir <id>/state (<id>/kill/); a fresh build over the built tree with no trail (<id>/guard/); --through depends-attributed, an authored CONVENTIONS.md committed, then the same build --resume (<id>/stamp/)" \
     tools/scripts/write-evidence.sh
 printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
 if [[ "${status}" -ne 0 ]]; then

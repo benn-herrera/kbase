@@ -10,13 +10,16 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
 	"kbase/internal/buildstore"
@@ -52,23 +55,64 @@ func TestEveryStepHasItsRun(t *testing.T) {
 	}
 }
 
-func TestKBRootState(t *testing.T) {
-	kbRoot := filepath.Join(t.TempDir(), "kb-root")
-	check := func(want string) {
+// TestAFreshBuildRefusesAnyKBRoot: a fresh build where kb-root/ exists — empty,
+// spine-only, or holding documents — is refused with init's kb-root refusal,
+// before any boundary or start commit; a resume over no trail while kb-root/
+// stands is told to remove it to start over, and with none standing, to build
+// afresh.
+func TestAFreshBuildRefusesAnyKBRoot(t *testing.T) {
+	setup := func(t *testing.T, kbRoot []string) fixture {
 		t.Helper()
-		if got, err := kbRootState(kbRoot); err != nil || got != want {
-			t.Errorf("kbRootState = %q, %v; want %q", got, err, want)
+		base := t.TempDir()
+		storetest.GitEnv(t, base)
+		f := fixture{repo: filepath.Join(base, "repo"), state: filepath.Join(base, "state")}
+		storetest.MakeRepo(t, f.repo)
+		storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), paper)
+		for _, rel := range kbRoot {
+			if err := os.MkdirAll(filepath.Join(f.repo, kb.KBDir, rel), 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
+		return f
 	}
-	check(kbRootAbsent)
-	if err := os.MkdirAll(filepath.Join(kbRoot, ".index"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name   string
+		kbRoot []string
+		file   string
+	}{
+		{"empty", []string{"."}, ""},
+		{"spine-only", []string{kb.IndexDir}, ""},
+		{"holding documents", []string{kb.IndexDir}, kb.EntryPointFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t, tc.kbRoot)
+			if tc.file != "" {
+				storetest.WriteFile(t, filepath.Join(f.repo, kb.KBDir, tc.file), "# KB\n")
+			}
+			kbRoot := filepath.Join(f.ledger(t).Root, kb.KBDir)
+			outcome, fields := f.build(t, f.options())
+			items, _ := storetest.Field(fields, "refusals").([]result.Item)
+			if want := buildstore.KBRootExists(kbRoot); outcome != result.Refused || len(items) != 1 || !reflect.DeepEqual(items[0], want) {
+				t.Errorf("a fresh build over a %s kb-root/ = %s %+v, want refused with %+v", tc.name, outcome, items, want)
+			}
+			if head, err := f.ledger(t).Head(); err != nil || head != "" {
+				t.Errorf("the refused build left HEAD at %q (%v), want no commit", head, err)
+			}
+
+			outcome, fields = f.build(t, resuming(f.options()))
+			items, _ = storetest.Field(fields, "refusals").([]result.Item)
+			if outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckKBRoot || items[0].Remedy != startOverRemedy {
+				t.Errorf("a resume over no trail while kb-root/ stands = %s %+v, want check kb-root and the remedy to remove it", outcome, items)
+			}
+		})
 	}
-	check(kbRootSpineOnly)
-	if err := os.WriteFile(filepath.Join(kbRoot, "entry-point.md"), []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
+	f := setup(t, nil)
+	outcome, fields := f.build(t, resuming(f.options()))
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	if want := argmark.Call("build", map[string]any{"volume-root": []string{"<volume-root>"}}); outcome != result.Refused || len(items) != 1 ||
+		items[0].Check != result.CheckUsage || items[0].Remedy != want || items[0].Detail != "kb-root/ does not exist: there is no build to resume" {
+		t.Errorf("a resume over no trail and no kb-root/ = %s %+v, want the remedy %q", outcome, items, want)
 	}
-	check(kbRootPopulated)
 }
 
 // paper is a volume root whose build mints a lemma, a theorem resting on it
@@ -152,6 +196,22 @@ func (f fixture) ledger(t *testing.T) *gitledger.Repo {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// parent is commit's first parent in the fixture's repository, "" where commit
+// is a root commit.
+func (f fixture) parent(t *testing.T, commit string) string {
+	t.Helper()
+	git := exec.Command("git", "rev-list", "--parents", "-n", "1", commit)
+	git.Dir = f.repo
+	out, err := git.Output()
+	if err != nil {
+		t.Fatalf("git rev-list --parents -n 1 %s: %v", commit, err)
+	}
+	if fields := strings.Fields(string(out)); len(fields) > 1 {
+		return fields[1]
+	}
+	return ""
 }
 
 // record records a boundary of stage as a build records one, its body the
@@ -322,6 +382,15 @@ func TestBuildEndToEnd(t *testing.T) {
 			t.Errorf("%s body = %q, want the dropped rows named", s, bodies[s])
 		}
 	}
+	committed, err := f.ledger(t).Files("HEAD", buildrecords.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range buildrecords.RecordFiles {
+		if _, ok := committed[path.Base(rel)]; !ok {
+			t.Errorf("the last boundary commits no %s", rel)
+		}
+	}
 	files := snapshot(t, f.repo)
 	if want := "\nplanned: null\npairs: []\n"; !strings.HasSuffix(files[buildrecords.UnmarkedFile], want) {
 		t.Errorf("%s = %q, want it as the declared pass wrote it, ending %q", buildrecords.UnmarkedFile, files[buildrecords.UnmarkedFile], want)
@@ -454,7 +523,7 @@ func markedQuote(files map[string]string, id string) string {
 		}
 		at, ok := kb.MarkerLines(text)[id]
 		lines := kb.SplitLines(text)
-		if !ok || lines[at] != "> "+kb.StatementMarker(id) {
+		if !ok || lines[at] != ">"+kb.StatementMarker(id) {
 			continue
 		}
 		first, last := at, at
@@ -479,8 +548,8 @@ func TestDoubleRunGuardRefusesAWrittenTree(t *testing.T) {
 		storetest.WriteFile(t, filepath.Join(g.repo, filepath.FromSlash(p)), text)
 	}
 	outcome, fields := g.build(t, g.options())
-	if items := details(fields, "refusals"); outcome != result.Refused || len(items) != 1 || !strings.Contains(items[0], kbRootPopulated) {
-		t.Errorf("a fresh build over a written tree = %s %v, want refused naming it populated", outcome, fields)
+	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckKBRoot {
+		t.Errorf("a fresh build over a written tree = %s %v, want refused with check %s", outcome, fields, kb.CheckKBRoot)
 	}
 	if got := g.trailStages(t); len(got) != 0 {
 		t.Errorf("the refused build recorded %q", got)
@@ -683,10 +752,82 @@ func TestSpineStampsTheFormat(t *testing.T) {
 	}
 }
 
-// TestResumeOverADegradedKBRefused: a spine boundary whose edge records name
-// nodes no record carries loads degraded, and a resume over it is refused,
-// one degraded item with the refresh remedy, before any stage is walked.
-func TestResumeOverADegradedKBRefused(t *testing.T) {
+// TestResumeOverAnOlderFormatRefused: a resume over a KB stamped in an older
+// format is refused while its conversion is pending, remedy kbase
+// update-format, and writes nothing.
+func TestResumeOverAnOlderFormatRefused(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "spine-seed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	stampFile := filepath.Join(f.repo, kb.KBDir, filepath.FromSlash(kb.FormatFile))
+	storetest.WriteFile(t, stampFile, "kb-format: \"3.0.0\"\n")
+	f.record(t, "spine-seed", "claim-graph spine seeded")
+	opts.Through = ""
+	outcome, fields := f.build(t, resuming(opts))
+	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 ||
+		items[0].Check != index.CheckIndex || items[0].Remedy != index.UpdateFormatRemedy {
+		t.Errorf("a resume over a KB stamped 3.0.0 = %s %v, want refused while the conversion is pending", outcome, fields)
+	}
+	if b, err := os.ReadFile(stampFile); err != nil || string(b) != "kb-format: \"3.0.0\"\n" {
+		t.Errorf("the refused resume left the stamp as %q (%v)", b, err)
+	}
+}
+
+// TestInterruptedResumeOverAnOlderFormatRefusedBeforeTheRestore: a resume
+// over a KB stamped in an older format, whose interrupted stage left an owned
+// path dirty, is refused while the conversion is pending and restores nothing.
+func TestInterruptedResumeOverAnOlderFormatRefusedBeforeTheRestore(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "spine-seed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	kbRoot := filepath.Join(f.repo, kb.KBDir)
+	storetest.WriteFile(t, filepath.Join(kbRoot, filepath.FromSlash(kb.FormatFile)), "kb-format: \"3.0.0\"\n")
+	f.record(t, "spine-seed", "claim-graph spine seeded")
+	p, err := openProgress(f.state, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []buildstore.Event{{Event: buildstore.EventRun, PID: 1, NoInference: true}, {Event: buildstore.EventStage, Stage: "claims-declared", Total: 1}} {
+		if err := p.emit(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.close()
+	torn := filepath.Join(kbRoot, kb.EntryPointFile)
+	b, err := os.ReadFile(torn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tornText := string(b[:len(b)/2])
+	storetest.WriteFile(t, torn, tornText)
+	dirty, err := f.ledger(t).Dirty()
+	if err != nil || len(dirty) == 0 {
+		t.Fatalf("the interrupted stage left no dirt: %q, %v", dirty, err)
+	}
+
+	opts.Through = ""
+	outcome, fields := f.build(t, resuming(opts))
+	if items, _ := storetest.Field(fields, "refusals").([]result.Item); outcome != result.Refused || len(items) != 1 || items[0].Check != index.CheckIndex {
+		t.Errorf("an interrupted resume over a KB stamped 3.0.0 = %s %v, want refused while the conversion is pending", outcome, fields)
+	}
+	if b, err := os.ReadFile(torn); err != nil || string(b) != tornText {
+		t.Errorf("the refused resume rewrote the interrupted stage's dirt: %q (%v)", b, err)
+	}
+	if got, err := f.ledger(t).Dirty(); err != nil || !slices.Equal(got, dirty) {
+		t.Errorf("dirty after the refusal = %q (%v), want %q", got, err, dirty)
+	}
+}
+
+// TestResumeOverALoadErrorRefused: a spine boundary whose edge record names
+// nodes no record carries fails to load, and a resume over it is refused, one
+// check: metadata item with the remedy in git, before any stage is walked.
+func TestResumeOverALoadErrorRefused(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
 	opts.Through = "spine-seed"
@@ -699,8 +840,8 @@ func TestResumeOverADegradedKBRefused(t *testing.T) {
 	opts.Through = ""
 	outcome, fields := f.build(t, resuming(opts))
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
-	if outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckDegraded || items[0].Remedy != index.RefreshRemedy {
-		t.Errorf("a resume over a degraded KB = %s %v, want refused, one %s item with remedy %q", outcome, fields, kb.CheckDegraded, index.RefreshRemedy)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckMetadata || items[0].Remedy != kb.ConsistentRecordsRemedy {
+		t.Errorf("a resume over a load error = %s %v, want refused, one %s item with remedy %q", outcome, fields, kb.CheckMetadata, kb.ConsistentRecordsRemedy)
 	}
 	if storetest.Carries(fields, "stages") {
 		t.Errorf("a refused resume walked stages: %v", fields)
@@ -774,7 +915,7 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 	if got := storetest.Field(fields, "cancelled").(result.Record); got[0].Value != "claims-declared" || got[1].Value != "declared.build" {
 		t.Errorf("cancelled = %v, want claims-declared at declared.build", got)
 	}
-	if resume, _ := storetest.Field(fields, "resume").(string); !storetest.Carries(fields, "through") || !strings.HasPrefix(resume, "kbase build --resume") {
+	if resume, _ := storetest.Field(fields, "resume").(string); !storetest.Carries(fields, "through") || !resumesTheBuild(resume) {
 		t.Errorf("a cancelled build's through = %v and resume = %q, want both: a resume continues it", storetest.Field(fields, "through"), resume)
 	}
 	if got := f.trailStages(t); !slices.Equal(got, stageIDs("spine-seed")) {
@@ -793,6 +934,39 @@ func TestCancelLosesOnlyTheUnitInFlight(t *testing.T) {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
 	sameModuloIDs(t, f.repo, reference(t))
+}
+
+// TestNoResumeHandedOutWithoutAKBRoot: a build stopped before it writes
+// kb-root/ leaves no KB, so nothing to resume: its result hands out no resume,
+// and status reads no build — state none, no current stage, no resume.
+func TestNoResumeHandedOutWithoutAKBRoot(t *testing.T) {
+	for _, unit := range []string{"pre.preflight", "dg.build"} {
+		t.Run(unit, func(t *testing.T) {
+			f := newFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			opts := f.options()
+			opts.now = time.Now
+			opts.beforeUnit = func(_, u string) {
+				if u == unit {
+					cancel()
+				}
+			}
+			outcome, fields := Run(ctx, opts)
+			if outcome != result.Cancelled {
+				t.Fatalf("build = %s %v, want cancelled", outcome, fields)
+			}
+			if _, err := os.Lstat(filepath.Join(f.repo, kb.KBDir)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("kb-root/ after a cancel at %s: %v, want it absent", unit, err)
+			}
+			if storetest.Carries(fields, "resume") {
+				t.Errorf("the cancelled build's result = %v, want no resume", fields)
+			}
+			if s := statusOf(t, f); s.state != buildstore.StateNone || s.current != "" || s.resume != "" || s.pid != nil || s.recorded != 0 {
+				t.Errorf("status after the cancel = %+v, want none with no current stage and no resume", s)
+			}
+		})
+	}
 }
 
 func TestMissingRecordsAreRegenerated(t *testing.T) {
@@ -837,10 +1011,14 @@ func TestLaunchRefusals(t *testing.T) {
 		through  string
 		provider func() (Provider, error)
 		want     []string
+		remedy   string
 	}{
-		{"a model call with no provider", "claims-discovered", noProvider, []string{"discover.build (claims-discovered) calls a model, and no usable provider"}},
-		{"no provider configuration at all", "depends-attributed", nil, []string{"discover.build (claims-discovered) calls a model, and no provider is configured;"}},
-		{"provider-free stages", "claims-declared", noProvider, nil},
+		{"a model call with no provider", "claims-discovered", noProvider, []string{"discover.build (claims-discovered) calls a model, and no usable provider"}, config.ShowConfigRemedy("")},
+		{"no provider configuration at all", "depends-attributed", nil, []string{"discover.build (claims-discovered) calls a model, and no provider is configured;"}, config.ShowConfigRemedy("")},
+		{"provider-free stages", "claims-declared", noProvider, nil, ""},
+		{"a role refusal carrying its clearing command", "claims-discovered", func() (Provider, error) {
+			return Provider{}, result.Refusal{{Check: config.CheckProvider, Key: "decision", Path: "config.toml", Remedy: "clear-it"}}
+		}, []string{"discover.build (claims-discovered) calls a model, and "}, config.ShowConfigRemedy("clear-it")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -871,8 +1049,12 @@ func TestLaunchRefusals(t *testing.T) {
 					t.Errorf("refusal %q does not name %s", items[i], w)
 				}
 			}
-			if refusals, _ := storetest.Field(fields, "refusals").([]result.Item); refusals[0].Remedy != "" {
-				t.Errorf("the provider refusal carries remedy %q, want none: no command clears an unconfigured provider", refusals[0].Remedy)
+			refusal := storetest.Field(fields, "refusals").([]result.Item)[0]
+			if refusal.Remedy != tc.remedy {
+				t.Errorf("the provider refusal carries remedy %q, want %q: a provider error that names no clearing command carries show-config alone", refusal.Remedy, tc.remedy)
+			}
+			if strings.Contains(refusal.Detail, "show-config") || !strings.Contains(refusal.Detail, argmark.Flag("no-inference")) {
+				t.Errorf("the provider refusal's detail %q, want --no-inference as the alternative and show-config in the remedy alone", refusal.Detail)
 			}
 			if got := f.trailStages(t); len(got) != 0 {
 				t.Errorf("a launch refusal recorded %q", got)
@@ -884,7 +1066,7 @@ func TestLaunchRefusals(t *testing.T) {
 	opts.NoInference, opts.Through = false, "claims-discovered"
 	const baseURLKey = "baseUrl"
 	opts.Provider = func() (Provider, error) {
-		return Provider{}, result.Refusal{{Check: config.CheckProvider, Key: baseURLKey, Path: config.ProvidersFileName, Detail: "KBASE_API_BASE_URL is unset"}}
+		return Provider{}, result.Refusal{{Check: config.CheckProvider, Key: baseURLKey, Path: config.ProvidersFileName, Detail: "the entry declares no baseUrl"}}
 	}
 	if _, fields := f.build(t, opts); func() bool {
 		items, _ := storetest.Field(fields, "refusals").([]result.Item)
@@ -899,11 +1081,12 @@ func TestLaunchRefusals(t *testing.T) {
 	}
 }
 
-// TestRefusalInsideDocumentGraphCarriesThroughAndResume: a refusal a stage's
-// row raises leaves the start boundary walked, so the result names the bound it
-// was given and the command that continues it — unlike a launch refusal, which
-// records no boundary and names neither.
-func TestRefusalInsideDocumentGraphCarriesThroughAndResume(t *testing.T) {
+// TestRefusalInsideDocumentGraphCarriesThrough: a refusal a stage's row raises
+// leaves the start boundary walked, so the result names the bound it was given
+// — unlike a launch refusal, which records no boundary and names it not. It
+// names no resume: document-graph had written no kb-root/, so there is no KB to
+// resume, and a fresh build redoes start.
+func TestRefusalInsideDocumentGraphCarriesThrough(t *testing.T) {
 	f := newFixture(t)
 	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
 	outcome, fields := f.build(t, f.options())
@@ -913,8 +1096,8 @@ func TestRefusalInsideDocumentGraphCarriesThroughAndResume(t *testing.T) {
 	if through, _ := storetest.Field(fields, "through").(string); through != buildstore.Stages[len(buildstore.Stages)-1].ID {
 		t.Errorf("through = %q, want the bound the build was given, %s", through, buildstore.Stages[len(buildstore.Stages)-1].ID)
 	}
-	if resume, _ := storetest.Field(fields, "resume").(string); !strings.HasPrefix(resume, "kbase build --resume") {
-		t.Errorf("resume = %q, want the command that continues the refused walk", resume)
+	if storetest.Carries(fields, "resume") {
+		t.Errorf("resume = %v, want none: kb-root/ does not exist, so a resume is refused", storetest.Field(fields, "resume"))
 	}
 	if stages, _ := storetest.Field(fields, "stages").([]result.Record); len(stages) != 2 || stages[0][1].Value == nil ||
 		stages[1][0].Value != buildstore.StageDocumentGraph || stages[1][1].Value != nil {
@@ -987,10 +1170,10 @@ func TestStaleIndexLockRefusedByName(t *testing.T) {
 	}
 }
 
-// TestBuildOverATrailRefused: a build given volume roots over a standing trail
-// is refused before anything is restored or committed, naming the resume and
-// the start-over commit rewind-build names; a resume given none then walks to
-// the end, every boundary recording the same absolute inputs.
+// TestBuildOverATrailRefused: a build given volume roots over a standing
+// trail, its kb-root/ standing, is refused with the kb-root refusal before
+// anything is restored or committed; a resume given none then walks to the
+// end, every boundary recording the same absolute inputs.
 func TestBuildOverATrailRefused(t *testing.T) {
 	f := newFixture(t)
 	opts := f.options()
@@ -1004,19 +1187,11 @@ func TestBuildOverATrailRefused(t *testing.T) {
 
 	outcome, fields := f.build(t, opts)
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
-	if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInputs || items[0].Key != "<volume-root>" ||
-		items[0].Path != f.ledger(t).Root || !strings.Contains(items[0].Detail, opts.VolumeRoots[0]) {
-		t.Fatalf("a build over a trail = %s %+v, want refused naming the inputs the trail records", outcome, items)
+	if want := buildstore.KBRootExists(filepath.Join(f.ledger(t).Root, kb.KBDir)); outcome != result.Refused || len(items) != 1 || !reflect.DeepEqual(items[0], want) {
+		t.Fatalf("a build over a trail = %s %+v, want refused with %+v", outcome, items, want)
 	}
 	if storetest.Carries(fields, "through") || storetest.Carries(fields, "resume") {
 		t.Errorf("a refusal before the walk = %v, want neither through nor resume: it recorded no boundary", fields)
-	}
-	_, rewound := buildstore.Rewind(buildstore.RewindOptions{RepoRoot: f.repo, StateDir: f.state})
-	started, _ := storetest.Field(rewound, buildstore.TargetStartedAt).(result.Record)
-	startedAt, _ := roleValue(started, "commit").(string)
-	if startedAt == "" || !strings.Contains(items[0].Remedy, "`kbase build --resume`") ||
-		!strings.Contains(items[0].Remedy, "`git reset --hard "+startedAt+"`") {
-		t.Errorf("remedy = %q, want the resume and a reset to rewind-build's started-at %q", items[0].Remedy, startedAt)
 	}
 	if after := snapshot(t, f.repo); !maps.Equal(after, before) {
 		t.Errorf("the refusal touched the owned paths")
@@ -1066,8 +1241,9 @@ func TestInputsUsageRefused(t *testing.T) {
 		edit func(*Options)
 		keys []string
 	}{
-		{"a resume given both", func(o *Options) { o.Resume, o.Bibliographies = true, []string{"refs.bib"} }, []string{"<volume-root>", "--bibliography"}},
-		{"neither inputs nor a resume", func(o *Options) { o.VolumeRoots = nil }, []string{"<volume-root>"}},
+		{"a resume given both", func(o *Options) { o.Resume, o.Bibliographies = true, []string{"refs.bib"} },
+			[]string{argmark.Positional("volume-root"), argmark.Flag("bibliography")}},
+		{"neither inputs nor a resume", func(o *Options) { o.VolumeRoots = nil }, []string{argmark.Positional("volume-root")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -1077,8 +1253,8 @@ func TestInputsUsageRefused(t *testing.T) {
 			items, _ := storetest.Field(fields, "refusals").([]result.Item)
 			var keys []string
 			for _, it := range items {
-				if it.Check != buildstore.CheckUsage {
-					t.Errorf("item %+v, want check %s", it, buildstore.CheckUsage)
+				if it.Check != result.CheckUsage {
+					t.Errorf("item %+v, want check %s", it, result.CheckUsage)
 				}
 				keys = append(keys, it.Key)
 			}
@@ -1095,41 +1271,144 @@ func TestInputsUsageRefused(t *testing.T) {
 	}
 }
 
-// TestResumeNeedsACoherentTrail: a resume over an empty trail is refused
-// naming the trail; one whose newest boundary records no inputs is refused
-// naming the start-over commit, the start boundary's parent, or a fresh clone
-// where start is a root commit.
+// TestResumeNeedsACoherentTrail: a resume over an empty trail and no kb-root/
+// is a usage refusal; one whose newest boundary records no inputs has nothing
+// to resume either, and with its kb-root/ standing is told to remove it to
+// start over.
 func TestResumeNeedsACoherentTrail(t *testing.T) {
 	f := newFixture(t)
 	outcome, fields := f.build(t, resuming(f.options()))
 	items, _ := storetest.Field(fields, "refusals").([]result.Item)
-	if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckTrail || items[0].Key != "--resume" {
-		t.Errorf("a resume over an empty trail = %s %+v, want refused with check trail", outcome, items)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != result.CheckUsage || items[0].Key != argmark.Flag("resume") {
+		t.Errorf("a resume over an empty trail and no kb-root/ = %s %+v, want a usage refusal", outcome, items)
 	}
 
-	for _, rooted := range []bool{false, true} {
-		g := newFixture(t)
-		parent := ""
-		if !rooted {
-			var err error
-			if parent, err = g.ledger(t).Commit("before the build", ""); err != nil {
-				t.Fatal(err)
-			}
-		}
-		storetest.WriteFile(t, filepath.Join(g.repo, kb.KBDir, "start.md"), "# start\n")
-		if _, err := g.ledger(t).Record(buildstore.StageStart, "build started", ""); err != nil {
-			t.Fatal(err)
-		}
-		outcome, fields := g.build(t, resuming(g.options()))
-		items, _ := storetest.Field(fields, "refusals").([]result.Item)
-		want := "rebuild in a fresh clone"
-		if !rooted {
-			want = "`git reset --hard " + parent + "`"
-		}
-		if outcome != result.Refused || len(items) != 1 || items[0].Check != checkInputs || items[0].Key != "--resume" ||
-			!strings.Contains(items[0].Remedy, want) || strings.Contains(items[0].Remedy, "--resume") {
-			t.Errorf("a resume over a trail recording no inputs (start a root commit: %t) = %s %+v, want refused naming %q", rooted, outcome, items, want)
-		}
+	g := newFixture(t)
+	storetest.WriteFile(t, filepath.Join(g.repo, kb.KBDir, "start.md"), "# start\n")
+	if _, err := g.ledger(t).Record(buildstore.StageStart, "build started", ""); err != nil {
+		t.Fatal(err)
+	}
+	outcome, fields = g.build(t, resuming(g.options()))
+	items, _ = storetest.Field(fields, "refusals").([]result.Item)
+	if outcome != result.Refused || len(items) != 1 || items[0].Check != kb.CheckKBRoot || items[0].Key != argmark.Flag("resume") ||
+		items[0].Remedy != startOverRemedy {
+		t.Errorf("a resume over a trail recording no inputs = %s %+v, want refused with the remedy to remove kb-root/", outcome, items)
+	}
+}
+
+// TestAFreshBuildOverARemovedKBRootStartsATrailOfItsOwn: once kb-root/ is
+// removed, the removal left uncommitted, a fresh build over the old trail
+// walks every stage, its start boundary committing the removal, and a resume
+// after it continues its trail, not the old one's.
+func TestAFreshBuildOverARemovedKBRootStartsATrailOfItsOwn(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = buildstore.StageSpineSeed
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	if err := os.RemoveAll(filepath.Join(f.repo, kb.KBDir)); err != nil {
+		t.Fatal(err)
+	}
+	opts.Through = buildstore.StageDocumentGraph
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded || storetest.Field(fields, "resumed") != false {
+		t.Fatalf("a fresh build over the uncommitted removal = %s %v, want bounded and not resumed", outcome, fields)
+	}
+	repo := f.ledger(t)
+	trail, err := repo.Trail()
+	if err != nil || len(trail) != 5 || trail[1].Stage != buildstore.StageStart || trail[2].Stage != buildstore.StageSpineSeed {
+		t.Fatalf("trail = %+v (%v), want the new build's start and document-graph above the old build's three", trail, err)
+	}
+	held, err := repo.Files(trail[2].Commit, kb.KBDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removed []string
+	for rel := range held {
+		removed = append(removed, kb.KBDir+"/"+rel)
+	}
+	got, err := repo.Paths(trail[1].Commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(removed)
+	slices.Sort(got)
+	if len(removed) == 0 || !slices.Equal(got, removed) {
+		t.Errorf("the start boundary commits %q, want the removal of every path the old kb-root/ held, %q", got, removed)
+	}
+	if outcome, fields := f.build(t, resuming(f.options())); outcome != result.Done || storetest.Field(fields, "resumed") != true {
+		t.Fatalf("the resume after it = %s %v, want done and resumed", outcome, fields)
+	}
+	if got := f.trailStages(t); len(got) != len(buildstore.Stages)+3 {
+		t.Errorf("trail = %q, want the old build's three boundaries below the new build's %d", got, len(buildstore.Stages))
+	}
+}
+
+// removeKBRoot removes kb-root/ and commits the removal, off the trail, and
+// returns the commit.
+func (f fixture) removeKBRoot(t *testing.T) string {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(f.repo, kb.KBDir)); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := f.ledger(t).Commit("kb-root removed to start over", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commit
+}
+
+// TestAResumeAfterACommittedRemovalIsRefused: with kb-root/ removed and the
+// removal committed there is no KB, so nothing to resume, whatever the trail
+// below the removal records: one usage item, its remedy a fresh build.
+func TestAResumeAfterACommittedRemovalIsRefused(t *testing.T) {
+	f := newFixture(t)
+	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	f.removeKBRoot(t)
+	outcome, fields := f.build(t, resuming(f.options()))
+	items, _ := storetest.Field(fields, "refusals").([]result.Item)
+	want := result.Item{Check: result.CheckUsage, Key: argmark.Flag("resume"), Path: f.ledger(t).Root,
+		Detail: "kb-root/ does not exist: there is no build to resume",
+		Remedy: argmark.Call("build", map[string]any{"volume-root": []string{"<volume-root>"}})}
+	if outcome != result.Refused || len(items) != 1 || !reflect.DeepEqual(items[0], want) {
+		t.Errorf("a resume after the committed removal = %s %+v, want refused with %+v", outcome, items, want)
+	}
+	if _, err := os.Lstat(filepath.Join(f.repo, kb.KBDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("kb-root/ after the refused resume: %v, want it absent", err)
+	}
+}
+
+// TestAFreshBuildAfterACommittedRemovalIsTheTrailRead: a fresh build after a
+// committed removal of kb-root/ starts from the removal, and its boundaries
+// alone are the trail status and build-trail read.
+func TestAFreshBuildAfterACommittedRemovalIsTheTrailRead(t *testing.T) {
+	f := newFixture(t)
+	if outcome, fields := f.build(t, f.options()); outcome != result.Done {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	removal := f.removeKBRoot(t)
+	opts := f.options()
+	opts.Through = buildstore.StageDocumentGraph
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded || storetest.Field(fields, "resumed") != false {
+		t.Fatalf("a fresh build after the committed removal = %s %v, want bounded and not resumed", outcome, fields)
+	}
+	if s := statusOf(t, f); s.state != buildstore.StateBounded || s.recorded != 2 || s.current != buildstore.StageSpineSeed {
+		t.Errorf("status = %+v, want bounded with the fresh build's two stages done", s)
+	}
+	_, listed := buildstore.BuildTrail(buildstore.MonitorOptions{WorkDir: f.repo, StateDir: f.state})
+	boundaries, _ := storetest.Field(listed, "boundaries").([]result.Record)
+	var stages []any
+	for _, b := range boundaries {
+		stages = append(stages, roleValue(b, "stage"))
+	}
+	if want := []any{buildstore.StageStart, buildstore.StageDocumentGraph}; !slices.Equal(stages, want) {
+		t.Errorf("build-trail boundaries = %v, want the fresh build's %v", stages, want)
+	}
+	started, _ := storetest.Field(listed, "started-at").(result.Record)
+	if got := roleValue(started, "commit"); got != removal {
+		t.Errorf("started-at = %v, want the removal %s the fresh build began from", got, removal)
 	}
 }
 
@@ -1264,20 +1543,19 @@ func TestBuildStartsFromACommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	start, startedAt := buildstore.StartedAt(trail)
-	if parent, err := repo.Parent(start.Commit); err != nil || startedAt == "" || parent != startedAt {
-		t.Errorf("started-at = %q, want the start boundary's parent %q (%v)", startedAt, parent, err)
+	if parent := f.parent(t, start.Commit); startedAt == "" || parent != startedAt {
+		t.Errorf("started-at = %q, want the start boundary's parent %q", startedAt, parent)
 	}
 	if slices.ContainsFunc(trail, func(e gitledger.Entry) bool { return e.Commit == startedAt }) {
 		t.Errorf("the trail lists started-at %s", startedAt)
 	}
-	if parent, err := repo.Parent(startedAt); err != nil || parent != "" {
-		t.Errorf("started-at's parent = %q (%v), want none: it is the branch's first commit", parent, err)
+	if parent := f.parent(t, startedAt); parent != "" {
+		t.Errorf("started-at's parent = %q, want none: it is the branch's first commit", parent)
 	}
-	_, rewound := buildstore.Rewind(buildstore.RewindOptions{RepoRoot: f.repo, StateDir: f.state, Target: buildstore.TargetStartedAt})
-	target, _ := storetest.Field(rewound, "target").(result.Record)
-	commands, _ := storetest.Field(rewound, "commands").([]string)
-	if want := []string{"git reset --hard " + startedAt}; !slices.Equal(commands, want) || roleValue(target, "discards") != len(trail) {
-		t.Errorf("rewind to started-at = %v, want commands %q discarding %d", rewound, want, len(trail))
+	_, listed := buildstore.BuildTrail(buildstore.MonitorOptions{WorkDir: f.repo, StateDir: f.state})
+	started, _ := storetest.Field(listed, "started-at").(result.Record)
+	if command, _ := roleValue(started, "command").([]string); !slices.Equal(command, []string{"git reset --keep " + startedAt}) {
+		t.Errorf("build-trail's started-at = %v, want the command git reset --keep %s", started, startedAt)
 	}
 	if err := repo.Restore(startedAt); err != nil {
 		t.Fatal(err)
@@ -1301,7 +1579,7 @@ func TestBuildStartsFromACommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	start, startedAt = buildstore.StartedAt(trail)
-	if parent, _ := g.ledger(t).Parent(start.Commit); startedAt != head || parent != head {
+	if parent := g.parent(t, start.Commit); startedAt != head || parent != head {
 		t.Errorf("started-at = %q, start's parent %q, want both the commit made before the build, %s", startedAt, parent, head)
 	}
 }
@@ -1359,34 +1637,58 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 	}
 }
 
-// TestResumeCarriesEveryLaunchFlag: a walk refused inside its first stage hands
+// resumeArgv is the words a resume — the recorded build call a document
+// carries — holds after the command; nil where it holds no build call.
+func resumeArgv(resume string) []string {
+	calls := argmark.Calls(resume)
+	if len(calls) != 1 || calls[0].Command != "build" {
+		return nil
+	}
+	return calls[0].Argv
+}
+
+// resumesTheBuild is whether resume is the build call opening with --resume.
+func resumesTheBuild(resume string) bool {
+	argv := resumeArgv(resume)
+	return len(argv) > 0 && argv[0] == "--resume"
+}
+
+// TestResumeCarriesEveryLaunchFlag: a walk cancelled once kb-root/ stands hands
 // out the command that continues it, --resume restating --no-inference,
 // --ask-concurrency, the store and the configuration directory, and leaving
 // the bound and the inputs, which the trail records, off.
 func TestResumeCarriesEveryLaunchFlag(t *testing.T) {
 	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	opts := f.options()
-	opts.Through, opts.ConfigDir = buildstore.StageDocumentGraph, filepath.Join(f.repo, "config")
+	opts.now = time.Now
+	opts.Through, opts.ConfigDir = buildstore.StageSpineSeed, filepath.Join(f.repo, "config")
 	opts.AskConcurrency = 3
 	opts.Bibliographies = []string{filepath.Join(f.repo, "refs.bib")}
 	storetest.WriteFile(t, opts.Bibliographies[0], "")
-	storetest.WriteFile(t, filepath.Join(f.repo, "paper.tex"), strings.Replace(paper, "Some opening prose.", "\\input{missing.tex}\nSome opening prose.", 1))
-	outcome, fields := f.build(t, opts)
-	if outcome != result.Refused {
-		t.Fatalf("build = %s %v, want refused inside %s", outcome, fields, buildstore.StageDocumentGraph)
+	opts.beforeUnit = func(_, unit string) {
+		if unit == "seed.graph-init" {
+			cancel()
+		}
+	}
+	outcome, fields := Run(ctx, opts)
+	if outcome != result.Cancelled {
+		t.Fatalf("build = %s %v, want cancelled inside %s", outcome, fields, buildstore.StageSpineSeed)
 	}
 	resume, _ := storetest.Field(fields, "resume").(string)
-	if !strings.HasPrefix(resume, "kbase build --resume ") {
-		t.Errorf("resume = %q, want kbase build --resume", resume)
+	if !resumesTheBuild(resume) {
+		t.Errorf("resume = %q, want the build call opening with --resume", resume)
 	}
+	argv := strings.Join(resumeArgv(resume), " ")
 	for _, want := range []string{"--no-inference", "--ask-concurrency 3", "--state-dir " + f.state, "--config-dir " + opts.ConfigDir} {
-		if !strings.Contains(resume, want) {
-			t.Errorf("resume = %q, want it to carry %q", resume, want)
+		if !strings.Contains(argv, want) {
+			t.Errorf("resume = %q, want it to carry %q", argv, want)
 		}
 	}
 	for _, not := range []string{"--through", "--bibliography", "paper.tex"} {
-		if strings.Contains(resume, not) {
-			t.Errorf("resume = %q carries %s", resume, not)
+		if strings.Contains(argv, not) {
+			t.Errorf("resume = %q carries %s", argv, not)
 		}
 	}
 	// A launch that named no --ask-concurrency or --project-dir is continued
@@ -1433,18 +1735,16 @@ func statusOf(t *testing.T, f fixture) statusSnapshot {
 	if c, ok := storetest.Field(fields, "current").(result.Record); ok {
 		s.current, s.done, s.total = c[0].Value.(string), c[1].Value.(int), c[2].Value.(int)
 	}
-	for _, st := range storetest.Field(fields, "stages").([]result.Record) {
-		if st[1].Value != nil {
-			s.recorded++
-		}
-	}
+	done, _ := roleValue(storetest.Field(fields, "stages").(result.Record), "done").([]string)
+	s.recorded = len(done)
 	return s
 }
 
 func TestStatusAtEveryState(t *testing.T) {
 	f := newFixture(t)
-	if s := statusOf(t, f); s.state != buildstore.StateNone || s.pid != nil || s.current != buildstore.StageStart || s.recorded != 0 {
-		t.Errorf("before any build: %+v", s)
+	// No kb-root/ yet, so no build stands: no current stage either.
+	if s := statusOf(t, f); s.state != buildstore.StateNone || s.pid != nil || s.current != "" || s.recorded != 0 {
+		t.Errorf("before any build: %+v, want none with no current stage", s)
 	}
 
 	opts := f.options()

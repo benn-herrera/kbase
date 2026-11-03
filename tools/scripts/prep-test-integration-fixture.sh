@@ -35,10 +35,6 @@ fi
 
 root="$(pwd -P)"
 built="${root}/${BIN_DIR}/kbase"
-if [[ ! -f "${built}" ]]; then
-    printf 'error: no built kbase at %s — run `just build`.\n' "${built}" >&2
-    exit 1
-fi
 dir="${FIXTURE_DIR}"
 [[ "${dir}" == /* ]] || dir="${INVOCATION_DIR}/${dir}"
 if [[ ! -e "${dir}/.git" ]]; then

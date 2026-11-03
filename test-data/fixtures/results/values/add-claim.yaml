@@ -1,0 +1,13 @@
+# Each claim is placed on its line of statements.md, which the stager appends
+# to the converted a.md (four lines, the last heading A) before this batch.
+entry:
+- title: A Result
+  rationale: Shown.
+  document: a.md
+  line: 6
+  snippet: first result
+- title: Another Result
+  rationale: Shown too.
+  document: a.md
+  line: 8
+  snippet: second result

@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
@@ -21,13 +20,14 @@ func waitCommand() *cobra.Command {
 	var pid int
 	cmd := &cobra.Command{
 		Use:   "wait",
-		Short: "wait for a build run to end, then report the store's status",
-		Long: `wait reads the state store once a second and returns when the run named by
---pid is no longer progressing: another run has superseded it, or its own run
-has ended. It then prints the status document for that store, so a command
-running in the background delivers the build's outcome when it exits. --pid is
-required and must be positive; --state-dir defaults as status's. It takes no
-lock and reads no commit trail until that final document.`,
+		Short: "wait for a build or score run to end, then report the store's status",
+		Long: `wait reads the state store once a second and returns when the run whose pid
+--pid names, a build or a score run, is no longer progressing:
+another run has superseded it, or its own run has ended. It then prints the
+status document for that store, so a command running in the background
+delivers the run's outcome when it exits. --pid is required and must be
+positive; --state-dir defaults as status's. It takes no lock and reads no
+commit trail until that final document.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			emit := func(outcome string, fields []toolresult.Field) error {
@@ -41,7 +41,7 @@ lock and reads no commit trail until that final document.`,
 				return nil
 			}
 			if pid <= 0 {
-				return emit(refused(nil, toolresult.Item{Check: checkUsage, Key: "--pid",
+				return emit(refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--pid",
 					Detail: "--pid is required and must name a run's process, a positive pid"}))
 			}
 			wd, err := invocationDir(cmd)
@@ -68,7 +68,7 @@ lock and reads no commit trail until that final document.`,
 				if err != nil {
 					return emit(failed(placement, err))
 				}
-				if _, err := fmt.Fprint(cmd.OutOrStdout(), doc); err != nil {
+				if err := toolresult.Reemit(documentOut(cmd.OutOrStdout()), []byte(doc)); err != nil {
 					return err
 				}
 				if code != 0 {
@@ -82,7 +82,7 @@ lock and reads no commit trail until that final document.`,
 			return emit(buildstore.Status(opts))
 		},
 	}
-	cmd.Flags().StringVar(&stateDir, "state-dir", "", "the build's state store (default: the store the operation lock names, else $XDG_STATE_HOME/kbase/<key>)")
-	cmd.Flags().IntVar(&pid, "pid", 0, "the process id of the build run to wait for (required)")
+	cmd.Flags().StringVar(&stateDir, "state-dir", "", monitorStateDirUsage)
+	cmd.Flags().IntVar(&pid, "pid", 0, "the process id of the run to wait for (required)")
 	return cmd
 }

@@ -1,0 +1,35 @@
+#### What is drawn
+
+The four scoring relations — `supports`, `founds`, `lifts` and `refutes` — each in
+a stroke of its own, every stroke pointing in the push direction, from the supporter to the node it
+supports. `references` edges are not drawn; a `demoted` edge ([§10](../../10-metadata-format-version/index.md)) is drawn as a cut. A node with
+no drawn edge is not drawn as a node; it is listed in a table titled "unattached (N)", one row per
+node with a link and a tooltip. Of the drawn `supports` edges, only the transitive reduction
+appears; it checks an edge only against the edges still kept.
+
+- *Edges*: each relation is drawn in one style of its own — `supports` black solid, and `founds`,
+  `lifts` and `refutes` each a stroke beside it — whatever the build knew of how an edge was found:
+  the sheet reads no build record. A **cut**, a `demoted` record, is drawn dotted red in the
+  direction of the edge it replaced; its tooltip calls it `cut`, the digest counts cuts beside the
+  other classes (`1 cut`) and draws a bundle of them, and its legend row reads "cut from supports:
+  part of a circle".
+- *Nodes by kind*, seven, each with its own mark: a labelled block (bold frame), an equation, prose,
+  an analysis (dashed rounded), an experiment (component shape), an axiom (grey, bold frame), a work
+  (note). An edge end that no record carries is drawn as a ghost box, dashed red, labelled with the
+  id. Claims and analyses are filled by strength band, `*pending*` in grey. A node's tooltip reads
+  `<id> [<kind>, <band>] <title>`, the band omitted for a node that has none, every backslash in it
+  shown as written (`$\Gamma$` does not become the graph's name).
+- *Links*: every node links to its canonical place ([§10](../../10-metadata-format-version/index.md)) — a claim's or a work's entry on its
+  register page, an analysis's or an experiment's section in the leaf hosting it, an axiom's heading
+  in `axioms.md` — and a claim with no host links nowhere; a digest box links to the volume's index
+  and sheet.
+- A legend. The SVG root is `width="100%"` with a `viewBox`, so it scales to the viewer.
+
+**Without `dot` on `PATH`**, no sheet is rendered: an existing sheet is left as it is, and where
+`kb-root/claim-graph.svg` does not exist the render writes a placeholder there — an SVG naming the
+missing tool and, beneath it, `index sha256:` followed by the first 12 hex digits of the SHA-256 of
+the `.index/` files — the two record files — concatenated in sorted path order, deterministic.
+The command says so in one line on stderr, and its result names the lack ([§7](../../7-tool-result-contract-and-exit-codes/index.md)).
+
+---
+

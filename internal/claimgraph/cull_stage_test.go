@@ -30,7 +30,7 @@ const (
 // the kb-root, the repository root and the stage's options with reader.
 func seedCullStage(t *testing.T, reader asks.MultichoiceReader) (string, string, Options) {
 	t.Helper()
-	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
+	m := kb.StatementMarker
 	root, repo, opts := seedTheoremLeaf(t, map[string]string{cullA: "Result A", cullB: "Result B", cullD: "Theorem 1"},
 		"Alpha holds here."+m(cullA)+"\n\nAlpha holds here, said again."+m(cullB)+"\n\n"+
 			"> **Theorem**\n>\n> **Theorem 1.** Delta holds here."+m(cullD)+"\n")

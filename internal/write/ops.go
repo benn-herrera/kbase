@@ -14,12 +14,9 @@ import (
 	"kbase/internal/result"
 )
 
-// RenderCitation is the one op that reads instead of writing.
-const RenderCitation = "render-citation"
-
-// AddBuildEdges is the build's edge write: add-rests-on's lists, written as a
-// run's and never refused for a cycle, which the build's walk cuts. Only the
-// build issues it, so it is no subcommand.
+// AddBuildEdges is the build's edge write: a node's rests-on and references
+// lists, written as a run's and never refused for a cycle, which the build's
+// walk cuts. Only the build issues it, so it is no subcommand.
 const AddBuildEdges = "add-build-edges"
 
 // DemoteClaimEdge is the build's ring cut: a standing scoring edge replaced by
@@ -32,53 +29,92 @@ const DemoteClaimEdge = "demote-claim-edge"
 // analysis. Only the build issues it, so it is no subcommand.
 const SplitClaim = "split-claim"
 
-// ResolveDemoted removes a demoted record or restores the edge it replaced.
-const ResolveDemoted = "resolve-demoted"
-
-// The actions resolve-demoted takes, and what each reports having done.
+// The edge writes: each names one edge by its source, target and relation.
+// RestoreDemoted restores the edge a demoted record replaced.
 const (
-	actionRemove    = "remove"
-	actionRestore   = "restore"
-	resolvedRemove  = "removed"
-	resolvedRestore = "restored"
+	AddEdge        = "add-edge"
+	EditEdge       = "edit-edge"
+	RemoveEdge     = "remove-edge"
+	RestoreDemoted = "restore-demoted"
 )
 
-var resolveActions = []string{actionRemove, actionRestore}
+// The node adds: each mints its node's id and writes its record, a hosted
+// node's statement marker with it.
+const (
+	AddClaim      = "add-claim"
+	AddAnalysis   = "add-analysis"
+	AddExperiment = "add-experiment"
+	AddWork       = "add-work"
+	AddAxiom      = "add-axiom"
+)
+
+// The node edits: each changes the record fields its entry gives of the node
+// its id names, keeping the node's citations live through a title change.
+const (
+	EditClaim      = "edit-claim"
+	EditAnalysis   = "edit-analysis"
+	EditExperiment = "edit-experiment"
+	EditWork       = "edit-work"
+	EditAxiom      = "edit-axiom"
+)
+
+// The node removal and move: each names its node by id.
+const (
+	RemoveNode = "remove-node"
+	MoveNode   = "move-node"
+)
+
+// AddCitation replaces a span of a named line with a citation of a node.
+const AddCitation = "add-citation"
 
 // checkDependencyCycle is the refusal class of an edge that would close a
 // cycle.
 const checkDependencyCycle = "dependency-cycle"
 
-// opSpec is one write op: its edit of the records, whether it inserts, whether
-// only the build issues it, and whether it writes over a degraded load — the
-// build's, which writes cycles and then cuts them.
+// opSpec is one write op: its edit of the records, whether it adds (minting),
+// edits or removes a node, or names one edge, whether only the build issues
+// it, and whether it writes over records holding a cycle among the scoring
+// edges — the build's, which writes cycles and then demotes them within one
+// stage.
 type opSpec struct {
-	edit         *recordEdit
-	inserts      bool
-	buildOnly    bool
-	overDegraded bool
+	edit       *recordEdit
+	adds       bool
+	edits      bool
+	removes    bool
+	edge       bool
+	buildOnly  bool
+	overCycles bool
+}
+
+// removal is whether op takes away what stands, so that its "no node" or "no
+// edge" refusal may be of a thing an earlier batch already removed. It is no
+// opSpec field: the ops' edits read it, and an edit reading writeOps would
+// make writeOps' initialization refer to itself.
+func removal(op string) bool {
+	return op == RemoveNode || op == RemoveEdge || op == RestoreDemoted
 }
 
 var writeOps = map[string]opSpec{
-	AddBuildEdges:             {edit: &recordEdit{apply: addBuildEdges, machine: true}, buildOnly: true, overDegraded: true},
-	ResolveDemoted:            {edit: &recordEdit{apply: resolveDemoted, prior: refuseRepeatedPairs}},
-	"insert-claim-entry":      {edit: &recordEdit{apply: insertClaimNode}, inserts: true},
-	"insert-analysis-entry":   {edit: &recordEdit{apply: insertAnalysisNode}, inserts: true},
-	"insert-experiment-entry": {edit: &recordEdit{apply: insertExperimentNode}, inserts: true},
-	"insert-work-entry":       {edit: &recordEdit{apply: insertWorkNode}, inserts: true},
-	"insert-axiom-entry":      {edit: &recordEdit{apply: insertAxiomNode}, inserts: true},
-	"set-bearing":             {edit: &recordEdit{field: "bearing", apply: setBearing}},
-	"set-rigor":               {edit: &recordEdit{field: "rigor", apply: setRigor}},
-	"set-rationale":           {edit: &recordEdit{field: "rationale", apply: setRationale}},
-	"set-status":              {edit: &recordEdit{field: "status", apply: setStatus}},
-	"add-rests-on":            {edit: &recordEdit{apply: addRestsOn}},
-	"add-pairs":               {edit: &recordEdit{apply: addPairs}},
-	"mark-claim-in-leaf":      {edit: &recordEdit{apply: markNode}},
-	"drop-claim-edges":        {edit: &recordEdit{apply: dropClaimEdges}},
-	"drop-inbound-edges":      {edit: &recordEdit{apply: dropInboundEdges}},
-	DemoteClaimEdge:           {edit: &recordEdit{apply: demoteEdge}, buildOnly: true, overDegraded: true},
-	SplitClaim:                {edit: &recordEdit{apply: splitClaim, machine: true}, buildOnly: true},
-	"drop-claim-node":         {edit: &recordEdit{apply: refuseStrandedClaim, finish: dropClaimNodes}},
+	AddBuildEdges:   {edit: &recordEdit{apply: addBuildEdges, machine: true}, buildOnly: true, overCycles: true},
+	AddEdge:         {edit: &recordEdit{apply: addEdge}, edge: true},
+	EditEdge:        {edit: &recordEdit{apply: editEdge, prior: refuseFieldless}, edge: true},
+	RemoveEdge:      {edit: &recordEdit{apply: removeEdge}, edge: true},
+	RestoreDemoted:  {edit: &recordEdit{apply: restoreDemoted}, edge: true},
+	AddClaim:        {edit: &recordEdit{apply: addClaim}, adds: true},
+	AddAnalysis:     {edit: &recordEdit{apply: addAnalysis}, adds: true},
+	AddExperiment:   {edit: &recordEdit{apply: addExperiment}, adds: true},
+	AddWork:         {edit: &recordEdit{apply: addWork}, adds: true},
+	AddAxiom:        {edit: &recordEdit{apply: addAxiom}, adds: true},
+	EditClaim:       {edit: &recordEdit{apply: editNode(kb.NodeKindClaim), prior: refuseFieldless}, edits: true},
+	EditAnalysis:    {edit: &recordEdit{apply: editNode(kb.NodeKindAnalysis), prior: refuseFieldless}, edits: true},
+	EditExperiment:  {edit: &recordEdit{apply: editNode(kb.NodeKindExperiment), prior: refuseFieldless}, edits: true},
+	EditWork:        {edit: &recordEdit{apply: editNode(kb.NodeKindWork), prior: refuseFieldless}, edits: true},
+	EditAxiom:       {edit: &recordEdit{apply: editNode(kb.NodeKindAxiom), prior: refuseFieldless}, edits: true},
+	RemoveNode:      {edit: &recordEdit{apply: removeNode}, removes: true},
+	MoveNode:        {edit: &recordEdit{apply: moveNode}, edits: true},
+	AddCitation:     {edit: &recordEdit{apply: addCitation}},
+	DemoteClaimEdge: {edit: &recordEdit{apply: demoteEdge}, buildOnly: true, overCycles: true},
+	SplitClaim:      {edit: &recordEdit{apply: splitClaim, machine: true}, buildOnly: true},
 }
 
 // Ops is every write op a caller may issue, by name, sorted.
@@ -93,10 +129,13 @@ func Ops() []string {
 	return names
 }
 
-// OpField is one key of an op's values entry.
+// OpField is one key of an op's values entry: its name, whether an entry
+// requires it, and its type and description as the op's help lists them.
 type OpField struct {
-	Name     string
-	Required bool
+	Name        string
+	Required    bool
+	Type        string
+	Description string
 }
 
 // OpVocabulary is a caller-issued op's values-entry keys, in vocabulary
@@ -107,25 +146,46 @@ func OpVocabulary(op string) (fields []OpField, ok bool) {
 		return nil, false
 	}
 	for _, f := range vocabulary {
-		fields = append(fields, OpField{Name: f.name, Required: f.required})
+		fields = append(fields, OpField{Name: f.name, Required: f.required, Type: f.typ, Description: f.about})
 	}
 	return fields, true
 }
 
-// Inserts is whether op enters nodes, reporting their ids.
-func Inserts(op string) bool { return writeOps[op].inserts }
+// Adds is whether op mints one node per entry, reporting its id.
+func Adds(op string) bool { return writeOps[op].adds }
 
-// Options is one op invocation over the KB at KBRoot. Provenance is who
-// supplied the rigor and bearing values it writes. Restamp, where set, is
-// called on the source before the trailing refresh, to put in it the stamped
-// documents a migration save writes.
+// Edits is whether op edits the node each entry's id names, reporting the id.
+func Edits(op string) bool { return writeOps[op].edits }
+
+// Removes is whether op removes the node each entry's id names, reporting the
+// id and the edge records it removed.
+func Removes(op string) bool { return writeOps[op].removes }
+
+// WritesEdge is whether op names one edge per entry, reporting its source,
+// target and relation.
+func WritesEdge(op string) bool { return writeOps[op].edge }
+
+// Batch is the op of kbase write's mixed batch, whose entries each name their
+// op under operation.
+const Batch = "write"
+
+// Options is one batch over the KB at KBRoot, its values document Values.
+// DryRun does everything but write, as the document's dry-run does. Commit
+// makes the batch a committing one, as the document's commit does; the
+// commits are the caller's. Preflight runs once a committing batch's entries
+// and derivation are known, before its first write, a dry run's included; it
+// is told whether the batch is a dry run, on which the caller commits nothing.
+// Its error stops the batch with nothing written, a result.Refusal refusing it
+// and any other error failing it. Provenance is who supplied the rigor and
+// bearing values it writes.
 type Options struct {
 	KBRoot     string
 	Values     []byte
-	NoRefresh  bool
+	DryRun     bool
+	Commit     bool
+	Preflight  func(dryRun bool) error
 	Provenance Provenance
 	Logger     log.Logger
-	Restamp    func(*kb.Source) error
 }
 
 // Provenance is who supplied a write's rigor and bearing values, which decides
@@ -141,43 +201,78 @@ const (
 	ProvenanceMachine
 )
 
-// Result is what an op did. IDs is an insert's id per entry, minted or
-// adopted; Minted the ones this call drew; Adopted the entries already
-// there. Refreshed is what the trailing refresh wrote, nil where none ran,
-// and Removed what it removed. Resolved is each demoted edge resolve-demoted
-// changed. Migration is what the load converted, nil on a KB at the current
-// version.
+// Result is what a batch did, or, under DryRun, would do. Entries is each
+// entry's report, in order, where the batch applied. Written is every
+// kb-root-relative path it wrote — records, leaves and derived files — and
+// Removed every one the derivation removed. Derived is whether the derivation
+// ran, and Drawn whether it drew the sheets, which it does not without
+// Graphviz dot. Migration is what the load converted, nil on a KB at the
+// current version. Commit is whether the batch commits, by Options.Commit or
+// the document's commit.
 type Result struct {
 	Outcome   string
+	DryRun    bool
+	Commit    bool
+	Entries   []EntryResult
 	Written   []string
-	IDs       []string
-	Minted    []string
-	Adopted   []Adoption
-	Refreshed []string
 	Removed   []string
-	Resolved  []Resolution
-	Citations []string
+	Derived   bool
+	Drawn     bool
 	Migration *kb.Migration
 	Refusals  []result.Item
 	Failures  []result.Item
 }
 
-// Resolution is one demoted edge resolved: the values' id and target, and
-// what was done, removed or restored.
-type Resolution struct {
-	Source, Target, Action string
+// EntryResult is one batch entry's report: its 1-based position, its op, and
+// whether it changed the KB, done or unchanged. An add's and an edit's entry
+// also names the node it minted or edited. An add-axiom entry's Heading is marked or appended: how the axiom's
+// marked heading came to stand. Names is the node ids the entry's values name
+// — its id, source and target. An edge op's entry names its edge by Source,
+// Target and Relation,
+// and a restore-demoted entry's Restored is the relations it put back. A
+// remove-node entry's RemovedEdges is every edge record it removed, as edge
+// rows. An add-citation entry's ID is the node it cites, and Document, Line
+// and Link the citing document, the 1-based line and the link it wrote there.
+// An edit-work entry that changes the work's label carries Rewritten, every
+// line it rewrote a reference on, [] where none; it is nil on every other
+// entry.
+type EntryResult struct {
+	Entry        int
+	Operation    string
+	Outcome      string
+	Names        []string
+	ID           string
+	Heading      string
+	Source       string
+	Target       string
+	Relation     string
+	Restored     []string
+	RemovedEdges []kb.EdgeRow
+	Document     string
+	Line         int
+	Link         string
+	Rewritten    []Rewritten
 }
 
-// Adoption is an insert entry that landed on an entry already there: the
-// entry's 1-based index in the values, the id it adopted, and the values
-// keys whose supplied value the existing entry does not carry.
-type Adoption struct {
-	Entry   int
-	ID      string
-	Differs []string
+// Rewritten is one line a work's label change rewrote a reference on: its
+// kb-root-relative path and its 1-based line.
+type Rewritten struct {
+	Path string
+	Line int
 }
 
-// checkWrite is the class of a failure inside the write or its refresh.
+// IDs is the node each entry naming one reports, in entry order.
+func (r Result) IDs() []string {
+	var ids []string
+	for _, e := range r.Entries {
+		if e.ID != "" {
+			ids = append(ids, e.ID)
+		}
+	}
+	return ids
+}
+
+// checkWrite is the class of a failure inside the write.
 const checkWrite = "write"
 
 // symlinkRemedy is what clears a document that is a symbolic link.
@@ -210,8 +305,14 @@ type readbackFailed struct {
 
 func (e *readbackFailed) Error() string { return e.subject }
 
-// Run executes one op over the values in opts. It takes no lock: a caller
-// other than the build, which holds the operation lock, holds LockKB across it.
+// Run runs the batch in opts.Values: op's entries alone, or, where op is
+// Batch, entries each naming their op. Every entry's shape is checked first,
+// every fault reported at once; then the entries apply in memory, in order,
+// stopping at the first refusal; then the derivation is computed over what
+// they left; and only then is every changed file written, unless the batch is
+// a dry run. A batch that fails anywhere writes
+// nothing. It takes no lock: a caller other than the build, which holds the
+// operation lock, holds LockKB across it.
 func Run(op string, opts Options) Result {
 	if opts.Logger == nil {
 		opts.Logger = log.Discard()
@@ -220,87 +321,151 @@ func Run(op string, opts Options) Result {
 		return failedResult(opts.KBRoot + " is not a directory, so no KB can be resolved under it")
 	}
 	root := kb.ResolvePath(opts.KBRoot)
-	entries, refusals := parseValues(opts.Values, op)
+	b, refusals := parseValues(opts.Values, op)
+	b.dryRun = b.dryRun || opts.DryRun
+	b.commit = b.commit || opts.Commit
 	if refusals != nil {
-		return Result{Outcome: result.Refused, Refusals: refusals}
+		return Result{Outcome: result.Refused, DryRun: b.dryRun, Commit: b.commit, Refusals: refusals}
 	}
 	src, err := kbload.Open(root)
 	if err != nil {
-		return errorResult(err)
+		res := errorResult(err)
+		res.DryRun, res.Commit = b.dryRun, b.commit
+		return res
 	}
-	res := runOverSource(op, opts, src, entries)
+	res := runOverSource(op, opts, src, b)
+	res.DryRun, res.Commit = b.dryRun, b.commit
 	if m, ok := src.Migration(); ok {
 		res.Migration = &m
 	}
 	return res
 }
 
+// DocumentDryRun is whether the values document of op says dry-run: true, as
+// Run reads it. Refusals are ignored, so it is false where the document does
+// not parse as far as the option.
+func DocumentDryRun(op string, values []byte) bool {
+	b, _ := parseValues(values, op)
+	return b.dryRun
+}
+
 // runOverSource is Run's work over the KB its loader opened.
-func runOverSource(op string, opts Options, src *kb.Source, entries []entry) Result {
-	if op == RenderCitation {
-		return renderCitations(src, entries)
+func runOverSource(op string, opts Options, src *kb.Source, b batch) Result {
+	derive, overCycles := index.Derive, false
+	for _, e := range b.entries {
+		if writeOps[e.Op].overCycles {
+			derive, overCycles = index.DeriveOverCycles, true
+		}
 	}
-	spec, ok := writeOps[op]
-	if !ok {
-		return failedResult("unknown op " + op)
-	}
-	rows, err := index.Derive(src)
+	rows, err := derive(src)
 	if err != nil {
 		return errorResult(err)
 	}
-	if res, refused := degradedRefusal(rows); refused && !spec.overDegraded {
-		return res
+	if err := index.PendingConversion(src); err != nil {
+		return errorResult(err)
 	}
-	if opts.NoRefresh && src.Migrated() {
-		return refusedResult(result.Item{Check: index.CheckIndex, Path: src.KBPath(kb.EntryPointFile), Remedy: index.RefreshRemedy,
-			Detail: fmt.Sprintf("the KB's metadata format is %s and a write lands in %s only through the refresh that rewrites the whole KB, "+
-				"which --no-refresh skips; no save mixes two formats", src.Version(), kb.FormatVersion)})
+	if err := index.Precheck(src); err != nil {
+		return errorResult(err)
 	}
-	if !opts.NoRefresh {
-		if err := index.Precheck(src); err != nil {
-			return errorResult(err)
+	a, err := applyEntries(src, b.entries, opts.Provenance, rows.Hosts)
+	if err != nil {
+		return errorResult(err)
+	}
+	contended := func() *Result {
+		for _, c := range a.changes {
+			if !stillMatches(src, c.target, c.disk) {
+				return &Result{Outcome: result.Retry, Refusals: []result.Item{{Check: kb.CheckLock, Path: src.Repo(), Key: c.subject,
+					Remedy: RetryRemedy(op),
+					Detail: "changed between the read and the replace; a concurrent writer intervened. The values were correct and nothing was written"}}}
+			}
+		}
+		return nil
+	}
+	if res := contended(); res != nil {
+		return *res
+	}
+	for i := range a.entries {
+		e := b.entries[a.entries[i].Entry-1]
+		a.entries[i].Names = e.names()
+		if WritesEdge(e.Op) {
+			a.entries[i].Source, a.entries[i].Target, a.entries[i].Relation = e.str("source"), e.str("target"), e.str("relation")
 		}
 	}
-	var res Result
-	out, b, err := editRecords(src, spec.edit, entries, opts.Provenance, rows.Hosts)
-	if b != nil {
-		res = Result{IDs: b.ids, Minted: b.minted, Adopted: b.adopted, Resolved: b.resolved}
+	res := Result{Entries: a.entries}
+	for _, c := range a.changes {
+		src.Put(c.target, c.data)
 	}
-	if err != nil {
-		return interruptedResult(res, err)
+	derived, err := index.PlanDerivation(src)
+	switch {
+	case err == nil:
+		res.Derived, res.Drawn = true, derived.Drawn
+	case !overCycles || !holdsOnlyCycles(src):
+		return errorResult(err)
 	}
-	if out.status == statusRetry {
-		return Result{Outcome: result.Retry, Refusals: []result.Item{{Check: kb.CheckLock, Path: src.Repo(), Key: out.subject,
-			Remedy: RetryRemedy(op),
-			Detail: fmt.Sprintf("%s (%s). The values were correct and nothing was written", out.detail, out.reason)}}}
+	changes := a.changes
+	for _, f := range derived.Files {
+		changes = append(changes, change{subject: f.Rel, target: src.KBPath(f.Rel), data: f.Data})
 	}
-	res.Written = out.written
+	for _, c := range changes {
+		res.Written = append(res.Written, c.subject)
+	}
+	res.Removed = append([]string{}, derived.Removed...)
+	if b.commit && opts.Preflight != nil {
+		if err := opts.Preflight(b.dryRun); err != nil {
+			return errorResult(err)
+		}
+		if !b.dryRun {
+			if res := contended(); res != nil {
+				return *res
+			}
+		}
+	}
+	if !b.dryRun {
+		if err := writeChanges(src, changes, derived.Removed); err != nil {
+			return interruptedResult(res, err)
+		}
+	}
+	slices.Sort(res.Written)
+	res.Written = slices.Compact(res.Written)
+	slices.Sort(res.Removed)
 	res.Outcome = result.Unchanged
-	if out.status == statusWritten {
-		res.Outcome = result.Done
-	}
-	if opts.NoRefresh {
-		return res
-	}
-	var refreshed, removed []string
-	if opts.Restamp != nil {
-		err = opts.Restamp(src)
-	}
-	if err == nil {
-		refreshed, removed, _, err = index.RefreshReporting(src, opts.Logger)
-	}
-	slices.Sort(refreshed)
-	res.Refreshed = append([]string{}, slices.Compact(refreshed)...)
-	res.Removed = append([]string{}, removed...)
-	if err != nil {
-		res.Outcome = result.Failed
-		res.Failures = []result.Item{{Check: checkWrite, Detail: "the write landed and the trailing refresh did not: " + err.Error()}}
-		return res
-	}
-	if len(res.Refreshed) > 0 || len(res.Removed) > 0 {
+	if len(res.Written) > 0 || len(res.Removed) > 0 || slices.ContainsFunc(res.Entries, func(e EntryResult) bool { return e.Outcome == result.Done }) {
 		res.Outcome = result.Done
 	}
 	return res
+}
+
+// holdsOnlyCycles is whether the derivation refuses the records src holds for
+// a cycle among their scoring edges and for nothing else. The build's edge
+// write closes such a cycle and its ring cut demotes it in the batch after,
+// whose derivation brings the derived files current: a batch of a build-only
+// op that leaves one writes its records without the derivation, which cannot
+// read them.
+func holdsOnlyCycles(src *kb.Source) bool {
+	if _, err := index.Derive(src); err == nil {
+		return false
+	}
+	_, err := index.DeriveOverCycles(src)
+	return err == nil
+}
+
+// writeChanges writes each change in turn, then removes each of removed,
+// kb-root-relative; a failure part-way is an interruptedError naming what
+// already landed.
+func writeChanges(src *kb.Source, changes []change, removed []string) error {
+	var written []string
+	for _, c := range changes {
+		if err := index.WriteKBFile(src, c.target, c.data); err != nil {
+			return &interruptedError{written: written, failed: c.subject, cause: err}
+		}
+		written = append(written, c.subject)
+	}
+	for _, rel := range removed {
+		if err := index.RemoveKBFile(src, src.KBPath(rel)); err != nil {
+			return &interruptedError{written: written, failed: rel, cause: err}
+		}
+	}
+	return nil
 }
 
 // interruptedResult is res failed where err interrupted a batch after some of
@@ -308,7 +473,8 @@ func runOverSource(op string, opts Options, src *kb.Source, entries []entry) Res
 func interruptedResult(res Result, err error) Result {
 	var ie *interruptedError
 	if errors.As(err, &ie) {
-		res.Outcome, res.Written = result.Failed, ie.written
+		res.Outcome, res.Written, res.Removed = result.Failed, ie.written, nil
+		res.Entries = nil
 		res.Failures = []result.Item{{Check: checkWrite, Detail: ie.Error()}}
 		return res
 	}

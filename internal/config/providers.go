@@ -3,12 +3,18 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"kbase/internal/secret"
 )
 
 // Provider kind and wire protocol. kbase is an inference-only appliance — one
@@ -52,13 +58,26 @@ const (
 	keyFileExposedBits = 0o044
 )
 
+// ProviderNamePattern is what every providers.toml entry's name matches, and
+// ProviderNameRule says it in words, ProviderNameChars being the words for a
+// text that names the subject itself. internal/auth names key files by the
+// same rule and, importing no config, states it again; a test pins the two
+// equal.
+const (
+	ProviderNamePattern = `^[A-Za-z0-9_][A-Za-z0-9_-]*$`
+	ProviderNameChars   = `one or more ASCII letters, digits, "_" or "-", not beginning with "-"`
+	ProviderNameRule    = `a provider name is ` + ProviderNameChars
+)
+
+var providerName = regexp.MustCompile(ProviderNamePattern)
+
 // A Provider declares WHERE and HOW to reach an endpoint — never WHICH
 // MODEL to use. Providers rotate their catalogues constantly, so a model
 // id pinned to a pool entry is a field that begs to go stale. The model
 // choice lives in config.toml [models], which is the one place a user
 // looks for it.
 type Provider struct {
-	Name    string `toml:"-"` // table header from TOML; populated post-decode
+	Name    string `toml:"-"` // table header from TOML, folded to lowercase; populated post-decode
 	BaseURL string `toml:"baseUrl"`
 
 	// Type is the provider kind. Optional; empty means
@@ -74,19 +93,24 @@ type Provider struct {
 
 	// DecisionsFlavor is which decision surface this endpoint's server
 	// speaks. Optional; empty means FlavorSystemOne. It names a wire
-	// shape, never a model: the decision category's id stays in
+	// shape, never a model: the decision role's id stays in
 	// config.toml.
 	DecisionsFlavor string `toml:"decisionsFlavor"`
 
 	// APIKeyFile is a path to a file holding the API key. Relative paths
-	// resolve against the providers.toml directory. It is the only way an
-	// entry supplies a key: the secret stays out of providers.toml, so the
-	// config file itself is safe to scan and edit.
+	// resolve against the providers.toml directory. It is the only key field
+	// an entry has: the secret stays out of providers.toml, so the config
+	// file itself is safe to scan and edit. A key stored under the entry's
+	// name outranks it (see keyKind).
 	APIKeyFile string `toml:"apiKeyFile"`
 
-	// APIKey is the resolved key — populated by LoadProviders from the file
-	// APIKeyFile names. Not a TOML field.
-	APIKey string `toml:"-"`
+	// APIKey is the resolved key — populated by LoadProviders from the
+	// credentials store or the file APIKeyFile names. Not a TOML field.
+	APIKey secret.Key `toml:"-"`
+
+	// KeyStored is whether the credentials store holds a key under the
+	// entry's name. Populated by LoadProviders, never by the file.
+	KeyStored bool `toml:"-"`
 
 	// Layer is the configuration layer this entry came from — repository or
 	// global, or the source of the one directory a flag or the environment
@@ -99,15 +123,23 @@ type Provider struct {
 type Providers map[string]Provider
 
 // ProviderFault names a provider that parsed correctly but did not load
-// cleanly — an unusable declaration, an unreadable apiKeyFile, or a key
-// file anyone on the machine can read. The fault lets the caller surface
-// the problem without discarding the rest of the pool.
+// cleanly — an unusable declaration, an unreadable apiKeyFile, a key
+// file anyone on the machine can read, or a stored key file that did not
+// open — or, with no Name, the credentials store's directory, which did not
+// list. The fault lets the caller surface the problem without discarding the
+// rest of the pool.
 type ProviderFault struct {
 	Name   string
 	Reason string // never carries key content — path/IO detail only
 
+	// Source is what the fault is against: a providers.toml entry, a stored
+	// key file, or the store's directory.
+	Source FaultSource
+
 	// Path is the providers.toml this fault came from: the layer's own file,
-	// never the single path a one-directory report used to assume.
+	// never the single path a one-directory report used to assume — or, for a
+	// stored key file that did not open, that file, and for the store's
+	// directory, that directory.
 	Path string
 
 	// Warning distinguishes a fault the provider SURVIVED from one that
@@ -117,6 +149,37 @@ type ProviderFault struct {
 	// kind, so a fault built without considering this stays the strict
 	// one.
 	Warning bool
+
+	// KeyFileUnread is the dropping fault of an entry whose apiKeyFile could
+	// not be read. A stored key outranks that file, so storing one clears it.
+	KeyFileUnread bool
+
+	// DoesNotOpen is a stored key file that stands and is truncated or does
+	// not decrypt, so adding the key again, which replaces the file, clears it.
+	DoesNotOpen bool
+}
+
+// FaultSource is what a ProviderFault is against.
+type FaultSource int
+
+const (
+	// SourceEntry is a providers.toml entry, the file being Path.
+	SourceEntry FaultSource = iota
+	// SourceStoreFile is the stored key file at Path, read for the entry Name.
+	SourceStoreFile
+	// SourceStoreDir is the store's directory at Path, which did not list;
+	// Name is empty.
+	SourceStoreDir
+)
+
+// LocatedReason is the fault's reason as a line that stands on its own states
+// it: a store fault's led by its path, which its reason does not name; an
+// entry's as it is.
+func (f ProviderFault) LocatedReason() string {
+	if f.Source == SourceEntry {
+		return f.Reason
+	}
+	return f.Path + ": " + f.Reason
 }
 
 // Kind returns the normalized (trimmed, lower-cased) provider type,
@@ -159,11 +222,17 @@ func (p Provider) Flavor() string {
 // missing from the selection list.
 //
 // Reasons quote the offending type/api/decisionsFlavor value — never a
-// credential field — so the message identifies the typo it is complaining
-// about.
+// credential field, and never the baseUrl, which may carry one — so the
+// message identifies the typo it is complaining about.
 func (p Provider) Validate() error {
 	if strings.TrimSpace(p.BaseURL) == "" {
 		return errors.New("no baseUrl declared")
+	}
+	if baseURLCarriesCredentials(p.BaseURL) {
+		return errors.New("baseUrl carries credentials, which belong in the key store (kbase auth add)")
+	}
+	if !absoluteHTTPURL(p.BaseURL) {
+		return errors.New("baseUrl is no absolute http or https URL")
 	}
 	if kind := p.Kind(); kind != ProviderTypeInference {
 		return fmt.Errorf("unknown type %q (known types: %s)", p.Type, ProviderTypeInference)
@@ -181,19 +250,39 @@ func (p Provider) Validate() error {
 	return nil
 }
 
+// baseURLCarriesCredentials reports whether raw parses to a URL carrying user
+// info, user:key@ or key@ before its host.
+func baseURLCarriesCredentials(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.User != nil
+}
+
+// absoluteHTTPURL reports whether raw parses to an http or https URL with a
+// host. A string that does not parse, a scheme-less user:key@host among them,
+// is not one.
+func absoluteHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 // LoadProviders reads providers.toml at path and returns a name-keyed
-// map. Each provider's API key is resolved from the file its APIKeyFile
-// names, read relative to the providers.toml directory; an entry that names
-// no file has no key.
+// map, each table name folded to lowercase: the name every provider is known
+// by. Each provider's API key is the one storedKeys holds under that
+// name, as the store names its files; else the one in
+// the file its APIKeyFile names, read relative to the providers.toml
+// directory; else none (keyKind). An entry with a stored key never reads its
+// APIKeyFile.
 //
 // A nonexistent or empty file yields an empty Providers, no faults, and a
 // nil error — a fresh install has no populated providers.toml yet.
 //
 // The error return is reserved for file-level failures only: the
-// providers.toml file unreadable (non-not-exist), malformed TOML, or a
-// field no Provider models — the table headers are provider names and so
-// stay open, but the fields inside them are a fixed set and a misspelled
-// one refuses the load (see rejectUnknownKeys). A
+// providers.toml file unreadable (non-not-exist), malformed TOML, a
+// field no Provider models — the table headers are provider names, an open
+// set, but the fields inside them are a fixed set and a misspelled one
+// refuses the load (see rejectUnknownKeys) — or a table header that breaks
+// the provider-name rule or differs from another only by case (see
+// rejectProviderNames). A
 // provider that is individually unusable — a mismatched `type`/`api`
 // pair, a missing baseUrl, or an apiKeyFile that cannot be read — does
 // NOT abort the load: it is omitted from the returned map and appended to
@@ -206,15 +295,30 @@ func (p Provider) Validate() error {
 // Errors and faults are constructed without TOML value content or key
 // material — a parse error references line/column, and a key-file read
 // failure references the path, so no secret leaks.
-func LoadProviders(path string) (Providers, []ProviderFault, error) {
-	data, err := os.ReadFile(path)
+func LoadProviders(path string, storedKeys map[string]secret.Key) (Providers, []ProviderFault, error) {
+	data, err := readProvidersFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Providers{}, nil, nil
-		}
-		return nil, nil, fmt.Errorf("providers: read %s: %w", path, err)
+		return nil, nil, err
 	}
+	return parseProviders(path, data, storedKeys)
+}
 
+// readProvidersFile returns the providers.toml at path: a file that does not
+// stand is no content and no error.
+func readProvidersFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("providers: read %s: %w", path, err)
+	}
+	return data, nil
+}
+
+// parseProviders is LoadProviders over data, the content of the providers.toml
+// at path.
+func parseProviders(path string, data []byte, storedKeys map[string]secret.Key) (Providers, []ProviderFault, error) {
 	raw := map[string]Provider{}
 	md, err := toml.Decode(string(data), &raw)
 	if err != nil {
@@ -226,18 +330,22 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 		return nil, nil, fmt.Errorf("providers: parse %s: %w", path, err)
 	}
 	// A file-level refusal, like a parse error: the provider NAMES are the
-	// table headers and stay open, but a misspelled field inside an entry
+	// table headers, an open set, but a misspelled field inside an entry
 	// ("baseURL") would otherwise leave the entry pointing nowhere with
 	// nothing said. Runs before the per-entry loop so no key file is read
 	// for a file that is going to be rejected.
 	if err := rejectUnknownKeys(path, md); err != nil {
 		return nil, nil, fmt.Errorf("providers: %w", err)
 	}
+	if err := rejectProviderNames(path, slices.Sorted(maps.Keys(raw))); err != nil {
+		return nil, nil, fmt.Errorf("providers: %w", err)
+	}
 
 	dir := filepath.Dir(path)
 	out := make(Providers, len(raw))
 	var faults []ProviderFault
-	for name, p := range raw {
+	for table, p := range raw {
+		name := strings.ToLower(table)
 		p.Name = name
 		// Shape before secrets: an entry nothing can route to is dropped
 		// with a named reason rather than silently vanishing from the
@@ -247,33 +355,73 @@ func LoadProviders(path string) (Providers, []ProviderFault, error) {
 			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
 			continue
 		}
-		key, err := resolveAPIKey(p, dir)
-		if err != nil {
-			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error()})
-			continue
+		p.APIKey, p.KeyStored = storedKeys[name]
+		if keyKind(p) == KeyKindFile {
+			key, err := resolveAPIKey(p, dir)
+			if err != nil {
+				faults = append(faults, ProviderFault{Name: name, Path: path, Reason: err.Error(), KeyFileUnread: true})
+				continue
+			}
+			if reason := keyFileExposure(p, dir); reason != "" {
+				faults = append(faults, ProviderFault{Name: name, Path: path, Reason: reason, Warning: true})
+			}
+			p.APIKey = key
 		}
-		if reason := keyFileExposure(p, dir); reason != "" {
-			faults = append(faults, ProviderFault{Name: name, Path: path, Reason: reason, Warning: true})
-		}
-		p.APIKey = key
 		out[name] = p
 	}
 	return out, faults, nil
+}
+
+// rejectProviderNames refuses the providers.toml at path where any of its
+// entry names, in sorted order, breaks the provider-name rule — naming every
+// such entry — or differs from another only by case. It returns nil when
+// every name is usable and distinct.
+func rejectProviderNames(path string, names []string) error {
+	var unusable []string
+	for _, name := range names {
+		if !providerName.MatchString(name) {
+			unusable = append(unusable, fmt.Sprintf("%q", name))
+		}
+	}
+	switch len(unusable) {
+	case 0:
+	case 1:
+		return fmt.Errorf("%s: entry %s is not a usable provider name — %s", path, unusable[0], ProviderNameRule)
+	default:
+		return fmt.Errorf("%s: entries %s are not usable provider names — %s", path, strings.Join(unusable, ", "), ProviderNameRule)
+	}
+	// TOML keys are case-sensitive, so names are distinct as stated and a
+	// collision is a different spelling of a name already seen.
+	var pairs []string
+	seen := map[string]string{}
+	for _, name := range names {
+		folded := strings.ToLower(name)
+		if first, ok := seen[folded]; ok {
+			pairs = append(pairs, fmt.Sprintf("%q and %q", first, name))
+			continue
+		}
+		seen[folded] = name
+	}
+	if len(pairs) > 0 {
+		return fmt.Errorf("%s: entries %s differ only by case, which no two entry names may; rename one",
+			path, strings.Join(pairs, "; "))
+	}
+	return nil
 }
 
 // resolveAPIKey returns the provider's API key, read from the file
 // APIKeyFile names; an entry that names no file resolves to no key. The
 // key file's content is trimmed of surrounding whitespace. The returned
 // error never carries key content — only the file path, on an I/O failure.
-func resolveAPIKey(p Provider, dir string) (string, error) {
+func resolveAPIKey(p Provider, dir string) (secret.Key, error) {
 	if p.APIKeyFile == "" {
-		return "", nil
+		return secret.Key{}, nil
 	}
 	b, err := os.ReadFile(keyFilePath(p, dir))
 	if err != nil {
-		return "", fmt.Errorf("read apiKeyFile: %w", err)
+		return secret.Key{}, fmt.Errorf("read the key file providers.toml names: %w", err)
 	}
-	return strings.TrimSpace(string(b)), nil
+	return secret.NewKey(strings.TrimSpace(string(b))), nil
 }
 
 // keyFilePath resolves the provider's apiKeyFile: a leading ~ expands from the
@@ -315,5 +463,5 @@ func keyFileExposure(p Provider, dir string) string {
 	if mode&keyFileExposedBits == 0 {
 		return ""
 	}
-	return fmt.Sprintf("apiKeyFile %s is readable beyond its owner (mode %#o) — chmod 600 it", path, mode)
+	return fmt.Sprintf("key file %s, named in providers.toml, is readable beyond its owner (mode %#o) — chmod 600 it", path, mode)
 }

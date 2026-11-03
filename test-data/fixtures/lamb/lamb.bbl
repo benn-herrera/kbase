@@ -1,0 +1,13 @@
+% Bibtex's OUTPUT, and the shape an arXiv tarball usually ships instead of a
+% .bib: LaTeX markup, only the cited works, already formatted to the style.
+%
+% kbase offers pandoc .bib files alone as bibliographies, so this file reaches
+% a build only through a paper that \inputs or inlines it, which is a staging
+% step rather than anything this file can declare. Read that way, with no .bib
+% offered, pandoc runs without --citeproc and with no filter: the \cite is
+% recorded key-only and renders as its key, no references leaf is written, and
+% `thebibliography` reaches the leaf of the section it closes as a block of
+% its own class, from which a --no-inference build declares no claim.
+\begin{thebibliography}{1}
+\bibitem[Nobody(2026)]{nobody2026} Nobody. \emph{Nothing}. 2026.
+\end{thebibliography}

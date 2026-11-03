@@ -68,7 +68,7 @@ func weightOf(table FaultTable, id string) int {
 // slug, status phrase and label — at the standing cut, and a strength below the
 // rung above it falls there whatever carried it.
 func TestBottomRungStatesAnOutcome(t *testing.T) {
-	rung := BuildBandLadder[len(BuildBandLadder)-1]
+	rung := StrengthBandLadder[len(StrengthBandLadder)-1]
 	if rung.Slug != "unsubstantiated" || rung.StatusPhrase != "unsubstantiated" || rung.Label != "unsubstantiated" {
 		t.Errorf("the bottom rung = %+v, want unsubstantiated in every field", rung)
 	}

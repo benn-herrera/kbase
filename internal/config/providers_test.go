@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kbase/internal/secret"
 )
 
 // fakeKey is the placeholder credential used throughout these tests. It is
@@ -75,7 +78,7 @@ type = "inference"
 api = "openai"
 `)
 
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
@@ -90,8 +93,8 @@ api = "openai"
 		if p.Name != name {
 			t.Errorf("%s: Name = %q, want the table header", name, p.Name)
 		}
-		if p.APIKey != fakeKey {
-			t.Errorf("%s: APIKey not resolved (len %d)", name, len(p.APIKey))
+		if p.APIKey.Reveal() != fakeKey {
+			t.Errorf("%s: APIKey not resolved (len %d)", name, len(p.APIKey.Reveal()))
 		}
 		if p.BaseURL == "" {
 			t.Errorf("%s: BaseURL empty", name)
@@ -111,15 +114,15 @@ func TestLoadProvidersAbsoluteKeyFile(t *testing.T) {
 baseUrl = "https://api.example.com/v1"
 apiKeyFile = "`+keyPath+`"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
 	if len(faults) != 0 {
 		t.Fatalf("unexpected faults: %+v", faults)
 	}
-	if got["reaper"].APIKey != fakeKey {
-		t.Errorf("absolute apiKeyFile did not resolve (len %d)", len(got["reaper"].APIKey))
+	if got["reaper"].APIKey.Reveal() != fakeKey {
+		t.Errorf("absolute apiKeyFile did not resolve (len %d)", len(got["reaper"].APIKey.Reveal()))
 	}
 }
 
@@ -138,7 +141,7 @@ apiKeyFile = "healthy.key"
 baseUrl = "http://x/v1"
 apiKeyFile = "not-here.key"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("an unreadable key file must not fail the whole load: %v", err)
 	}
@@ -151,14 +154,17 @@ apiKeyFile = "not-here.key"
 	if len(faults) != 1 || faults[0].Name != "broken" {
 		t.Fatalf("want exactly one fault naming broken, got %+v", faults)
 	}
-	if !strings.Contains(faults[0].Reason, "apiKeyFile") {
-		t.Errorf("fault reason %q does not name the failing field", faults[0].Reason)
+	if !strings.Contains(faults[0].Reason, "key file") || !strings.Contains(faults[0].Reason, "not-here.key") {
+		t.Errorf("fault reason (len %d) does not name the key file by its path", len(faults[0].Reason))
 	}
 	if strings.Contains(faults[0].Reason, fakeKey) {
-		t.Errorf("ProviderFault.Reason carries key material: %q", faults[0].Reason)
+		t.Error("ProviderFault.Reason carries key material")
 	}
 	if faults[0].Warning {
 		t.Error("a dropped provider was reported as a warning")
+	}
+	if !faults[0].KeyFileUnread {
+		t.Error("the fault of a key file that could not be read is not marked KeyFileUnread")
 	}
 }
 
@@ -175,11 +181,11 @@ baseUrl = "https://api.example.com/v1"
 apiKeyFile = "reaper.key"
 `)
 
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
-	if p, ok := got["reaper"]; !ok || p.APIKey != fakeKey {
+	if p, ok := got["reaper"]; !ok || p.APIKey.Reveal() != fakeKey {
 		t.Fatal("an exposed key file is a warning, not a refusal: the provider must still load with its key")
 	}
 	if len(faults) != 1 || faults[0].Name != "reaper" || !faults[0].Warning {
@@ -189,7 +195,7 @@ apiKeyFile = "reaper.key"
 		t.Errorf("fault reason %q names neither the path nor the mode", faults[0].Reason)
 	}
 	if strings.Contains(faults[0].Reason, fakeKey) {
-		t.Errorf("ProviderFault.Reason carries key material: %q", faults[0].Reason)
+		t.Error("ProviderFault.Reason carries key material")
 	}
 }
 
@@ -204,8 +210,69 @@ func TestLoadProvidersOwnerOnlyKeyFile(t *testing.T) {
 baseUrl = "https://api.example.com/v1"
 apiKeyFile = "reaper.key"
 `)
-	if _, faults, err := LoadProviders(path); err != nil || len(faults) != 0 {
+	if _, faults, err := LoadProviders(path, nil); err != nil || len(faults) != 0 {
 		t.Errorf("a 0600 key file produced %+v (err %v)", faults, err)
+	}
+}
+
+// TestLoadProvidersKeyPrecedence: an entry's key is the one stored under its
+// name, folded to lowercase as the pool and the store name it; else its apiKeyFile's; else
+// none. An entry with a stored key never reads its apiKeyFile, so a missing or
+// exposed one raises no fault.
+func TestLoadProvidersKeyPrecedence(t *testing.T) {
+	const storedKey, fileKey = "stored-key-456", "file-key-789"
+	dir := t.TempDir()
+	writeFile(t, dir, "readable.key", fileKey+"\n")
+	exposedKeyFile(t, dir, "exposed.key", fileKey+"\n")
+	path := writeProviders(t, dir, `
+[Missing]
+baseUrl = "http://missing.example/v1"
+apiKeyFile = "not-here.key"
+
+[exposed]
+baseUrl = "http://exposed.example/v1"
+apiKeyFile = "exposed.key"
+
+[storedonly]
+baseUrl = "http://storedonly.example/v1"
+
+[fileonly]
+baseUrl = "http://fileonly.example/v1"
+apiKeyFile = "readable.key"
+
+[nokey]
+baseUrl = "http://nokey.example/v1"
+`)
+	stored := map[string]secret.Key{"missing": secret.NewKey(storedKey), "exposed": secret.NewKey(storedKey), "storedonly": secret.NewKey(storedKey)}
+
+	got, faults, err := LoadProviders(path, stored)
+	if err != nil {
+		t.Fatalf("LoadProviders: %v", err)
+	}
+	if len(faults) != 0 {
+		t.Errorf("faults = %+v, want none: a stored key leaves the apiKeyFile unread", faults)
+	}
+	for _, tc := range []struct {
+		name, key string
+		kind      KeyKind
+	}{
+		{"missing", storedKey, KeyKindStore},
+		{"exposed", storedKey, KeyKindStore},
+		{"storedonly", storedKey, KeyKindStore},
+		{"fileonly", fileKey, KeyKindFile},
+		{"nokey", "", KeyKindNone},
+	} {
+		p, ok := got[tc.name]
+		if !ok {
+			t.Errorf("%s is not in the pool", tc.name)
+			continue
+		}
+		if p.APIKey.Reveal() != tc.key {
+			t.Errorf("%s: the key (len %d) is not the %s key (len %d)", tc.name, len(p.APIKey.Reveal()), tc.kind, len(tc.key))
+		}
+		if k := keyKind(p); k != tc.kind {
+			t.Errorf("%s: key kind %s, want %s", tc.name, k, tc.kind)
+		}
 	}
 }
 
@@ -230,7 +297,7 @@ func TestLoadProvidersUnusableEntries(t *testing.T) {
 			path := writeProviders(t, dir,
 				"[healthy]\nbaseUrl = \"http://ok/v1\"\n\n[suspect]\n"+tc.entry)
 
-			got, faults, err := LoadProviders(path)
+			got, faults, err := LoadProviders(path, nil)
 			if err != nil {
 				t.Fatalf("an invalid ENTRY must not fail the whole load: %v", err)
 			}
@@ -245,6 +312,35 @@ func TestLoadProvidersUnusableEntries(t *testing.T) {
 			}
 			if !strings.Contains(faults[0].Reason, tc.wantHint) {
 				t.Errorf("fault reason %q does not contain %q", faults[0].Reason, tc.wantHint)
+			}
+		})
+	}
+}
+
+// TestLoadProvidersCredentialsInBaseURL: an entry whose baseUrl carries
+// credentials, or is no absolute http(s) URL — one that does not parse, or a
+// scheme-less user:key@host — is dropped as a fault whose reason names no part
+// of the URL.
+func TestLoadProvidersCredentialsInBaseURL(t *testing.T) {
+	for _, tc := range []struct{ name, baseURL string }{
+		{"credentials", "https://u:k@host/v1"},
+		{"bad escape", "https://u:k%zz@host/v1"},
+		{"scheme-less credentials", "u:k@host/v1"},
+		{"no scheme", "host:8000/v1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeProviders(t, t.TempDir(), "[lab]\nbaseUrl = \""+tc.baseURL+"\"\n")
+			got, faults, err := LoadProviders(path, nil)
+			if err != nil {
+				t.Fatalf("an invalid ENTRY must not fail the whole load: %v", err)
+			}
+			if _, ok := got["lab"]; ok || len(faults) != 1 || faults[0].Name != "lab" || faults[0].Warning {
+				t.Fatalf("pool %v, faults %+v; want lab dropped as one fault", keysOf(got), faults)
+			}
+			for _, part := range []string{"u:", "k@", "k%", "host"} {
+				if strings.Contains(faults[0].Reason, part) {
+					t.Errorf("fault reason %q names %q of the base URL", faults[0].Reason, part)
+				}
 			}
 		})
 	}
@@ -321,7 +417,7 @@ func TestLoadProvidersNoLiveTables(t *testing.T) {
 		{"comment-only template", template},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, faults, err := LoadProviders(writeProviders(t, t.TempDir(), tc.body))
+			got, faults, err := LoadProviders(writeProviders(t, t.TempDir(), tc.body), nil)
 			if err != nil {
 				t.Fatalf("LoadProviders: %v", err)
 			}
@@ -335,7 +431,7 @@ func TestLoadProvidersNoLiveTables(t *testing.T) {
 	}
 
 	t.Run("missing file", func(t *testing.T) {
-		got, faults, err := LoadProviders(filepath.Join(t.TempDir(), ProvidersFileName))
+		got, faults, err := LoadProviders(filepath.Join(t.TempDir(), ProvidersFileName), nil)
 		if err != nil {
 			t.Fatalf("a missing providers.toml is not an error: %v", err)
 		}
@@ -347,7 +443,7 @@ func TestLoadProvidersNoLiveTables(t *testing.T) {
 
 func TestLoadProvidersMalformed(t *testing.T) {
 	path := writeProviders(t, t.TempDir(), "[bad toml content\n")
-	_, _, err := LoadProviders(path)
+	_, _, err := LoadProviders(path, nil)
 	if err == nil {
 		t.Fatal("expected error from malformed TOML, got nil")
 	}
@@ -374,18 +470,18 @@ apiKeyUnsafe = "`+fakeKey+`"
 url = "https://api.example.com/v1"
 apiKeyPath = "reaper.key"
 `)
-	_, _, err := LoadProviders(path)
+	_, _, err := LoadProviders(path, nil)
 	if err == nil {
 		t.Fatal("a misspelled provider field left the entry unroutable and the load allowed it: got nil error")
 	}
 	msg := err.Error()
 	for _, want := range []string{"providers:", path, `"local.apiKeyUnsafe"`, `"reaper.url"`, `"reaper.apiKeyPath"`, unknownKeyHint} {
 		if !strings.Contains(msg, want) {
-			t.Errorf("refusal %q does not name %s", msg, want)
+			t.Errorf("refusal (len %d) does not name %s", len(msg), want)
 		}
 	}
 	if strings.Contains(msg, fakeKey) {
-		t.Errorf("refusal carries key material: %q", msg)
+		t.Error("refusal carries key material")
 	}
 }
 
@@ -401,38 +497,85 @@ func TestLoadProvidersFieldCaseInsensitive(t *testing.T) {
 BaseURL = "https://api.example.com/v1"
 APIKEYFILE = "reaper.key"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
 	if len(faults) != 0 {
 		t.Fatalf("unexpected faults: %+v", faults)
 	}
-	if p := got["reaper"]; p.BaseURL == "" || p.APIKey != fakeKey {
+	if p := got["reaper"]; p.BaseURL == "" || p.APIKey.Reveal() != fakeKey {
 		t.Errorf("case-variant field spellings did not decode: %+v", Provider{BaseURL: p.BaseURL})
 	}
 }
 
-// TestLoadProvidersDynamicNames: provider names are the user's own, so no
-// spelling of a table header is unknown — only the fields beneath it are
-// checked. A pool of oddly-named entries must load without complaint.
+// TestLoadProvidersDynamicNames: provider names are the user's own, so a name
+// the schema has never seen is no unknown key — only the fields beneath it are
+// checked. Any name the provider-name rule admits loads without complaint.
 func TestLoadProvidersDynamicNames(t *testing.T) {
 	path := writeProviders(t, t.TempDir(), `
 [some-box_2]
 baseUrl = "http://127.0.0.1:8080/v1"
 
-["quoted.name"]
+[_Lab-9]
 baseUrl = "http://127.0.0.1:8081/v1"
+
+[42]
+baseUrl = "http://127.0.0.1:8082/v1"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("a provider name is not a schema key: %v", err)
 	}
 	if len(faults) != 0 {
 		t.Errorf("unexpected faults: %+v", faults)
 	}
-	if len(got) != 2 {
-		t.Errorf("expected both entries, got %v", keysOf(got))
+	if len(got) != 3 {
+		t.Errorf("expected every entry, got %v", keysOf(got))
+	}
+}
+
+// TestLoadProvidersRefusesUnusableNames: an entry whose name breaks the
+// provider-name rule — a quoted header holding a dot, a space or a non-ASCII
+// letter, an empty one, or a leading "-" — fails the file's load, naming the
+// file, the entry and the rule, before any key file is read.
+func TestLoadProvidersRefusesUnusableNames(t *testing.T) {
+	for _, name := range []string{"quoted.name", "with space", "naïve", "", "-lead", "colon:name", "slash/name"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeProviders(t, dir, fmt.Sprintf("[%q]\nbaseUrl = \"http://x.example/v1\"\napiKeyFile = \"not-here.key\"\n\n[fine]\nbaseUrl = \"http://y.example/v1\"\n", name))
+			got, faults, err := LoadProviders(path, nil)
+			if err == nil {
+				t.Fatalf("the load allowed it: pool %v, faults %+v", keysOf(got), faults)
+			}
+			msg := err.Error()
+			for _, want := range []string{"providers:", path, fmt.Sprintf("%q", name), ProviderNameRule} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("refusal %q does not name %s", msg, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadProvidersRefusesCaseOnlyNames: two entries of one file whose names
+// differ only by case fail its load, naming both spellings and the file.
+func TestLoadProvidersRefusesCaseOnlyNames(t *testing.T) {
+	path := writeProviders(t, t.TempDir(), `
+[Reaper]
+baseUrl = "http://a.example/v1"
+
+[reaper]
+baseUrl = "http://b.example/v1"
+`)
+	_, _, err := LoadProviders(path, nil)
+	if err == nil {
+		t.Fatal("the load allowed two names differing only by case")
+	}
+	for _, want := range []string{"providers:", path, `"Reaper"`, `"reaper"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %s", err, want)
+		}
 	}
 }
 
@@ -452,11 +595,11 @@ apiKeyFile = "reaper.key"
 baseUrl = "http://x/v1"
 apiKeyFile = "not-here.key"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
-	if got["reaper"].APIKey != sentinel {
+	if got["reaper"].APIKey.Reveal() != sentinel {
 		t.Fatal("the fixture's key file did not resolve, so the fault text proves nothing")
 	}
 	if len(faults) != 2 {
@@ -464,7 +607,7 @@ apiKeyFile = "not-here.key"
 	}
 	for _, f := range faults {
 		if strings.Contains(f.Reason, sentinel) {
-			t.Errorf("ProviderFault.Reason carries key material: %q", f.Reason)
+			t.Errorf("ProviderFault.Reason of %s carries key material", f.Name)
 		}
 	}
 }
@@ -513,12 +656,12 @@ func TestLoadProvidersAdmitsAMessagesEntry(t *testing.T) {
 baseUrl = "https://api.anthropic.example/v1"
 api = "anthropic"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil || len(faults) != 0 {
 		t.Fatalf("LoadProviders = %v, %v; want the entry loaded", faults, err)
 	}
 	if entry, ok := got["claude"]; !ok || entry.Protocol() != ProviderAPIAnthropic {
-		t.Errorf("pool = %+v, want the anthropic entry", got)
+		t.Errorf("pool = %v, claude speaks %q; want the anthropic entry", keysOf(got), entry.Protocol())
 	}
 }
 
@@ -535,7 +678,7 @@ baseUrl = "http://silent.example/v1"
 baseUrl = "http://compat.example/v1"
 api = "openai"
 `)
-	got, faults, err := LoadProviders(path)
+	got, faults, err := LoadProviders(path, nil)
 	if err != nil || len(faults) != 0 {
 		t.Fatalf("LoadProviders = %v, %v; want both entries loaded", faults, err)
 	}

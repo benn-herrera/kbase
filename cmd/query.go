@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/index"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
@@ -22,12 +24,11 @@ type queryOptions struct {
 	WorkDir string
 	Args    []string
 	Answer  queryAnswer
-	// List is whether the answer is a list, returned from Offset at most
-	// Limit at a time, every one where Limit is 0.
-	List          bool
-	Limit, Offset int
-	Stdout        io.Writer
-	Stderr        io.Writer
+	// List is whether the answer is a list of records returned whole, its
+	// count before it.
+	List   bool
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 func runQuery(opts queryOptions) (int, error) {
@@ -47,18 +48,6 @@ func answerQuery(opts queryOptions) (string, []toolresult.Field) {
 		return refused(nil, refusals...)
 	}
 	fields := []toolresult.Field{{Key: "kb-root", Value: root}}
-	var usage []toolresult.Item
-	for _, f := range []struct {
-		flag  string
-		value int
-	}{{"--limit", opts.Limit}, {"--offset", opts.Offset}} {
-		if f.value < 0 {
-			usage = append(usage, toolresult.Item{Check: checkUsage, Key: f.flag, Detail: f.flag + " counts results and cannot be negative"})
-		}
-	}
-	if usage != nil {
-		return refused(fields, usage...)
-	}
 	src, refusals, err := openKB(root)
 	if err != nil {
 		return failed(fields, err)
@@ -81,48 +70,74 @@ func answerQuery(opts queryOptions) (string, []toolresult.Field) {
 		return failed(fields, err)
 	case items != nil:
 		return refused(fields, items...)
-	case !opts.List:
-		return toolresult.Done, append(fields, toolresult.Field{Key: query.ResultsKey, Value: answer})
+	case opts.List:
+		return toolresult.Done, append(fields, toolresult.Field{Key: "count", Value: len(answer.([]toolresult.Record))},
+			toolresult.Field{Key: query.ResultsKey, Value: answer})
 	}
-	window, count, truncated := query.Page(answer, opts.Offset, opts.Limit)
-	return toolresult.Done, append(fields, toolresult.Field{Key: "count", Value: count}, toolresult.Field{Key: "offset", Value: opts.Offset},
-		toolresult.Field{Key: "truncated", Value: truncated}, toolresult.Field{Key: query.ResultsKey, Value: window})
+	return toolresult.Done, append(fields, toolresult.Field{Key: query.ResultsKey, Value: answer})
 }
 
 // answered is an answer that always succeeds.
 func answered(answer any) (any, []toolresult.Item, error) { return answer, nil, nil }
 
-// checkUsage names a refusal of the invocation itself.
-const checkUsage = "usage"
+// queryReads, queryHelp, queryAnswerHelp and listQueryHelp are what the
+// queries share, never stated in a query's own help: the root command's help
+// carries the CLI's form, and the query tool's help resource (toolFamilies)
+// the MCP form, from the same text where the surfaces agree.
+var queryReads = `A query reads the KB under kb-root/ beside the repository's .git and writes
+nothing; a KB in an older format answers as converted, its result carrying
+"migration"; every write but ` + index.UpdateFormatRemedy + ` is refused until that
+converts and re-derives it; a KB whose load fails is refused, naming each
+fault with its file and record. A rigor, bearing, strength or contribution
+that reads *pending* is unscored, not low.`
 
-const queryHelp = `
-It reads the KB under kb-root/ beside the repository's .git and writes nothing; a KB
-in an older metadata format answers as converted, its result saying so, and a KB
-whose load is degraded is refused, with "` + index.RefreshRemedy + `" as the remedy.
-Its result is one YAML document on stdout, the answer under "` + query.ResultsKey + `".`
+// queryHelp is queryReads as the CLI states it.
+var queryHelp = queryReads + "\n" + queryAnswerHelp(" on stdout")
 
-const listQueryHelp = `
-A list answer is returned --limit results at a time from --offset, with
-"count" the whole answer's length and "truncated" whether results lie past
-the ones returned: re-issue with --offset at offset plus those returned.`
+// queryAnswerHelp is where a query's result puts its answer, where naming the
+// channel the document arrives on as the surface reading it states it.
+func queryAnswerHelp(where string) string {
+	return "A query's result is one YAML document" + where + ", the answer under \"" + query.ResultsKey + "\"."
+}
 
-// queryCommand is cmd answering over the KB found from the working
-// directory; a list query takes --limit and --offset.
-func queryCommand(cmd *cobra.Command, list bool, answer queryAnswer) *cobra.Command {
-	var limit, offset int
-	cmd.Long += "\n" + queryHelp
-	if list {
-		cmd.Long += "\n" + listQueryHelp
-		cmd.Flags().IntVar(&limit, "limit", query.DefaultLimit, "the most results to return; 0 returns every one")
-		cmd.Flags().IntVar(&offset, "offset", 0, "how many results to skip")
-	}
+// listQueryHelp is how a list answer sorts and limits, each argument marked,
+// so the surface reading it spells it.
+var listQueryHelp = `find, edges, trace and citations-of return their complete answers, "count"
+beside each; edges and citations-of keep their fixed orders. find and trace
+sort: ` + argmark.Flag("sort") + ` names the key each sorts by and ` + argmark.Flag("order") + ` the direction,
+ascending (the default) or descending; a pending value sorts below every
+number. ` + argmark.Flag("limit") + ` N, allowed only beside an explicit ` + argmark.Flag("sort") + ` and never 0, keeps
+the first N of that order, or for a negative N the last N, still in that
+order.`
+
+// sortOrderUsage is the --order flag's usage on every query that sorts.
+var sortOrderUsage = "the sort's order: " + strings.Join(query.Orders, " or ")
+
+// sortLimitUsage is the --limit flag's usage on every query that sorts.
+var sortLimitUsage = "only beside an explicit " + argmark.Flag("sort") +
+	" and never 0: keep the first N of its order, or the last N for a negative N"
+
+// queryCommand is cmd answering over the KB found from the working directory
+// with one mapping.
+func queryCommand(cmd *cobra.Command, answer queryAnswer) *cobra.Command {
+	return withQueryRun(cmd, answer, false)
+}
+
+// completeListCommand is cmd answering over the KB found from the working
+// directory with a list of records returned whole, its count before it.
+func completeListCommand(cmd *cobra.Command, answer queryAnswer) *cobra.Command {
+	return withQueryRun(cmd, answer, true)
+}
+
+// withQueryRun is cmd running answer as a query, a list where list.
+func withQueryRun(cmd *cobra.Command, answer queryAnswer, list bool) *cobra.Command {
 	cmd.RunE = func(c *cobra.Command, args []string) error {
 		wd, err := invocationDir(c)
 		if err != nil {
 			return err
 		}
 		code, err := runQuery(queryOptions{Verb: c.Name(), WorkDir: wd, Args: args, Answer: answer, List: list,
-			Limit: limit, Offset: offset, Stdout: c.OutOrStdout(), Stderr: c.ErrOrStderr()})
+			Stdout: c.OutOrStdout(), Stderr: c.ErrOrStderr()})
 		if err != nil {
 			return err
 		}

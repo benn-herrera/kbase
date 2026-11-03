@@ -10,35 +10,12 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Model categories. The build names a category, never a model id: which model
-// serves the decision category is a deployment fact that belongs in
-// config.toml, while "the multichoice asks are decision-model calls" is a build
-// fact that belongs in the code. These constants are the single source of the
-// category names — a role is one of them typed as Role, and the `toml` tags on
-// ModelMap must mirror them (struct tags cannot reference constants).
-const (
-	// CategoryDecision is the claim graph's multichoice asks' category: the
-	// decision model that answers them.
-	CategoryDecision = "decision"
-	// CategoryText is the overview passage's category.
-	CategoryText = "text"
-	// CategoryScoring is kbase score's asks' category.
-	CategoryScoring = "scoring"
-)
-
 // Config is the kbase settings file (config.toml) — the choices that draw
 // from the providers.toml pool. providers.toml lists what is available;
-// config.toml says which to use. It holds no credentials: every key lives
-// on its providers.toml pool entry, which is what keeps config.toml safe
-// to read and edit.
+// config.toml says which to use. It holds no credentials: every key belongs
+// to a providers.toml pool entry, stored under its name or in its key file,
+// which is what keeps config.toml safe to read and edit.
 type Config struct {
-	// Provider names the active providers.toml pool entry. It is superseded
-	// and inert: it loads and it merges, and nothing resolves from it — a
-	// role names its own entry in its own reference. The one reader left is
-	// the diagnostic that reports the key superseded, until it is removed at
-	// the next major.
-	Provider string `toml:"provider"`
-
 	// Models maps the verb's roles onto the endpoint and model each asks.
 	Models ModelMap `toml:"models"`
 
@@ -57,10 +34,6 @@ type Config struct {
 
 // AsksConfig is the [asks] table.
 type AsksConfig struct {
-	// ReaderConcurrency is the superseded readerConcurrency key: it loads and
-	// merges, any value, and chooses nothing. Concurrency replaces it.
-	ReaderConcurrency *int `toml:"readerConcurrency"`
-
 	// Concurrency is how many model calls one build or score has in flight
 	// at once, across every role; nil, the key absent, leaves the default.
 	Concurrency *int `toml:"concurrency"`
@@ -75,8 +48,9 @@ const keyConcurrency = "asks.concurrency"
 // number.
 const DefaultAskConcurrency = 4
 
-// ModelMap is the [models] table: the role→model resolution, written by
-// `kbase configure` or by hand. A value is a file-mode reference,
+// ModelMap is the [models] table, one field per Role, its `toml` tag the role's
+// name: the role→model resolution, written by
+// `kbase configure-models` or by hand. A value is a file-mode reference,
 // `<provider>/<model>` — the pool entry that supplies the endpoint, then the
 // model it serves. An unset role is not defaulted — a guessed model id is a
 // silent wrong answer, so callers fail loud instead.
@@ -84,25 +58,6 @@ type ModelMap struct {
 	Decision string `toml:"decision"`
 	Text     string `toml:"text"`
 	Scoring  string `toml:"scoring"`
-}
-
-// ModelFor returns the model id configured for a category. The second return
-// is false when the category is unknown or unmapped, which callers must treat
-// as "not configured" — never as license to substitute another category's
-// model.
-func (c Config) ModelFor(category string) (string, bool) {
-	var id string
-	switch category {
-	case CategoryDecision:
-		id = c.Models.Decision
-	case CategoryText:
-		id = c.Models.Text
-	case CategoryScoring:
-		id = c.Models.Scoring
-	default:
-		return "", false
-	}
-	return id, id != ""
 }
 
 // ModelLayer is the layer that supplied the model the role asks, "" where no
@@ -189,7 +144,7 @@ type Sources struct {
 // is running.
 //
 // No key material is resolved here: config.toml holds CHOICES, and every
-// credential lives on its providers.toml pool entry, resolved by
+// credential belongs to a providers.toml pool entry, resolved by
 // LoadProviders.
 //
 // The decode is strict: a key or table Config does not model refuses the

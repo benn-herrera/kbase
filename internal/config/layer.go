@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"kbase/internal/secret"
 )
 
 // The four layers configuration is read from, in the one vocabulary every
@@ -51,41 +54,49 @@ func Layers(flag, repoRoot string) ([]Layer, error) {
 	if dir, source := namedLayer(flag); dir != "" {
 		return []Layer{{Path: dir, Source: source}}, nil
 	}
-	home, err := os.UserHomeDir()
+	global, err := GlobalDir()
 	if err != nil {
-		return nil, fmt.Errorf("config dir: %w", err)
+		return nil, err
 	}
 	var layers []Layer
 	if repoRoot != "" {
-		layers = append(layers, Layer{Path: repositoryDir(repoRoot), Source: LayerSourceRepository})
+		layers = append(layers, Layer{Path: RepositoryDir(repoRoot), Source: LayerSourceRepository})
 	}
-	global := filepath.Join(home, defaultDirParent, defaultDirName)
 	return append(layers, Layer{Path: global, Source: LayerSourceGlobal}), nil
 }
 
-// WriteTarget is the directory a verb writes configuration into: a directory a
-// flag or $KBASE_CONFIG_DIR names, whether or not it exists, so an explicit
-// choice is never second-guessed; a repository a --project flag names, whether
-// or not its directory stands; otherwise the repository layer where its
-// directory already stands; otherwise the global layer. It reads the layers
-// this invocation resolved, so the directory written is one of the directories
-// read.
-//
-// projectRoot is the repository root a verb's --project named, and "" where no
-// verb named one. It is the caller's to resolve: the repository a --project
-// writes into need not be in the read stack at all, and config resolves paths,
-// never repositories.
-func WriteTarget(layers []Layer, projectRoot string) string {
-	if projectRoot != "" {
-		return repositoryDir(projectRoot)
+// WrittenStack is the layers a configure command writing into target reads:
+// target and the layers beneath it. The global layer lies beneath the
+// repository one; nothing lies beneath the global layer, and a directory a flag
+// or the environment names is read alone, as Layers reads it.
+func WrittenStack(target Layer) ([]Layer, error) {
+	if target.Source != LayerSourceRepository {
+		return []Layer{target}, nil
 	}
-	switch top := layers[0]; top.Source {
-	case LayerSourceExplicit, LayerSourceEnvironment:
+	global, err := GlobalDir()
+	if err != nil {
+		return nil, err
+	}
+	return []Layer{target, {Path: global, Source: LayerSourceGlobal}}, nil
+}
+
+// GlobalDir is the global configuration directory, ~/.config/kbase.
+func GlobalDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("config dir: %w", err)
+	}
+	return filepath.Join(home, defaultDirParent, defaultDirName), nil
+}
+
+// WriteTarget is the directory configuration is written into where no
+// location flag names one: the directory a flag or $KBASE_CONFIG_DIR names,
+// whether or not it exists, so an explicit choice is never second-guessed;
+// otherwise the global layer. It reads the layers this invocation resolved,
+// whose last is the global one wherever none is named.
+func WriteTarget(layers []Layer) string {
+	if top := layers[0]; top.Source == LayerSourceExplicit || top.Source == LayerSourceEnvironment {
 		return top.Path
-	case LayerSourceRepository:
-		if isDir(top.Path) {
-			return top.Path
-		}
 	}
 	return layers[len(layers)-1].Path
 }
@@ -98,12 +109,40 @@ type Loaded struct {
 	Cfg       Config
 }
 
+// StoredKeys is the credentials store as the caller read it, every name the
+// lowercase one a key file is stored under: each key that opened, by name, and
+// each file that did not open — or, where the store's directory stands and
+// does not list, no key and that directory's fault.
+type StoredKeys struct {
+	Keys   map[string]secret.Key
+	Faults []StoreFault
+}
+
+// StoreFault is a stored key file that did not open: the name it is stored
+// under, the file, and what went wrong — never the file's content. A fault
+// with no name is the store's directory, which did not list.
+// DoesNotOpen is a file that stands and is truncated or does not decrypt, so
+// adding the key again, which replaces the file, is its remedy.
+type StoreFault struct {
+	Name, Path, Reason string
+	DoesNotOpen        bool
+}
+
 // Load reads both files of every layer — providers.toml and config.toml —
 // highest precedence first, and merges them into one configuration: the pool is
-// the union, a repository entry replacing a same-named global one whole, and
-// config.toml's fields overlay one by one. Each pooled provider and model id
-// names the layer it came from; each fault names the providers.toml that
-// carries it.
+// the union, a repository entry replacing the global one of the same name —
+// names folded to lowercase, so in any case — whole, and config.toml's fields
+// overlay one by one. Each pooled provider and model id names the layer it came
+// from; each fault names the providers.toml that carries it. Each entry's key is
+// stored's under its name, else its apiKeyFile's (LoadProviders).
+//
+// A stored key file that did not open is a warning fault naming the entry that
+// carries its name — in the pool or dropped from it — and the file as its path;
+// the entry's key then comes from its apiKeyFile, else none. A file whose name
+// no entry carries is read by nothing and not reported.
+// A fault with no name — the store's directory, which did not list — names no
+// entry and is a warning fault of its own, Name empty and the directory as its
+// path, since every entry's stored key then goes unread.
 //
 // A fault naming an entry a higher layer already supplies is dropped: the
 // pool's entry is the higher one, so the lower entry is a value nobody reads.
@@ -114,11 +153,16 @@ type Loaded struct {
 // returned as the loader wrote it, naming the file, and no lower layer is
 // read: a broken repository file that silently fell through to the global one
 // would leave the user's edit doing nothing with nothing said.
-func Load(layers []Layer) (Loaded, error) {
+func Load(layers []Layer, stored StoredKeys) (Loaded, error) {
 	var loaded Loaded
 	pool := Providers{}
 	for _, layer := range layers {
-		providers, layerFaults, err := LoadProviders(ProvidersPath(layer.Path))
+		path := ProvidersPath(layer.Path)
+		data, err := readProvidersFile(path)
+		if err != nil {
+			return Loaded{}, err
+		}
+		providers, layerFaults, err := parseProviders(path, data, stored.Keys)
 		if err != nil {
 			return Loaded{}, err
 		}
@@ -137,14 +181,37 @@ func Load(layers []Layer) (Loaded, error) {
 		takeProviders(pool, providers, layer.Source)
 		takeConfig(&loaded.Cfg, layerCfg, layer.Source)
 	}
+	loaded.Faults = append(loaded.Faults, storeFaults(stored.Faults, pool, loaded.Faults)...)
 	loaded.Providers = pool
 	return loaded, nil
+}
+
+// storeFaults is a warning fault for each stored key file in faults whose name
+// an entry carries — in pool, or dropped from it by one of dropped — and for
+// each nameless fault, the store's directory's.
+func storeFaults(faults []StoreFault, pool Providers, dropped []ProviderFault) []ProviderFault {
+	var out []ProviderFault
+	for _, sf := range faults {
+		fault := ProviderFault{Path: sf.Path, Reason: sf.Reason, Warning: true, DoesNotOpen: sf.DoesNotOpen}
+		_, pooled := pool[sf.Name]
+		switch {
+		case sf.Name == "":
+			fault.Source = SourceStoreDir
+		case pooled || slices.ContainsFunc(dropped, func(f ProviderFault) bool { return f.Name == sf.Name }):
+			fault.Name, fault.Source = sf.Name, SourceStoreFile
+		default:
+			continue
+		}
+		out = append(out, fault)
+	}
+	return out
 }
 
 // takeProviders adds over's entries to pool, each naming the layer it came
 // from. An entry a higher layer already supplied stands as it is: a same-named
 // entry is replaced whole, never field by field, so a repository entry cannot
-// borrow the global entry's credential for an endpoint it chose.
+// borrow the global entry's apiKeyFile for an endpoint it chose. A stored key
+// is the name's, whatever layer supplies the entry.
 func takeProviders(pool, over Providers, source string) {
 	for name, p := range over {
 		if _, ok := pool[name]; ok {
@@ -157,12 +224,8 @@ func takeProviders(pool, over Providers, source string) {
 
 // takeConfig overlays over's stated values onto cfg and records the layer that
 // supplied each. A field the higher layer leaves out keeps the lower layer's
-// value, and the lower layer's name. readerConcurrency is taken by presence:
-// it is a pointer, so nil alone means "unstated".
+// value, and the lower layer's name.
 func takeConfig(cfg *Config, over Config, source string) {
-	if cfg.Provider == "" {
-		cfg.Provider = over.Provider
-	}
 	takeStated(&cfg.Models.Decision, &cfg.Sources.Decision, over.Models.Decision, source)
 	takeStated(&cfg.Models.Text, &cfg.Sources.Text, over.Models.Text, source)
 	takeStated(&cfg.Models.Scoring, &cfg.Sources.Scoring, over.Models.Scoring, source)
@@ -170,9 +233,6 @@ func takeConfig(cfg *Config, over Config, source string) {
 	takeStated(&cfg.Sampling.Text.Thinking, &cfg.Sources.TextThinking, over.Sampling.Text.Thinking, source)
 	takeStated(&cfg.Sampling.Scoring.Temperature, &cfg.Sources.ScoringTemperature, over.Sampling.Scoring.Temperature, source)
 	takeStated(&cfg.Sampling.Scoring.Thinking, &cfg.Sources.ScoringThinking, over.Sampling.Scoring.Thinking, source)
-	if cfg.Asks.ReaderConcurrency == nil {
-		cfg.Asks.ReaderConcurrency = over.Asks.ReaderConcurrency
-	}
 	if cfg.Asks.Concurrency == nil {
 		cfg.Asks.Concurrency = over.Asks.Concurrency
 	}
@@ -203,11 +263,5 @@ func namedLayer(flag string) (dir, source string) {
 	return "", ""
 }
 
-// repositoryDir is the repository root's configuration directory.
-func repositoryDir(repoRoot string) string { return filepath.Join(repoRoot, RepositoryDirName) }
-
-// isDir reports whether path names a directory.
-func isDir(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
+// RepositoryDir is the repository root's configuration directory.
+func RepositoryDir(repoRoot string) string { return filepath.Join(repoRoot, RepositoryDirName) }

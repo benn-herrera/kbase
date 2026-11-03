@@ -8,7 +8,7 @@ import (
 	"kbase/internal/kb"
 )
 
-// TestRecordRead reads a record from its YAML file beside kb-root; a JSON
+// TestRecordRead reads a record from its YAML file in kb-root/.build/; a JSON
 // file of the superseded spelling is not read.
 func TestRecordRead(t *testing.T) {
 	repo := t.TempDir()
@@ -19,6 +19,9 @@ func TestRecordRead(t *testing.T) {
 	}
 	if _, ok, err := ReadNodePass(src); ok || err != nil {
 		t.Fatalf("with only the JSON spelling standing the record read as present (%t, %v)", ok, err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, Dir), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, NodePassFile),
 		[]byte("about: new\nleaves:\n  a.md:\n    state: landed\n    outcome: no-claim\n    claims: []\n    verdicts: []\n"), 0o644); err != nil {

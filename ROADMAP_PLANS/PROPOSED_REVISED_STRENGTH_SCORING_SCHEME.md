@@ -2,8 +2,8 @@
 
 **Status.** A capture of work in progress, not a contract. It records what the system now does, what
 is proposed and not yet built, and what is still open. Where it disagrees with
-[STRENGTH_SCORING_SCHEME.md](../STRENGTH_SCORING_SCHEME.md) or
-[RIGOR_AND_BEARING_SCORING_SCHEME.md](../RIGOR_AND_BEARING_SCORING_SCHEME.md), those pages describe the
+[STRENGTH_SCORING_SCHEME.md](../PROJECT_DOCS/SPEC/scoring/strength/entry-point.md) or
+[RIGOR_AND_BEARING_SCORING_SCHEME.md](../PROJECT_DOCS/SPEC/scoring/rigor-and-bearing/entry-point.md), those pages describe the
 code today and this page describes where it is heading.
 
 Sections marked **landed** are in `main`. Sections marked **proposed** are not in the code.
@@ -157,10 +157,10 @@ quarter explained.
 
 | thing | state |
 |---|---|
-| claim as statement; support through edges; empty `P` → `0` | landed in `STRENGTH_SCORING_SCHEME.md` and the walk (`internal/index/strength.go`) |
+| claim as statement; support through edges; empty `P` → `0` | landed in [the strength scheme](../PROJECT_DOCS/SPEC/scoring/strength/entry-point.md) and the walk (`internal/index/strength.go`) |
 | two rigor vocabularies, their tables, the class-gated ask and parse | landed |
 | `RigorMaximum` enforced on write, `1.0` read as `0.95` | landed |
 | one `ask_sha256` over every instruction a run can send | landed |
-| the six worked examples at uniform inputs | landed in `STRENGTH_SCORING_SCHEME.md` |
+| the six worked examples at uniform inputs | landed in [the strength scheme](../PROJECT_DOCS/SPEC/scoring/strength/entry-point.md) |
 | no-compounding transmission `T` | **proposed** — changes every value and the bands |
 | coverage by declared pillars and sockets | **proposed** — a data-model change to claims and `supports` edges |

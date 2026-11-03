@@ -2,7 +2,7 @@
 
 **Status:** post-v1 design note, captured from working discussion 2026-08-08. Nothing here is
 scheduled; the appliance is complete without it. When this feature is built, this document disperses
-into ARCHITECTURE.md / SPEC.md per the house doc taxonomy.
+into the [ARCHITECTURE](../PROJECT_DOCS/ARCHITECTURE/entry-point.md) / [SPEC](../PROJECT_DOCS/SPEC/entry-point.md) volumes per the house doc taxonomy.
 
 ## Concept
 

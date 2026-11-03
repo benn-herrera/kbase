@@ -82,9 +82,7 @@ func EdgeName(relation, source, target string) string {
 // cycle, of which one edge is cut: the first in the walk order of its supports
 // edges into an analysis, else the closing edge. After each cut the walk starts
 // over, so the cuts depend on the edge set and the walk order alone. A cut edge
-// becomes its DemotedEdge, as demote-claim-edge makes it: where a demoted
-// record of its identity already stands, the cut edge goes and that record
-// stands alone. Nothing else is dropped.
+// becomes its DemotedEdge. Nothing else is dropped.
 func BreakCycles(g kb.Graph, hosted []string) (kb.Graph, []kb.ScorableEdge, []result.Item) {
 	rank := map[string]int{}
 	for i, id := range hosted {
@@ -132,12 +130,8 @@ func BreakCycles(g kb.Graph, hosted []string) (kb.Graph, []kb.ScorableEdge, []re
 			Bearing: *r.Bearing, ManuallyScored: r.ManuallyScored}
 		cut[[3]string{e.Relation, e.Source, e.Target}] = true
 		cuts = append(cuts, e)
-		if !slices.ContainsFunc(demoted, func(d kb.DemotedEdge) bool {
-			return d.ReplacedRelation == e.Relation && d.Source == e.Source && d.Target == e.Target
-		}) {
-			demoted = append(demoted, kb.DemotedEdge{Source: e.Source, Target: e.Target, Context: e.Context,
-				ReplacedRelation: e.Relation, Bearing: e.Bearing, ManuallyScored: e.ManuallyScored})
-		}
+		demoted = append(demoted, kb.DemotedEdge{Source: e.Source, Target: e.Target, Context: e.Context,
+			ReplacedRelation: e.Relation, Bearing: e.Bearing, ManuallyScored: e.ManuallyScored})
 		warnings = append(warnings, result.Item{Path: kb.GraphEdgesFile,
 			Detail: fmt.Sprintf("%s is demoted, breaking the cycle %s", EdgeName(e.Relation, e.Source, e.Target),
 				strings.Join(append(cycle, cycle[0]), " → "))})

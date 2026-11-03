@@ -1,0 +1,21 @@
+obsolete:
+    - kb-root/claim-rigor.md
+warnings:
+    - path: kb-root/.index/nodes.yaml
+      line: 0
+      detail: the axiom axm-1 is now axm-kbrt32, a minted id, and "1" is its label
+      list: ids
+      id: axm-1
+      text: axm-kbrt32
+    - path: kb-root/.index/nodes.yaml
+      line: 0
+      detail: the axiom axm-S3 is now axm-37bekj, a minted id, and "S3" is its label
+      list: ids
+      id: axm-S3
+      text: axm-37bekj
+    - path: kb-root/.index/nodes.yaml
+      line: 0
+      detail: the work wrk-smith2020 is now wrk-omcjwo, a minted id, and "smith2020" is its label
+      list: ids
+      id: wrk-smith2020
+      text: wrk-omcjwo

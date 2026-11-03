@@ -2,7 +2,6 @@ package config
 
 import (
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -47,42 +46,28 @@ func templateKeys(template string) map[string]bool {
 	return keys
 }
 
-// modelledNotWritten is the keys config's schema models and no template
-// writes: the superseded keys, which load so an old config.toml keeps working
-// — the top-level provider key, which `kbase configure` removes rather than
-// writes, and [asks] readerConcurrency, which asks.concurrency replaces. An
-// entry fails the test once a template spells its key, so it cannot outlive its
-// reason.
-var modelledNotWritten = map[string]bool{"provider": true, "asks.readerConcurrency": true}
-
 // TestTemplatesSpellEveryModeledKey: a template is the only schema prose a
 // user is handed, so neither may fall behind the structs it describes. Every
 // key the loaders model is spelled in the template it belongs to, as a live or
 // a commented `key =` line — a field added to Provider or Config without a line
-// here fails before a user meets a key the file never mentions.
+// here fails before a user meets a key the file never mentions. The one
+// exception is apiKeyFile: the providers.toml template names no key field,
+// because a key is added with `kbase auth add`.
 func TestTemplatesSpellEveryModeledKey(t *testing.T) {
-	configKeys := tomlKeys(reflect.TypeOf(Config{}), "")
-	for key := range modelledNotWritten {
-		if !slices.Contains(configKeys, key) {
-			t.Fatalf("%s is exempt from the template but no longer modelled", key)
-		}
-	}
 	for _, tc := range []struct {
 		file     string
 		typ      reflect.Type
 		template string
+		omitted  string
 	}{
-		{ProvidersFileName, reflect.TypeOf(Provider{}), providersTemplate},
-		{ConfigFileName, reflect.TypeOf(Config{}), freshConfig(Config{})},
+		{ProvidersFileName, reflect.TypeOf(Provider{}), providersTemplate(), "apiKeyFile"},
+		{ConfigFileName, reflect.TypeOf(Config{}), freshConfig(Config{}), ""},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			shown := templateKeys(tc.template)
 			for _, key := range tomlKeys(tc.typ, "") {
 				leaf := key[strings.LastIndex(key, ".")+1:]
-				if modelledNotWritten[key] {
-					if shown[leaf] {
-						t.Errorf("the %s template states %s: drop its modelledNotWritten entry", tc.file, key)
-					}
+				if leaf == tc.omitted {
 					continue
 				}
 				if !shown[leaf] {
@@ -102,20 +87,20 @@ func TestConfigTemplateCarriesTheModelGuidance(t *testing.T) {
 	}
 }
 
-// TestTemplatesLoadAsAFreshConfiguration: what `configure --create` writes on a
-// fresh install is a configuration every loader accepts — one usable pool entry
-// and no fault, and a config.toml that reads as unset in every field — so the
-// first thing a user does to it is edit a value, not repair a template.
+// TestTemplatesLoadAsAFreshConfiguration: what the configure commands create on
+// a fresh install is a configuration every loader accepts — the one pool entry
+// written and no fault, and a config.toml that reads as unset in every field —
+// so the first thing a user does to it is edit a value, not repair a template.
 func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := CreateProvidersFile(ProvidersPath(dir)); err != nil {
-		t.Fatalf("CreateProvidersFile: %v", err)
+	if _, err := SetProvider(ProvidersPath(dir), Provider{Name: "lab", BaseURL: "http://lab:8000/v1"}); err != nil {
+		t.Fatalf("SetProvider: %v", err)
 	}
 	if _, err := UpdateConfig(ConfigPath(dir), Config{}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
-	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
+	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}}, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -124,14 +109,14 @@ func TestTemplatesLoadAsAFreshConfiguration(t *testing.T) {
 		t.Errorf("faults = %+v, want none: a fresh template drops nothing", faults)
 	}
 	if len(providers) != 1 {
-		t.Fatalf("pool = %v, want the one live entry", providers)
+		t.Fatalf("pool = %v, want the one entry written", keysOf(providers))
 	}
 	for name, p := range providers {
 		if p.BaseURL == "" || p.Layer != LayerSourceExplicit {
-			t.Errorf("entry %q = %+v, want a usable entry from the one layer", name, p)
+			t.Errorf("entry %q: baseUrl %q, layer %q; want a usable entry from the one layer", name, p.BaseURL, p.Layer)
 		}
 	}
-	if cfg.Provider != "" || cfg.Models != (ModelMap{}) || cfg.Asks.ReaderConcurrency != nil || cfg.Asks.Concurrency != nil || cfg.Sources != (Sources{}) {
+	if cfg.Models != (ModelMap{}) || cfg.Asks.Concurrency != nil || cfg.Sources != (Sources{}) {
 		t.Errorf("config = %+v (%+v), want every field unset", cfg, cfg.Sources)
 	}
 }

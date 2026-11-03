@@ -111,17 +111,15 @@ func TestStampedDocumentsCarryNoSlotAndNoFrameworkHeading(t *testing.T) {
 			t.Errorf("%s carries a framework-node heading", name)
 		}
 	}
-	if !strings.Contains(docs[ConventionsFile], "`claim`, `analysis`") {
-		t.Error("CONVENTIONS.md does not name the node kinds")
-	}
 }
 
-// The session rule reaches a session as plain text on the MCP wire, so it
-// holds no Markdown.
+// The session rule and the .index/ rule reach a session as plain text on the
+// MCP wire, so they hold no Markdown.
 func TestSessionRuleHoldsNoMarkdown(t *testing.T) {
-	rule := SessionRule()
-	if i := strings.IndexAny(rule, "`*_[#"); i >= 0 {
-		t.Errorf("the session rule holds the Markdown character %q", rule[i])
+	for name, rule := range map[string]string{"session rule": SessionRule(), ".index/ rule": IndexRule()} {
+		if i := strings.IndexAny(rule, "`*_[#"); i >= 0 {
+			t.Errorf("the %s holds the Markdown character %q", name, rule[i])
+		}
 	}
 }
 
@@ -246,5 +244,97 @@ func TestOverviewDigestChunk(t *testing.T) {
 	}
 	if m := slotRE.FindString(without); m != "" {
 		t.Errorf("the one-volume README carries the slot %s", m)
+	}
+}
+
+// The fence lines a document carries, their middles other than the
+// templates' own: each line is recognised by its two ends alone.
+const (
+	openFence  = "<!-- vvv-kbase written by an older release kbase-vvv -->\n"
+	closeFence = "<!-- ^^^-kbase end kbase-^^^ -->\n"
+)
+
+func TestBlockSpan(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, block string
+		ok                bool
+	}{
+		{"one pair", "before\n" + openFence + "inside\n" + closeFence + "after\n", "inside\n", true},
+		{"an empty pair", openFence + closeFence, "", true},
+		{"indented fences", "  " + openFence + "inside\n  " + closeFence, "inside\n", true},
+		{"no pair", "# Title\n\ntext\n", "", false},
+		{"no closing fence", openFence + "inside\n", "", false},
+		{"the closing fence first", closeFence + "inside\n" + openFence, "", false},
+		{"two pairs", openFence + "a\n" + closeFence + openFence + "b\n" + closeFence, "", false},
+		{"a fence inside a line", "text " + openFence + "inside\n" + closeFence, "", false},
+	} {
+		start, end, ok := blockSpan(tc.text)
+		if ok != tc.ok || ok && tc.text[start:end] != tc.block {
+			t.Errorf("%s: blockSpan = %d, %d, %t; want the block %q, ok %t", tc.name, start, end, ok, tc.block, tc.ok)
+		}
+	}
+}
+
+// TestMaintainRewritesTheBlocks: a document holding one pair has the span
+// between its fences rewritten to its template's block and keeps the
+// author's text around them; an absent AGENTS.md is written whole; a document
+// without the pair is listed and left untouched; an empty pair is filled; a
+// README.md is never created; and a second run writes nothing.
+func TestMaintainRewritesTheBlocks(t *testing.T) {
+	root := t.TempDir()
+	conventions := "# Our conventions\n\n" + openFence + "stale kbase text\n" + closeFence + "\nOur own rule.\n"
+	readme := "# Overview\n\nOur passage.\n\n" + openFence + closeFence
+	writeFiles(t, root, map[string]string{ConventionsFile: conventions, OverviewFile: readme})
+	written, unfenced, err := Maintain(kb.OnDisk(root), "proj", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{kb.AgentsFile, kb.ConventionsFile, OverviewFile}; !slices.Equal(written, want) || len(unfenced) != 0 {
+		t.Errorf("written %q, unfenced %q; want %q and none unfenced", written, unfenced, want)
+	}
+	stamped, err := fill(kb.AgentsFile, readinessValues("proj", AuthoredKBPin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(root, kb.AgentsFile)); got != stamped {
+		t.Errorf("the absent AGENTS.md was written as\n%s\nwant its template whole\n%s", got, stamped)
+	}
+	got := readFile(t, filepath.Join(root, ConventionsFile))
+	tmpl, err := fill(ConventionsFile, readinessValues("proj", AuthoredKBPin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, e, _ := blockSpan(tmpl)
+	if want := "# Our conventions\n\n" + openFence + tmpl[s:e] + closeFence + "\nOur own rule.\n"; got != want {
+		t.Errorf("CONVENTIONS.md =\n%s\nwant the block rewritten and the author's text and fence lines kept:\n%s", got, want)
+	}
+	got = readFile(t, filepath.Join(root, OverviewFile))
+	tmpl, err = Overview("proj", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, e, _ = blockSpan(tmpl)
+	if want := "# Overview\n\nOur passage.\n\n" + openFence + tmpl[s:e] + closeFence; got != want {
+		t.Errorf("README.md =\n%s\nwant its empty pair filled:\n%s", got, want)
+	}
+	again, unfenced, err := Maintain(kb.OnDisk(root), "proj", false)
+	if err != nil || len(again) != 0 || len(unfenced) != 0 {
+		t.Errorf("a second run wrote %q, unfenced %q (%v); want nothing", again, unfenced, err)
+	}
+
+	bare := t.TempDir()
+	writeFiles(t, bare, map[string]string{kb.AgentsFile: "# Ours alone\n"})
+	written, unfenced, err = Maintain(kb.OnDisk(bare), "proj", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(unfenced, []string{kb.AgentsFile}) || !slices.Equal(written, []string{kb.ConventionsFile}) {
+		t.Errorf("written %q, unfenced %q; want CONVENTIONS.md written and AGENTS.md unfenced", written, unfenced)
+	}
+	if got := readFile(t, filepath.Join(bare, kb.AgentsFile)); got != "# Ours alone\n" {
+		t.Errorf("the unfenced AGENTS.md was rewritten: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(bare, OverviewFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Maintain created %s (%v)", OverviewFile, err)
 	}
 }

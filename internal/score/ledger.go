@@ -15,6 +15,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/argmark"
 	"kbase/internal/asks"
 	"kbase/internal/atomicfile"
 	"kbase/internal/buildstore"
@@ -75,9 +76,6 @@ const (
 	RunKindDry = "dry"
 )
 
-// checkUsage is the check a refusal names where the request itself is wrong.
-const checkUsage = "usage"
-
 // checkError names a failure kbase has no narrower class for, as a run read
 // back from its ledger reports a failed item.
 const checkError = buildstore.CheckError
@@ -91,24 +89,27 @@ func RunsDir(dir string) string { return filepath.Join(dir, runsDir) }
 // ledger layout's version, and AskSHA256 the ask the run's judgements answered;
 // Create stamps both and no resume rewrites them, so a caller leaves them zero.
 //
-// BackEnd is what answered the run's items — a pool entry or the environment's
-// endpoint — and every header of a run that asked carries it, so a reader never
-// infers the source from an absence. A dry run asks nothing and resolves no back
-// end, so its header carries none: the empty string is not one of the two, and
-// an absent key is how a reader tells a run that asked nothing from one whose
-// back end was unnamed.
+// BackEnd is what answered the run's items — `provider`, a pool entry, for
+// every run this release starts; a run started under an earlier release may
+// record `environment` — and every header of a run that asked carries it, so a
+// reader never infers the source from an absence. A dry run asks nothing and
+// resolves no back end, so its header carries none: an absent key is how a
+// reader tells a run that asked nothing from one whose back end was unnamed.
 type RunHeader struct {
 	Run    string `yaml:"run"`
 	KBRoot string `yaml:"kb_root"`
 	Format int    `yaml:"format"`
-	// Pass names the set the run walks: one pass, or PassBoth where the walk
+	// Pass names the set the run walks: one pass, or PassAll where the walk
 	// covers the node set and then the edge set. A ledger line names its own
-	// item's pass, so a both-pass run's lines say which class each judgement
+	// item's pass, so an all-pass run's lines say which class each judgement
 	// came from.
 	Pass string `yaml:"pass"`
+	// RescoreManual is whether the run re-judges manually scored values; a
+	// resume continues the run with it.
+	RescoreManual bool `yaml:"rescore_manual,omitempty"`
 	// AskSHA256 names the ask set the run's answers belong to: one digest over
 	// every instruction the run can send — a rigor run's statement and method
-	// renders, a bearing run's one, a both-pass run's statement, method and
+	// renders, a bearing run's one, an all-pass run's statement, method and
 	// bearing renders in that order — each rendered for an empty subject and
 	// concatenated in that fixed order, which is every fixed byte of the
 	// instructions and nothing that varies with an item. The record carries the
@@ -141,8 +142,11 @@ type Entry struct {
 	Faults       []Charge
 	Moot         []Charge
 	Reply        string // the model's reply where it parsed, or the reason on a failed line
+	Remedy       string // on a failed line, the command that lets its call through, where the failure names one
+	Note         string // on a failed line, the note that goes with the remedy, where there is one
 	Model        string
 	PromptSHA256 string // the digest of the text the call carried
+	Judged       string // the judged hash, as hex, of the item's text as the call was composed; "" where none was
 	Started      string // RFC 3339
 	Ended        string // RFC 3339
 }
@@ -165,8 +169,11 @@ type attempt struct {
 	Value        string    `json:"value,omitempty"`
 	Before       string    `json:"before,omitempty"`
 	Reply        string    `json:"reply,omitempty"`
+	Remedy       string    `json:"remedy,omitempty"`
+	Note         string    `json:"note,omitempty"`
 	Model        string    `json:"model,omitempty"`
 	PromptSHA256 string    `json:"prompt_sha256,omitempty"`
+	Judged       string    `json:"judged,omitempty"`
 	Started      string    `json:"started,omitempty"`
 	Ended        string    `json:"ended,omitempty"`
 }
@@ -241,8 +248,9 @@ func Create(dir string, h RunHeader) (*Ledger, error) {
 }
 
 // Resume opens the ledger of an existing run in the state directory dir for
-// appending, its last status per item read back. It refuses a run.yaml naming
-// another KB root or set, or a ledger format this kbase does not read. A run
+// appending, its last status per item read back, its set the one run.yaml
+// names. It refuses a run.yaml naming another KB root, or a ledger format this
+// kbase does not read. A run
 // the update came between — a changed ask, a changed weight, a header written
 // before the ask was recorded — is continued rather than refused: the values a
 // changed weight moves are re-derived from the recorded ids and landed through w,
@@ -257,8 +265,8 @@ func Resume(dir string, h RunHeader, w Write, skip Skip) (*Ledger, error) {
 	l := &Ledger{dir: filepath.Join(RunsDir(dir), h.Run), lines: map[string]Entry{}}
 	have, err := readHeader(l.dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, result.Refusal{{Check: checkUsage, Path: l.dir, Key: "--resume",
-			Remedy: "start a new run without --resume", Detail: "no run stands here: " + runFile + " is missing"}}
+		return nil, result.Refusal{{Check: result.CheckUsage, Path: l.dir, Key: argmark.Flag("resume"),
+			Remedy: "start a new run without " + argmark.Flag("resume"), Detail: "no run stands here: " + runFile + " is missing"}}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", filepath.Join(l.dir, runFile), err)
@@ -287,19 +295,20 @@ func Resume(dir string, h RunHeader, w Write, skip Skip) (*Ledger, error) {
 }
 
 // refusalFor is what a run standing here cannot be resumed as, or nil where it
-// can: the run must ask over this KB, at this ledger format, over this set. A
-// header recording another ask is not one of them, nor is one recording none:
-// the digest says which instruction answered which judgement, so a corpus
-// spanning an update can be read honestly, and a resume continues under this
-// kbase's ask because an update applies its behaviour.
+// can: the run must ask over this KB, at this ledger format. Its set is the
+// header's own, which the resume continues. A header recording another ask is
+// not one of them, nor is one recording none: the digest says which
+// instruction answered which judgement, so a corpus spanning an update can be
+// read honestly, and a resume continues under this kbase's ask because an
+// update applies its behaviour.
 func (l *Ledger) refusalFor(have, want RunHeader) error {
-	if have.Format == ledgerFormat && have.KBRoot == want.KBRoot && have.Pass == want.Pass {
+	if have.Format == ledgerFormat && have.KBRoot == want.KBRoot {
 		return nil
 	}
-	return result.Refusal{{Check: checkUsage, Path: l.dir, Key: "--resume",
-		Remedy: "start a new run without --resume",
-		Detail: fmt.Sprintf("the run here asks %s over %s at ledger format %d; this one asks %s over %s at ledger format %d",
-			have.Pass, have.KBRoot, have.Format, want.Pass, want.KBRoot, ledgerFormat)}}
+	return result.Refusal{{Check: result.CheckUsage, Path: l.dir, Key: argmark.Flag("resume"),
+		Remedy: "start a new run without " + argmark.Flag("resume"),
+		Detail: fmt.Sprintf("the run here asks over %s at ledger format %d; this one asks over %s at ledger format %d",
+			have.KBRoot, have.Format, want.KBRoot, ledgerFormat)}}
 }
 
 // Dir is the run's directory: the run.yaml that names it and the lines that
@@ -440,9 +449,20 @@ type resultCell struct {
 // reason and no charges or value — they were a judgement the KB did not take —
 // and the capture carries err as the attempt's error.
 func (c resultCell) fail(err error) {
-	c.line.Status, c.line.Reply, c.line.Value, c.line.Faults, c.line.Moot = StatusFailed, err.Error(), "", nil, nil
+	c.line.fail(err)
 	if c.capture != nil {
 		c.capture.Error = err.Error()
+	}
+}
+
+// fail makes a the line of an attempt whose value did not land: err its
+// reason, and no charges or value. It is failed, or skipped where err is
+// errItemGone: an item no longer in the KB failed nothing and leaves nothing
+// to resume.
+func (a *attempt) fail(err error) {
+	a.Status, a.Reply, a.Value, a.Faults, a.Moot = StatusFailed, err.Error(), "", nil, nil
+	if errors.Is(err, errItemGone) {
+		a.Status = StatusSkipped
 	}
 }
 
@@ -464,7 +484,7 @@ func (l *Ledger) flush(cells []resultCell, w Write) ([]query.Item, error) {
 			c.fail(fmt.Errorf("the priced value %q is no bearing a landing writes", c.line.Value))
 			continue
 		}
-		values, at = append(values, Landing{Item: c.item, Value: v}), append(at, i)
+		values, at = append(values, Landing{Item: c.item, Value: v, Judged: c.line.Judged}), append(at, i)
 	}
 	var landed []query.Item
 	if len(values) > 0 {
@@ -699,8 +719,15 @@ func RunByPID(dir string, pid int) (string, error) {
 // A run directory whose run.yaml is absent, does not read as a header, or
 // records a start this kbase cannot read is skipped: it left no record of when
 // it started, and is no error. No run standing is "" and "".
-func NewestRun(dir string) (run, started string, err error) {
+func NewestRun(dir string) (run, started string, err error) { return newestRun(dir, nil) }
+
+// newestRun is NewestRun over the runs whose name keep keeps, every run where
+// keep is nil.
+func newestRun(dir string, keep func(name string) bool) (run, started string, err error) {
 	starts, err := buildstore.DirStarts(RunsDir(dir), runFile)
+	if keep != nil {
+		starts = slices.DeleteFunc(starts, func(s buildstore.DirStart) bool { return !keep(s.Name) })
+	}
 	if err != nil || len(starts) == 0 {
 		return "", "", err
 	}
@@ -786,8 +813,7 @@ func ReadRun(dir, run string) (RunStatus, error) {
 			st.Scored = append(st.Scored, a.item())
 		case StatusFailed:
 			st.Counts.Failed++
-			st.Failures = append(st.Failures, result.Item{Check: checkError,
-				Detail: a.item() + ": " + ReplySummary(a.Reply)})
+			st.Failures = append(st.Failures, failureItem(a.item(), a.entry()))
 		case StatusSkipped:
 			st.Counts.Skipped++
 		default:
@@ -878,10 +904,13 @@ func (l *Ledger) readBack() error {
 // run's own fields from the header, and the attempt's outcome from e. The
 // charges are a landed line's alone: a failed attempt records the reason it
 // failed and keeps no text of the reply, so it carries neither faults nor moot.
+// The reply, remedy and note are spelled as the command line takes an
+// argument, so no line carries a marker.
 func (l *Ledger) line(it query.Item, e Entry) attempt {
+	spell := argmark.Spelling{}.Spell
 	a := attempt{Run: l.run, Pass: passOf(it), Backend: l.backEnd, identity: identityOf(it), Status: e.Status,
-		Value: e.Value, Before: e.Before, Reply: e.Reply, Model: e.Model, PromptSHA256: e.PromptSHA256,
-		Started: e.Started, Ended: e.Ended}
+		Value: e.Value, Before: e.Before, Reply: spell(e.Reply), Remedy: spell(e.Remedy), Note: spell(e.Note), Model: e.Model,
+		PromptSHA256: e.PromptSHA256, Judged: e.Judged, Started: e.Started, Ended: e.Ended}
 	if e.Status == StatusDone {
 		faults := e.Faults
 		if faults == nil {
@@ -941,8 +970,8 @@ func (id identity) lineKey() string {
 // behind it, which is what Append stored and what a resume reads.
 func (a attempt) entry() Entry {
 	return Entry{Status: a.Status, Value: a.Value, Before: a.Before, Faults: a.faults(), Moot: a.Moot,
-		Reply: a.Reply, Model: a.Model, PromptSHA256: a.PromptSHA256,
-		Started: a.Started, Ended: a.Ended}
+		Reply: a.Reply, Remedy: a.Remedy, Note: a.Note, Model: a.Model, PromptSHA256: a.PromptSHA256,
+		Judged: a.Judged, Started: a.Started, Ended: a.Ended}
 }
 
 // faults is the charges the line records, nil where it records none.
@@ -980,7 +1009,7 @@ var (
 // passFacts is a run's set as it reads it: which class an item takes, and every
 // class the set can send, in the fixed order its digest concatenates them. A
 // pass is read here and nowhere else, so a call's instruction and its table are
-// one derivation. A both-pass run sends all three classes, each item taking the
+// one derivation. An all-pass run sends all three classes, each item taking the
 // one its own set gives it.
 type passFacts struct {
 	classOf func(it query.Item) (class, error)
@@ -988,19 +1017,25 @@ type passFacts struct {
 }
 
 // rigorClassOf is the class a rigor item takes: a claim's own statement, an
-// analysis's or an experiment's method. A work's rigor is judged by hand and an
-// axiom's is 1.0 by rule, so neither is a subject, and an edge is no rigor item.
+// analysis's or an experiment's method. Its call carries the ask asks.RigorAsk
+// gives the kind, the one choice the judged hash reads too, so what a value is
+// asked under and what it is hashed under never come apart; the class adds its
+// name and table. A work's rigor is judged by hand and an axiom's is 1.0 by
+// rule, so neither is a subject, and an edge is no rigor item.
 func rigorClassOf(it query.Item) (class, error) {
 	if it.Node == nil {
 		return class{}, fmt.Errorf("the item %s is no %s subject", ItemName(it), query.PassRigor)
 	}
-	switch it.Node.Kind {
-	case kb.NodeKindClaim:
-		return statementClass, nil
-	case kb.NodeKindAnalysis, kb.NodeKindExperiment:
-		return methodClass, nil
+	ask, err := asks.RigorAsk(it.Node.Kind)
+	if err != nil {
+		return class{}, fmt.Errorf("the node %s is no %s subject: a work's rigor is judged by hand and an axiom's is 1.0 by rule", it.Node.ID, query.PassRigor)
 	}
-	return class{}, fmt.Errorf("the node %s is no %s subject: a work's rigor is judged by hand and an axiom's is 1.0 by rule", it.Node.ID, query.PassRigor)
+	cl := methodClass
+	if it.Node.Kind == kb.NodeKindClaim {
+		cl = statementClass
+	}
+	cl.ask = ask
+	return cl, nil
 }
 
 // bearingClassOf is the class a bearing item takes: a scoring edge's link is
@@ -1023,7 +1058,7 @@ func passFactsOf(pass string) (passFacts, error) {
 		return passFacts{classOf: rigorClassOf, classes: []class{statementClass, methodClass}}, nil
 	case query.PassBearing:
 		return passFacts{classOf: bearingClassOf, classes: []class{bearingClass}}, nil
-	case query.PassBoth:
+	case query.PassAll:
 		return passFacts{
 			classOf: func(it query.Item) (class, error) {
 				if it.Edge != nil {
@@ -1040,8 +1075,8 @@ func passFactsOf(pass string) (passFacts, error) {
 // askDigest is the digest of every instruction a run can send, each rendered for
 // an empty subject and concatenated in the run's fixed order: the statement ask
 // and then the method ask for a rigor run, the one bearing ask alone for a
-// bearing run, and the statement, the method and then the bearing ask for a
-// both-pass run. Rendering substitutes and never inspects the text, and no
+// bearing run, and the statement, the method and then the bearing ask for an
+// all-pass run. Rendering substitutes and never inspects the text, and no
 // template carries an element keyed on the item's length or shape, so an empty
 // subject covers every fixed byte of the instructions and nothing that varies
 // with one. One field covers the set, because separate digests would agree or
@@ -1092,9 +1127,15 @@ const repricedFile = "repriced.yaml"
 // incomparable. A run whose values all stand writes nothing.
 //
 // A moved value is landed before its line records it, so the record never claims
-// a value the KB did not take: any value the landing does not take fails the
-// resume with the ledger as it stood, and the next resume re-derives the same
-// moves, the write being idempotent. An item skip names is left as it stands.
+// a value the KB did not take: a value the landing does not take because its
+// item's text was edited after it was asked, or its item is no longer in the
+// KB, rewrites its line with that reason — failed for an edited item, which
+// the walk then asks again, and skipped for a removed one, which nothing asks
+// again; any other value the landing does not
+// take fails the resume with the ledger as it stood, and the next resume
+// re-derives the same moves, the write being idempotent. An item skip names is
+// left as it stands, and so is a line written before the judged hash was
+// recorded: nothing says what text its value judged.
 func (l *Ledger) reprice(w Write, skip Skip) error {
 	facts, err := passFactsOf(l.pass)
 	if err != nil {
@@ -1104,10 +1145,10 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 	var at []int
 	for i := range l.order {
 		a := &l.order[i]
-		if a.Status != StatusDone || a.Faults == nil {
-			// A line this build wrote always records its charges; one that
-			// records none carries no input to re-derive from, and is left as it
-			// stands.
+		if a.Status != StatusDone || a.Faults == nil || a.Judged == "" {
+			// A line this build wrote always records its charges and the hash its
+			// call was composed under; one that records neither carries no input
+			// to re-derive from, and is left as it stands.
 			continue
 		}
 		if skip != nil && skip(a.asItem()) {
@@ -1127,22 +1168,27 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 		if a.Value == kb.BearingText(value) {
 			continue
 		}
-		moves, at = append(moves, Landing{Item: a.asItem(), Value: value}), append(at, i)
+		moves, at = append(moves, Landing{Item: a.asItem(), Value: value, Judged: a.Judged}), append(at, i)
 	}
 	if len(moves) == 0 {
 		return nil
 	}
-	for k, err := range w(moves) {
-		if err != nil {
+	errs := w(moves)
+	for k, err := range errs {
+		if err != nil && !discarded(err) {
 			return fmt.Errorf("re-price %s: %w", l.order[at[k]].item(), err)
 		}
 	}
-	moved := make([]rePricedLine, len(at))
+	var moved []rePricedLine
 	for k, i := range at {
 		a := &l.order[i]
-		want := kb.BearingText(moves[k].Value)
-		moved[k] = rePricedLine{Item: a.item(), From: a.Value, To: want}
-		a.Value = want
+		if errs[k] != nil {
+			a.fail(errs[k])
+		} else {
+			want := kb.BearingText(moves[k].Value)
+			moved = append(moved, rePricedLine{Item: a.item(), From: a.Value, To: want})
+			a.Value = want
+		}
 		l.lines[a.lineKey()] = a.entry()
 	}
 	l.moved = moved
@@ -1165,6 +1211,9 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 	}
 	if err := atomicfile.Write(filepath.Join(l.dir, linesFile), b.Bytes(), nil); err != nil {
 		return err
+	}
+	if len(moved) == 0 {
+		return nil
 	}
 	record, err := yaml.Marshal(rePriced{Run: l.run, Repriced: time.Now().UTC().Format(time.RFC3339), Moved: moved})
 	if err != nil {

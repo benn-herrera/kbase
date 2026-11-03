@@ -81,8 +81,8 @@ func BuildStatusPhrase(v *float64) *string {
 	return nil
 }
 
-// BuildBand is the band slug for a strength.
-func BuildBand(v *float64) string {
+// StrengthBand is the band slug for a strength.
+func StrengthBand(v *float64) string {
 	if b := kb.BandFor(v); b != nil {
 		return b.Slug
 	}
@@ -143,25 +143,40 @@ func RenderStrengthTrace(r Result) string {
 	return " [= " + expr + "]"
 }
 
+// EdgeContribution is a scoring edge's input to its target's strength
+// expression, given its source's strength: bearing × source strength for a
+// supports, founds or lifts edge, and the cap 1 − bearing × source strength
+// for a refutes edge. It is nil where the bearing or the source's strength is
+// pending, which takes the edge out.
+func EdgeContribution(relation string, bearing kb.Bearing, source *float64) *float64 {
+	if bearing.Pending || source == nil {
+		return nil
+	}
+	v := bearing.Value * *source
+	if relation == kb.RelationRefutes {
+		v = 1 - v
+	}
+	return ptr(v)
+}
+
+// ExperimentTakesPart is whether an experiment of status enters the
+// derivation: one that is run does, and a planned one takes no part as a
+// supporter, lifter or refuter.
+func ExperimentTakesPart(status string) bool { return status == kb.ExperimentRun }
+
 // MinDependencyStrength is the least contribution a node's scoring premises
-// feed it: each edge's bearing times its source's strength, or nil where no
-// edge participates. An edge whose bearing or whose source's strength is
-// pending is excluded — it contributes nothing — as is one naming no source
-// the walk holds.
+// feed it (EdgeContribution), or nil where no edge participates. An edge whose
+// bearing or whose source's strength is pending is excluded — it contributes
+// nothing — as is one naming no source the walk holds.
 func MinDependencyStrength(premises []kb.Edge, strength map[string]*float64) *float64 {
 	var deps []float64
 	for _, e := range premises {
 		if e.Relation != kb.RelationSupports && e.Relation != kb.RelationFounds {
 			continue
 		}
-		if e.Bearing.Pending {
-			continue
+		if c := EdgeContribution(e.Relation, e.Bearing, strength[e.Source]); c != nil {
+			deps = append(deps, *c)
 		}
-		s := strength[e.Source]
-		if s == nil {
-			continue
-		}
-		deps = append(deps, e.Bearing.Value**s)
 	}
 	if len(deps) == 0 {
 		return nil
@@ -169,39 +184,25 @@ func MinDependencyStrength(premises []kb.Edge, strength map[string]*float64) *fl
 	return ptr(minOf(deps[0], deps[1:]...))
 }
 
-// liftStrength is the largest lift any participating lifter feeds target:
-// bearing times the lifter's strength, an excluded edge omitted.
+// liftStrength is the largest lift any participating lifter feeds target
+// (EdgeContribution), an excluded edge omitted.
 func liftStrength(edges []kb.Edge, strength map[string]*float64) *float64 {
 	var best *float64
 	for _, e := range edges {
-		if e.Bearing.Pending {
-			continue
-		}
-		s := strength[e.Source]
-		if s == nil {
-			continue
-		}
-		if v := e.Bearing.Value * *s; best == nil || v > *best {
-			best = ptr(v)
+		if c := EdgeContribution(e.Relation, e.Bearing, strength[e.Source]); c != nil && (best == nil || *c > *best) {
+			best = c
 		}
 	}
 	return best
 }
 
-// capStrength is the smallest cap any participating refuter places on target:
-// 1 − bearing × the refuter's strength, an excluded edge omitted.
+// capStrength is the smallest cap any participating refuter places on target
+// (EdgeContribution), an excluded edge omitted.
 func capStrength(edges []kb.Edge, strength map[string]*float64) *float64 {
 	var best *float64
 	for _, e := range edges {
-		if e.Bearing.Pending {
-			continue
-		}
-		s := strength[e.Source]
-		if s == nil {
-			continue
-		}
-		if v := 1 - e.Bearing.Value**s; best == nil || v < *best {
-			best = ptr(v)
+		if c := EdgeContribution(e.Relation, e.Bearing, strength[e.Source]); c != nil && (best == nil || *c < *best) {
+			best = c
 		}
 	}
 	return best
@@ -402,7 +403,7 @@ func graphStrength(g kb.Graph, edges []kb.Edge) Strength {
 		w.sources[n.ID] = n.Rigor
 	}
 	for _, n := range g.Experiments {
-		if n.Status == kb.ExperimentRun {
+		if ExperimentTakesPart(n.Status) {
 			w.sources[n.ID] = n.Rigor
 		}
 	}

@@ -9,12 +9,12 @@ package config
 // configTemplate is what a config.toml that does not exist yet is created
 // as. It is commented because the file is a hand-editing surface first and
 // a program output second: a user who opens it should find out from the
-// file itself what may be changed and what `kbase configure` will rewrite.
-// The [models] guidance it carries is hints.go's, rendered here and as the
-// kbase://model-hints resource.
-const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase configure`" + ` rewrites the
-# [` + tableModels + `] values and removes a superseded ` + "`" + keyProvider + "`" + ` key, and leaves
-# everything else in this file exactly as it found it.
+// file itself what may be changed and what `kbase configure-models` will
+// rewrite. The [models] guidance it carries is hints.go's, rendered here and as
+// the kbase://model-hints resource.
+const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase configure-models`" + ` rewrites
+# the [` + tableModels + `] values it is given and leaves everything else in this file
+# exactly as it found it.
 
 %s
 
@@ -36,28 +36,30 @@ const configTemplate = `# kbase configuration — safe to hand-edit; ` + "`kbase
 `
 
 // providersTemplate is what a providers.toml that does not exist yet is
-// created as. One entry is live, so the pool holds something a selection
-// resolves without a choice; the rest is commented, so a fresh install never
-// has two usable entries and no selection between them. apiKeyFile is
-// commented because a live one naming a file that is not there drops its
-// entry — a fault where an endpoint was meant. The live base URL is a lab
-// host, and .example is a reserved TLD that can never resolve, so no
-// placeholder can reach a real vendor.
-const providersTemplate = `# Each provider is one top-level table. The names are arbitrary: they are
-# what a [models] reference's provider part and --provider name. An entry
-# here replaces a same-named entry from ~/.config/kbase/providers.toml whole.
-
-[local]
-baseUrl = "http://lab-server.local:8000/v1"
-# apiKeyFile = "~/.api_keys/lab-server.txt"  # relative paths resolve beside this file
+// created as, before the entry being written is added at its end: comments
+// alone, its example entry commented out, so the file holds the entries
+// written to it and no other. It names no key field, because a key is added
+// with `kbase auth add`; an apiKeyFile an entry states still loads. It is
+// built by concatenation, so no character in it is a format verb; it carries
+// AuthAddRemedy's form for a placeholder name. The example's base URL is a
+// lab host, so no placeholder can reach a real vendor.
+func providersTemplate() string {
+	return `# Each provider is one top-level table; ` + ProviderNameRule + `;
+# no two names may differ by case alone. The name is what a [models]
+# reference's provider part and --provider name. An entry in a repository's
+# file replaces the global entry of the same name (any case) whole.
+# This file holds no API key: an entry's key goes in kbase's store, under the
+# entry's name:
+#   ` + AuthAddRemedy("<name>") + `
+# kbase configure-providers adds, edits and removes an entry. An entry reads:
+#
+# [local]
+# baseUrl = "http://lab-server.local:8000/v1"
 # type = "inference"  # optional; the only kind kbase can use
 # api = "anthropic"   # optional; the chat protocol: "anthropic" (the default),
 #                     # the Messages API, or "openai"
 # decisionsFlavor = "systemone"  # optional; which decision surface this server
 #                                # speaks: "systemone" (the default) or
 #                                # "decisions"
-
-# [cloud]
-# baseUrl = "https://api.inference.example/v1"
-# apiKeyFile = "~/.api_keys/cloud.txt"
 `
+}

@@ -391,8 +391,8 @@ func TestConvert100To200CarriesAnUnreadableBearing(t *testing.T) {
 		t.Fatalf("Discover = %v, want one annotation fault", err)
 	}
 	f := ann.Faults[0]
-	if f.Field != format200.ListRestsOn || f.Allowed == "" || f.Line == 0 || f.Path != badTokenPath() {
-		t.Errorf("fault %+v, want rests-on by path, line and allowed set", f)
+	if f.Field != format200.ListRestsOn || f.Line == 0 || f.Path != badTokenPath() {
+		t.Errorf("fault %+v, want rests-on by path and line", f)
 	}
 }
 

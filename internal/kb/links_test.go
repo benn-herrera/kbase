@@ -1,11 +1,14 @@
 package kb
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/formats/format400"
 )
 
 func TestRebaseInlineLinks(t *testing.T) {
@@ -26,6 +29,36 @@ func TestRebaseInlineLinks(t *testing.T) {
 				t.Errorf("RebaseInlineLinks = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestTextCitations: a link whose title is a node id is a citation, with its
+// 0-based line and offsets on the raw line; an ordinary link, a link titled
+// with no id, and a citation in inline code or a fence are not.
+func TestTextCitations(t *testing.T) {
+	cite := `[cited](a.md#s "clm-aaaaaa")`
+	line := `See [ordinary](a.md) and [titled](a.md "a title") then ` + cite + "."
+	text := "# Doc\n\n" + line + "\nInline `" + cite + "` here.\n\n```\n" + cite + "\n```\n"
+	start := strings.Index(line, cite)
+	dest := start + len("[cited](")
+	want := []TextCitation{{Line: 2, Link: format400.Link{Start: start, End: start + len(cite), DestStart: dest, DestEnd: dest + len("a.md#s"),
+		Text: "cited", Destination: "a.md#s", Title: "clm-aaaaaa"}}}
+	if got := TextCitations(text); !slices.Equal(got, want) {
+		t.Errorf("TextCitations = %+v, want %+v", got, want)
+	}
+}
+
+// TestTextLinkDefinitions: a reference definition, angle-wrapped or titled,
+// is read with its destination's offsets on the raw line; a footnote
+// definition, an inline link and a definition inside a fence are not.
+func TestTextLinkDefinitions(t *testing.T) {
+	text := "# Doc\n\n[a]: x.md#s\n   [b]: <y z.md> \"t\"\n[^1]: a note\nSee [c](x.md).\n\n```\n[d]: w.md\n```\n"
+	var got []string
+	for _, l := range TextLinkDefinitions(text) {
+		got = append(got, fmt.Sprintf("%d %s", l.Line, SplitLines(text)[l.Line][l.DestStart:l.DestEnd]))
+	}
+	if want := []string{"2 x.md#s", "3 <y z.md>"}; !slices.Equal(got, want) {
+		t.Errorf("TextLinkDefinitions = %q, want %q", got, want)
 	}
 }
 
@@ -105,6 +138,7 @@ func TestLinkPatterns(t *testing.T) {
 		{"[x](a.md)", []string{"a.md"}},
 		{`["the rule [see note] applies"](t.md)`, []string{"t.md"}},
 		{"[x](<a b.md>)", []string{"<a b.md>"}},
+		{`[the bound](a.md#bounds "ana-aaaaaa") and ["it holds"](b.md 'a title')`, []string{"a.md#bounds", "b.md"}},
 		{"[![](img.png)](img.png)", []string{"img.png"}},
 		{"[label]: ref.md", []string{"ref.md"}},
 		{`[label]: ref.md "title"`, []string{"ref.md"}},
@@ -164,8 +198,9 @@ func TestDeadLinks(t *testing.T) {
 // TestDeadLinksInChecksARegisterPageFragment: a link into a register page
 // holds where its fragment is one of the slugs derived for that page, and is
 // broken fragment where it is not — a page no longer called for holding none —
-// while a link with no fragment, a fragment into any other file, and a page
-// whose file is gone are judged by the file check alone.
+// while a link with no fragment and a page whose file is gone are judged by
+// the file check alone; a fragment into any other document holds where it is
+// one of that document's anchors.
 func TestDeadLinksInChecksARegisterPageFragment(t *testing.T) {
 	root := t.TempDir()
 	for rel, text := range map[string]string{
@@ -179,6 +214,7 @@ func TestDeadLinksInChecksARegisterPageFragment(t *testing.T) {
 			"[other file](leaf.md#nowhere)",
 			"[gone page](../c/claim-rigor.md#x)",
 			"[uncalled page](../d/claim-rigor.md#theorem-1)",
+			"[other file's heading](leaf.md#leaf)",
 		}, "\n"),
 	} {
 		p := filepath.Join(root, filepath.FromSlash(rel))
@@ -201,6 +237,7 @@ func TestDeadLinksInChecksARegisterPageFragment(t *testing.T) {
 	want := []string{
 		`a/prose.md:2 broken fragment "claim-rigor.md#lemma-2"`,
 		`a/prose.md:4 broken fragment "../b/claim-rigor.md#theorem-1"`,
+		`a/prose.md:6 broken fragment "leaf.md#nowhere"`,
 		`a/prose.md:7 broken intra "../c/claim-rigor.md#x"`,
 		`a/prose.md:8 broken fragment "../d/claim-rigor.md#theorem-1"`,
 	}

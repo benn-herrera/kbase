@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/config"
 	toolresult "kbase/internal/result"
 )
@@ -34,8 +35,8 @@ func givenAskConcurrency(cmd *cobra.Command, value int) *int {
 func askConcurrency(flag, key *int) (int, error) {
 	switch {
 	case flag != nil && *flag < 1:
-		return 0, toolresult.Refusal{{Check: checkUsage, Key: "--" + askConcurrencyFlag,
-			Detail: "--" + askConcurrencyFlag + " counts model calls in flight and is at least 1"}}
+		return 0, toolresult.Refusal{{Check: toolresult.CheckUsage, Key: argmark.Flag(askConcurrencyFlag),
+			Detail: argmark.Flag(askConcurrencyFlag) + " counts model calls in flight and is at least 1"}}
 	case flag != nil:
 		return *flag, nil
 	case key != nil:

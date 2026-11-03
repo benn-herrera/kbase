@@ -114,19 +114,19 @@ func buildReplayRun(ctx context.Context, opts buildReplayOptions) (outcome strin
 	}
 	switch {
 	case !opts.Replay:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--" + narrowing[0],
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--" + narrowing[0],
 			Detail: "--" + narrowing[0] + " narrows a replay and is given with " + buildstore.ReplayKey})
 	case len(others) > 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: buildstore.ReplayKey,
 			Detail: buildstore.ReplayKey + " takes " + replayTakes(buildReplayFlags) + "; " + strings.Join(others, ", ") + " is a build's"})
 	case len(opts.Args) > 1 || len(opts.Args) == 1 && !startCommitRE.MatchString(opts.Args[0]):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: buildstore.ReplayKey,
 			Detail: buildstore.ReplayKey + " takes one positional, a hex prefix of a trail's start commit, not a path: " + strings.Join(opts.Args, " ")})
 	case opts.Kind != "" && !slices.Contains(replayKinds(), opts.Kind):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--kind",
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--kind",
 			Detail: "--kind is one of " + strings.Join(replayKinds(), ", ") + ", not " + opts.Kind})
 	case opts.Limit < 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts asks and cannot be negative"})
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--limit", Detail: "--limit counts asks and cannot be negative"})
 	}
 	reg, provider, err := buildModels(opts.buildOptions)
 	if err != nil {

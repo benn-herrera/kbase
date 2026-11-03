@@ -1,0 +1,1 @@
+kb-root/.index/ holds kbase's own records: never read or write anything under it. Testing that a path there exists (test -d, a stat) is allowed; listing, globbing or opening anything under kb-root/.index/ is reading it.

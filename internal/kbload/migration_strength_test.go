@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"kbase/internal/formats"
 	"kbase/internal/formats/format200"
 	"kbase/internal/index"
 	"kbase/internal/kb"
@@ -58,13 +59,18 @@ func TestAMigratedClaimsStrengthIsIts100Solidity(t *testing.T) {
 		t.Fatalf("the KB reads as migrated %t at %s, want a 1.0.0 KB converted in memory", src.Migrated(), src.Version())
 	}
 
-	// The 1.0.0 register line the conversion carries: its `- solidity:` under the
-	// name the 2.0.0 form reads it by.
-	register, err := src.ReadText(src.Path(kb.KBDir + "/" + kb.RegisterFile))
+	// The 1.0.0 register line the conversion to 2.0.0 carries: its `- solidity:`
+	// under the name the 2.0.0 form reads it by. The current form has no register.
+	files, err := coveredFiles(root)
 	if err != nil {
-		t.Fatalf("reading the converted register: %v", err)
+		t.Fatal(err)
 	}
-	claims := format200.ParseClaimEntries(register, kb.RegisterFile, nil, func(string, int, string) {})
+	two, _, _, err := formats.Chain("1.0.0", format200.Version200, files)
+	if err != nil {
+		t.Fatalf("converting to 2.0.0: %v", err)
+	}
+	register := string(two[kb.KBDir+"/"+format200.RegisterFile])
+	claims := format200.ParseClaimEntries(register, format200.RegisterFile, nil, func(string, int, string) {})
 	if len(claims) != 4 {
 		t.Fatalf("the converted register holds %d claim entries, want 4:\n%s", len(claims), register)
 	}

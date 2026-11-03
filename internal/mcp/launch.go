@@ -8,13 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/buildstore"
 	"kbase/internal/mcp/protocol"
 	"kbase/internal/result"
@@ -28,6 +29,10 @@ const stateDirFlag = "state-dir"
 // the run it started.
 const launchPoll = 50 * time.Millisecond
 
+// launchStarting is how long a launch waits for the run it started to start
+// before it reports the run still starting, done, for status to follow.
+const launchStarting = 5 * time.Second
+
 // Globals is the server's own global flags, which every run it launches
 // inherits.
 type Globals struct{ ConfigDir, LogLevel, LogFile string }
@@ -39,21 +44,15 @@ type Launch struct {
 	noun string
 	// capturePrefix begins the names of the files capturing the run's output.
 	capturePrefix string
-	// awaited is what a run still starting has not yet done.
-	awaited string
 	// started is whether the run pid has started in the store at stateDir, and
 	// the fields its done document carries after the placement.
 	started func(stateDir string, pid int) (bool, []result.Field, error)
-	// recorded is whether the server's record of the build it launched last
-	// takes each launch.
-	recorded bool
 }
 
 // BuildLaunch is the build's launch: started once its progress record shows a
-// stage entered, each launch recorded as the server's last build.
+// stage entered, reported still starting after 5 s.
 func BuildLaunch() Launch {
-	return Launch{noun: "the build", capturePrefix: buildstore.CapturePrefix, awaited: "entered a stage",
-		started: buildStarted, recorded: true}
+	return Launch{noun: "the build", capturePrefix: buildstore.CapturePrefix, started: buildStarted}
 }
 
 // buildStarted adds the resume command where the record's command reads as a
@@ -70,10 +69,9 @@ func buildStarted(stateDir string, pid int) (bool, []result.Field, error) {
 }
 
 // ScoreLaunch is the score run's launch: started once its ledger and pid
-// stand.
+// stand, reported still starting after 5 s.
 func ScoreLaunch() Launch {
-	return Launch{noun: "the score run", capturePrefix: score.CapturePrefix, awaited: "opened its ledger",
-		started: scoreStarted}
+	return Launch{noun: "the score run", capturePrefix: score.CapturePrefix, started: scoreStarted}
 }
 
 // scoreStarted reads a run whose ledger or pid does not read back yet as not
@@ -93,9 +91,17 @@ func launchTool(cmd *cobra.Command, l Launch, s serving, globals Globals) (Proje
 	if err != nil {
 		return ProjectTool{}, err
 	}
+	mappings := Mappings(cmd)
 	call := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
 		var out bytes.Buffer
-		if err := l.start(cmd.Name(), positionals, args, p, s, globals, &out); err != nil {
+		if refusal := commaInMapping(mappings, args); refusal != nil {
+			if err := result.Emit(result.Spelled(&out, s.spelling), result.Refused,
+				result.Field{Key: result.RefusalsKey, Value: []result.Item{*refusal}}); err != nil {
+				return "", nil, false, err
+			}
+			return ToolResult(out.Bytes())
+		}
+		if err := l.start(cmd.Name(), positionals, mappings, args, p, s, globals, result.Spelled(&out, s.spelling)); err != nil {
 			return "", nil, false, err
 		}
 		return ToolResult(out.Bytes())
@@ -103,15 +109,33 @@ func launchTool(cmd *cobra.Command, l Launch, s serving, globals Globals) (Proje
 	return ProjectTool{Tool: protocol.Tool{Name: cmd.Name(), InputSchema: schema}, Run: call}, nil
 }
 
+// commaInMapping is the usage refusal of the first mapping argument of args —
+// one mappings names — whose value under one of its keys holds a comma, which
+// the command line reads as the separator between the mapping's values; nil
+// where none does. The schema has already admitted each mapping's keys.
+func commaInMapping(mappings map[string][]string, args map[string]any) *result.Item {
+	for _, name := range slices.Sorted(maps.Keys(mappings)) {
+		m, _ := args[name].(map[string]any)
+		for _, key := range mappings[name] {
+			if v, _ := m[key].(string); strings.Contains(v, ",") {
+				return &result.Item{Check: result.CheckUsage, Key: argmark.Flag(name),
+					Detail: argmark.Flag(name) + "'s " + key + " holds a comma, and none of its values may: " + strconv.Quote(v)}
+			}
+		}
+	}
+	return nil
+}
+
 // start starts `<this executable> verb <args>` from the root of the project p
 // — in its own process group, stdin closed, stdout and stderr captured under
-// the state store's reports, the environment and globals inherited, and
-// --project-dir where the call named p — and writes on out the start document
-// once the run has started, the run's own document where it exits first, or a
-// failure naming the state store where it does neither within
-// buildstore.StartWait. A relative state-dir is the project root's, as the
-// volume roots are in the run's working directory.
-func (l Launch) start(verb string, positionals []Positional, args map[string]any, p Project, s serving, globals Globals, out io.Writer) error {
+// the state store's reports, the environment and globals inherited, SurfaceEnv
+// telling it its document is read over MCP, and --project-dir where the call
+// named p — and writes on out the start document once the run has started,
+// the run's own document where it exits first, or, where it does neither
+// within launchStarting, a done document saying it is still starting. A
+// relative state-dir is the project root's, as the volume roots are in the
+// run's working directory.
+func (l Launch) start(verb string, positionals []Positional, mappings map[string][]string, args map[string]any, p Project, s serving, globals Globals, out io.Writer) error {
 	args = maps.Clone(args)
 	stateFlag, _ := args[stateDirFlag].(string)
 	kbRoot, stateDir, outcome, fields := buildstore.Locate(buildstore.MonitorOptions{StateDir: stateFlag, WorkDir: p.Root, Logger: s.lg, DefaultStore: true})
@@ -121,7 +145,7 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 	if stateFlag != "" {
 		args[stateDirFlag] = stateDir
 	}
-	positionalArgv, flags := CommandLine(positionals, args)
+	positionalArgv, flags := CommandLine(positionals, mappings, args)
 	argv := []string{verb}
 	for _, f := range flags {
 		argv = append(argv, "--"+f.Name+"="+f.Value)
@@ -170,15 +194,13 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 
 	child := exec.Command(exe, argv...)
 	child.Dir = filepath.Dir(kbRoot)
+	child.Env = append(os.Environ(), SurfaceEnv+"="+SurfaceMCP)
 	child.Stdout, child.Stderr = stdout, stderr
 	child.SysProcAttr = detachedProcess()
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("starting %s: %w", l.noun, err)
 	}
 	pid := child.Process.Pid
-	if l.recorded {
-		s.last.launched(p.Root, stateDir, pid)
-	}
 	s.lg.Info("mcp: "+verb+" started", "pid", pid, "stdout", stdout.Name(), "stderr", stderrPath)
 	// Waiting reaps the child; the goroutine ends when it exits, whether or
 	// not this call is still listening.
@@ -186,7 +208,9 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 	go func() { exited <- child.Wait() }()
 
 	placement := []result.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: stateDir}, {Key: "pid", Value: pid}}
-	deadline := time.NewTimer(buildstore.StartWait)
+	wait := result.Field{Key: "wait", Value: buildstore.ShellJoin(append(append([]string{exe, "wait"}, waitProject...),
+		"--state-dir", stateDir, "--pid", strconv.Itoa(pid)))}
+	deadline := time.NewTimer(launchStarting)
 	defer deadline.Stop()
 	poll := time.NewTicker(launchPoll)
 	defer poll.Stop()
@@ -203,69 +227,16 @@ func (l Launch) start(verb string, positionals []Positional, args map[string]any
 			_, err = out.Write(doc)
 			return err
 		case <-deadline.C:
-			return result.Emit(out, result.Failed, append(placement, result.Field{Key: result.FailuresKey,
-				Value: []result.Item{{Check: buildstore.CheckError, Path: stateDir,
-					Detail: fmt.Sprintf("%s (pid %d) is still starting: it has neither %s nor exited within %v; follow it with status", l.noun, pid, l.awaited, buildstore.StartWait)}}})...)
+			return result.Emit(out, result.Done, result.Field{Key: "state", Value: "starting"},
+				result.Field{Key: "state-dir", Value: stateDir}, result.Field{Key: "pid", Value: pid}, wait)
 		case <-poll.C:
 			started, done, err := l.started(stateDir, pid)
 			if err != nil {
 				return err
 			}
 			if started {
-				wait := append(append([]string{exe, "wait"}, waitProject...), "--state-dir", stateDir, "--pid", strconv.Itoa(pid))
-				fields := append(append(placement, done...), result.Field{Key: "wait", Value: buildstore.ShellJoin(wait)})
-				return result.Emit(out, result.Done, fields...)
+				return result.Emit(out, result.Done, append(append(placement, done...), wait)...)
 			}
 		}
 	}
-}
-
-// lastBuild is the build a server started last: the project it ran in, the
-// state store buildstore.Locate resolved for it and the pid the launch
-// recorded, so the build resource and its watcher follow the launch rather
-// than a store some later argument names. The record is the process's, so a
-// restarted server has launched none.
-type lastBuild struct {
-	located Located
-
-	mu       sync.Mutex
-	project  string
-	dir      string
-	pid      int
-	fallback string
-	resolved bool
-}
-
-// newLastBuild is the record of a server with the located project, or none,
-// that has launched no build yet.
-func newLastBuild(located Located) *lastBuild { return &lastBuild{located: located} }
-
-// launched records the project a build was started in, its state store and
-// the pid that runs it.
-func (l *lastBuild) launched(project, dir string, pid int) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.project, l.dir, l.pid = project, dir, pid
-}
-
-// store is the project and state store the resource reads and the watcher
-// follows, and the pid of the build this server started there — zero where it
-// started none. It is the launch's, else the located project and the store its
-// build resolves, which is read once because resolving it asks git; ok is
-// false where the server launched none and located no project.
-func (l *lastBuild) store() (project, dir string, pid int, ok bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.dir != "" {
-		return l.project, l.dir, l.pid, true
-	}
-	root, ok := l.located.Root()
-	if !ok {
-		return "", "", 0, false
-	}
-	if !l.resolved {
-		_, l.fallback, _, _ = buildstore.Locate(buildstore.MonitorOptions{WorkDir: root, DefaultStore: true})
-		l.resolved = true
-	}
-	return root, l.fallback, 0, true
 }

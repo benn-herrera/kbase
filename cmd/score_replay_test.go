@@ -205,7 +205,7 @@ func TestScoreReplayWithoutStateDirNeedsAKBRoot(t *testing.T) {
 	doc := parseResult(t, out)
 	items := doc.items(toolresult.RefusalsKey)
 	if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-		items[0]["check"] != checkUsage || items[0]["key"] != "--state-dir" {
+		items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--state-dir" {
 		t.Fatalf("outcome %s, exit %d, refusals %v; want one usage refusal naming --state-dir\n%s", doc.Outcome, code, items, out)
 	}
 }
@@ -266,7 +266,7 @@ func TestScoreReplayFailedSelectsTheFailedItems(t *testing.T) {
 // run's item list.
 func TestScoreReplayLimitCutsInItemOrder(t *testing.T) {
 	repo, state, run := replayedRun(t)
-	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, scoreOptions: scoreOptions{Limit: 2}},
+	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, Limit: 2},
 		func() model.Client { return scoring(replayedReplies[:2]...) })
 	if doc.Outcome != toolresult.Done {
 		t.Fatalf("the replay: outcome %s\n%s", doc.Outcome, stdout)
@@ -301,7 +301,7 @@ func TestScoreReplayRefusals(t *testing.T) {
 		{"a run that asked nothing, beside every flag a replay takes", "--replay", "captures.jsonl",
 			[]string{"--replay", stood[1], "--pass", query.PassRigor, "--failed", "--limit", "1", "--timeout", "5s", "--scoring-model", "solo/other"}},
 		{"--dry-run beside it", "--replay", "--dry-run is a run's", []string{"--replay", stood[1], "--dry-run"}},
-		{"--resume beside it", "--replay", "--resume is a run's", []string{"--replay", stood[1], "--resume", stood[1]}},
+		{"--resume beside it", "--replay", "--resume is a run's", []string{"--replay", stood[1], "--resume"}},
 		{"--failed alone", "--failed", "with --replay", []string{"--failed"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -309,7 +309,7 @@ func TestScoreReplayRefusals(t *testing.T) {
 			doc := parseResult(t, out)
 			items := doc.items(toolresult.RefusalsKey)
 			if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-				items[0]["check"] != checkUsage || items[0]["key"] != tc.key {
+				items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != tc.key {
 				t.Fatalf("%q: outcome %s, exit %d, refusals %v; want one usage refusal naming %s\n%s", tc.args, doc.Outcome, code, items, tc.key, out)
 			}
 			if detail, _ := items[0]["detail"].(string); !strings.Contains(detail, tc.detail) {

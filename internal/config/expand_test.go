@@ -70,58 +70,26 @@ apiKeyFile = "~/keys/home.txt"
 baseUrl = "http://user.example/v1"
 apiKeyFile = "~other/key.txt"
 `)
-	providers, faults, err := LoadProviders(ProvidersPath(dir))
+	providers, faults, err := LoadProviders(ProvidersPath(dir), nil)
 	if err != nil {
 		t.Fatalf("LoadProviders: %v", err)
 	}
 	if len(faults) != 0 {
 		t.Fatalf("faults = %+v, want none: the home key file and the literal one both read", faults)
 	}
-	if got := providers["homekey"].APIKey; got != fakeKey {
-		t.Errorf("homekey.APIKey = %q, want the key under the home directory", got)
+	if got := providers["homekey"].APIKey.Reveal(); got != fakeKey {
+		t.Errorf("homekey.APIKey (len %d), want the key under the home directory", len(got))
 	}
 	if got := keyFilePath(providers["homekey"], dir); got != filepath.Join(home, "keys", "home.txt") {
 		t.Errorf("keyFilePath = %q, want %q — a ~-expanded path is never joined to the config directory",
 			got, filepath.Join(home, "keys", "home.txt"))
 	}
-	if got := providers["tildeuser"].APIKey; got != fakeKey {
-		t.Errorf("tildeuser.APIKey = %q, want the key its literal ~other/ names beside the config file", got)
+	if got := providers["tildeuser"].APIKey.Reveal(); got != fakeKey {
+		t.Errorf("tildeuser.APIKey (len %d), want the key its literal ~other/ names beside the config file", len(got))
 	}
 	// The report keeps the spelling each entry gives.
 	if got := providers["homekey"].APIKeyFile; got != "~/keys/home.txt" {
 		t.Errorf("APIKeyFile = %q, want the spelling the entry gives", got)
-	}
-}
-
-// TestExpandHomeEnvKeyFile: the key file $KBASE_API_KEY_FILE names expands the
-// same way, and the endpoint carries the expanded path for the dial to read.
-func TestExpandHomeEnvKeyFile(t *testing.T) {
-	home := stagedHome(t)
-	keys := filepath.Join(home, "keys")
-	if err := os.MkdirAll(keys, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, keys, "env.txt", fakeKey)
-	in := Inputs{Cfg: Config{Models: ModelMap{Decision: "p/d", Text: "p/t"}},
-		Providers: Providers{"p": {Name: "p", BaseURL: "https://p.example/v1"}},
-		Env:       Overrides{APIKeyFile: "~/keys/env.txt"}}
-
-	ep, err := Resolve(in, ModeFile, RoleText, "")
-	if err != nil || ep.APIKeyFile != filepath.Join(keys, "env.txt") {
-		t.Fatalf("Resolve = %+v, %v; want the key file under the home directory", ep, err)
-	}
-	missing := filepath.Join(keys, "absent.txt")
-	ep, err = Resolve(Inputs{Cfg: in.Cfg, Providers: in.Providers, Env: Overrides{APIKeyFile: "~/keys/absent.txt"}},
-		ModeFile, RoleText, "")
-	if err != nil || ep.APIKeyFile != missing {
-		t.Errorf("= %+v, %v; want the expanded path, unread", ep, err)
-	}
-	// In environment mode the same variable names the environment endpoint's
-	// key.
-	env, err := Resolve(Inputs{Env: Overrides{BaseURL: "https://env/v1", Text: "t", APIKeyFile: "~/keys/env.txt"}},
-		ModeEnvironment, RoleText, "")
-	if err != nil || env.APIKeyFile != filepath.Join(keys, "env.txt") || env.KeySource != LayerSourceEnvironment {
-		t.Errorf("= %+v, %v; want the environment's key file", env, err)
 	}
 }
 

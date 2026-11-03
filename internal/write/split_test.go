@@ -44,11 +44,11 @@ func splitEntry(id, line, extra string) string {
 }
 
 func TestSplitClaim(t *testing.T) {
-	const c, p, q, r, s, w = "clm-aaaaaa", "clm-bbbbbb", "clm-dddddd", "clm-eeeeee", "clm-ffffff", "wrk-k"
+	const c, p, q, r, s, w = "clm-aaaaaa", "clm-bbbbbb", "clm-dddddd", "clm-eeeeee", "clm-ffffff", "wrk-k00000"
 	via := kb.Bearing{Value: 0.4}
 	root := splitKB(t, kb.Graph{
 		Claims: []kb.ClaimNode{{ID: c, Title: "C"}, {ID: p, Title: "P"}, {ID: q, Title: "Q"}, {ID: r, Title: "R"}, {ID: s, Title: "S"}},
-		Works:  []kb.WorkNode{{ID: w, Title: "W"}},
+		Works:  []kb.WorkNode{{ID: w, Label: "k", Title: "W"}},
 		Founds: []kb.BearingEdge{{Source: w, Target: c, Bearing: kb.Bearing{Pending: true}}},
 		Scorable: []kb.ScorableEdge{
 			{Relation: kb.RelationSupports, Source: p, Target: c, Context: "via P", Bearing: via, ManuallyScored: true},
@@ -56,7 +56,7 @@ func TestSplitClaim(t *testing.T) {
 		},
 		References: []kb.UnscoredEdge{{Source: r, Target: c}},
 		Demoted:    []kb.DemotedEdge{{Source: q, Target: c, ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Value: 0.2}, ManuallyScored: true}},
-	}, "[↑ Entry](entry-point.md)\n\n# Leaf\n\n> **Theorem.**\n>\n> The statement holds. <!-- claim-rigor: "+c+" -->\n>\n> More.\n")
+	}, "[↑ Entry](entry-point.md)\n\n# Leaf\n\n> **Theorem.**\n>\n> The statement holds. <!-- kbase-id: "+c+" -->\n>\n> More.\n")
 	splitTwice(t, root, "entry:\n"+splitEntry(c, "6", ""))
 
 	g := records(t, root)
@@ -64,11 +64,11 @@ func TestSplitClaim(t *testing.T) {
 		t.Fatalf("analyses %+v, want one", g.Analyses)
 	}
 	a := g.Analyses[0]
-	if a.Title != "The Split Analysis" || a.Rationale != "Split off." || a.Rigor != nil || a.ManuallyScored || a.NoEdge != "" {
+	if a.Title != "The Split Analysis" || a.Rationale != "Split off." || a.Rigor != nil || a.ManuallyScored {
 		t.Errorf("analysis %+v", a)
 	}
 	leaf := snapshot(t, root)["leaf.md"]
-	if !strings.Contains(leaf, "\n> "+kb.StatementMarker(a.ID)+"\n") || !strings.Contains(leaf, "holds. "+kb.StatementMarker(c)+"\n") {
+	if !strings.Contains(leaf, "\n>"+kb.StatementMarker(a.ID)+"\n") || !strings.Contains(leaf, "holds. "+kb.StatementMarker(c)+"\n") {
 		t.Errorf("markers misplaced:\n%s", leaf)
 	}
 	holds := func(relation, source, target string, bearing kb.Bearing, manual bool, context string) bool {
@@ -114,7 +114,7 @@ func TestSplitClaimMovesAProseMarker(t *testing.T) {
 	}
 	splitTwice(t, root, "entry:\n"+splitEntry(c, "5", "  statement-end: "+strconv.Itoa(len(statement))+"\n"))
 	a := records(t, root).Analyses[0].ID
-	want := statement + " " + kb.StatementMarker(c) + " More follows. " + kb.StatementMarker(a) + "\n"
+	want := statement + kb.StatementMarker(c) + " More follows." + kb.StatementMarker(a) + "\n"
 	if got := snapshot(t, root)["leaf.md"]; !strings.HasSuffix(got, "\n\n"+want) {
 		t.Errorf("leaf %q, want it to end in %q", got, want)
 	}
@@ -127,7 +127,7 @@ func TestSplitClaimMovesAProseMarker(t *testing.T) {
 			b = n.ID
 		}
 	}
-	want = "Lead in.\n" + opener + " " + kb.StatementMarker(d) + " More follows. " + kb.StatementMarker(b) + "\n"
+	want = "Lead in.\n" + opener + kb.StatementMarker(d) + " More follows." + kb.StatementMarker(b) + "\n"
 	if got := snapshot(t, root)["leaf2.md"]; !strings.HasSuffix(got, "\n\n"+want) {
 		t.Errorf("leaf2 %q, want it to end in %q", got, want)
 	}

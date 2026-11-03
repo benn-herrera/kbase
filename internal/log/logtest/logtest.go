@@ -73,6 +73,18 @@ func (c *Capture) Has(t *testing.T, level, key string, value any) bool {
 	return c.Count(level, key, value) > 0
 }
 
+// Last returns the args of the last record at level with message msg, nil
+// where there is none.
+func (c *Capture) Last(level, msg string) []any {
+	records := c.Snapshot()
+	for i := len(records) - 1; i >= 0; i-- {
+		if r := records[i]; r.Level == level && r.Msg == msg {
+			return r.Args
+		}
+	}
+	return nil
+}
+
 // Count returns how many records at the given level carry key=value.
 func (c *Capture) Count(level, key string, value any) int {
 	want := fmt.Sprint(value)

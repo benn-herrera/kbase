@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"kbase/internal/asks"
-	"kbase/internal/buildrecords"
 	"kbase/internal/gitledger"
 	"kbase/internal/kb"
 	"kbase/internal/result"
@@ -40,6 +39,15 @@ var Stages = []Stage{
 	{"overview-drafted", "overview drafted"},
 }
 
+// StageIDs is each stage's id, in walk order.
+func StageIDs() []string {
+	ids := make([]string, len(Stages))
+	for i, s := range Stages {
+		ids[i] = s.ID
+	}
+	return ids
+}
+
 const (
 	StageStart         = "start"
 	StageDocumentGraph = "document-graph"
@@ -47,18 +55,24 @@ const (
 )
 
 // OwnedPaths are the root-relative paths a build commits and restores:
-// kb-root and the build records beside it.
-var OwnedPaths = append([]string{kb.KBDir}, buildrecords.RecordFiles...)
+// kb-root, the build records in it included.
+var OwnedPaths = []string{kb.KBDir}
 
 // The refusal and failure classes the build's state names in its items.
 const (
-	CheckUsage    = "usage"
 	CheckWorktree = "worktree"
 	CheckLock     = kb.CheckLock
 	CheckStateDir = "state-dir"
 	CheckTrail    = "trail"
 	CheckError    = "error"
 )
+
+// KBRootExists is the refusal of a kb-root/ that stands, in any state: init
+// and a fresh build each create kb-root/, and what exists is not created.
+func KBRootExists(kbRoot string) result.Item {
+	return result.Item{Check: kb.CheckKBRoot, Path: kbRoot,
+		Detail: kbRoot + " already exists; init and a fresh build create kb-root/ only where nothing stands there, an empty or half-built kb-root/ included"}
+}
 
 // Step is one step of a stage, and one unit of its progress. A step spends
 // inference where it makes a model call under a system prompt, or where its
@@ -136,6 +150,17 @@ func RecordedStages(trail []gitledger.Entry) map[string]string {
 		}
 	}
 	return recorded
+}
+
+// CurrentTrail is the newest build's part of trail, newest first: every
+// boundary down to its start boundary, the newest one trail holds. A fresh
+// build over kb-root/ removed starts a trail of its own above the one before
+// it. A trail holding no start boundary is its own.
+func CurrentTrail(trail []gitledger.Entry) []gitledger.Entry {
+	if i := slices.IndexFunc(trail, func(e gitledger.Entry) bool { return e.Stage == StageStart }); i >= 0 {
+		return trail[:i+1]
+	}
+	return trail
 }
 
 // TrailRefusal is the item refusing a trail that records a stage after one it

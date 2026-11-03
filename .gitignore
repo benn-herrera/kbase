@@ -29,7 +29,12 @@ mad-*/
 mad-design/
 mad-review/
 guest-session/
+
+.venv/
 __pycache__/
 
 # custom homebrew tap repo location
 homebrew-kbase/
+
+# markdown monolith -> hierarchy tool
+tools/docdicer/

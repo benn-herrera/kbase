@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"kbase/internal/kb"
+	"kbase/internal/write"
 )
 
 // Claim is one claim-bearing block's claim, before an id exists for it: its
@@ -106,7 +107,11 @@ func markerLocator(text, id string) string {
 // readGraph joins each leaf's statement markers to the claim records — a claim
 // marked in several leaves is hosted by the first in path order — and each
 // claim to its site: an equation by the label its title carries, a block claim
-// by title, any other by its marker. A leaf's claims are in marker order.
+// by title, any other by its marker. A block claim whose title the build made
+// unique within its kind carries a title its block's no longer meets; it joins
+// the block of its leaf whose display line its marker stands on, where no claim
+// of that leaf carries the block's own title. A leaf's claims are in marker
+// order.
 func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 	recs, err := kb.LoadGraph(builtTree(t.Root))
 	if err != nil {
@@ -116,13 +121,18 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 	for _, n := range recs.Claims {
 		titles[n.ID] = n.Title
 	}
-	type site struct{ display, identifier string }
+	type site struct{ title, display, identifier string }
 	blocks := map[string]map[string]site{}
+	byDisplayLine := map[string]map[int]site{}
 	for _, b := range inv.claimBlocks() {
 		if blocks[b.Document] == nil {
-			blocks[b.Document] = map[string]site{}
+			blocks[b.Document], byDisplayLine[b.Document] = map[string]site{}, map[int]site{}
 		}
-		blocks[b.Document][t.registerTitle(b.Title, b.Document)] = site{b.Display, b.Identifier}
+		s := site{t.registerTitle(b.Title, b.Document), b.Display, b.Identifier}
+		blocks[b.Document][s.title] = s
+		if line, ok := displayLine(t.Documents[b.Document].Text, b); ok {
+			byDisplayLine[b.Document][line] = s
+		}
 	}
 	g := &AuthoredGraph{byID: map[string]int{}}
 	for _, p := range t.Paths {
@@ -133,6 +143,10 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 		ids := slices.SortedFunc(maps.Keys(lines), func(a, b string) int {
 			return cmp.Or(cmp.Compare(lines[a], lines[b]), strings.Compare(a, b))
 		})
+		hostedTitles := map[string]bool{}
+		for _, id := range ids {
+			hostedTitles[titles[id]] = true
+		}
 		for _, id := range ids {
 			if kind, _ := kb.NodeIDKind(id); kind != kb.NodeKindClaim {
 				continue
@@ -149,6 +163,8 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 				n.Locator, n.Equation = label, label
 			} else if s, ok := blocks[p][title]; ok {
 				n.Locator, n.Identifier = s.display, s.identifier
+			} else if s, ok := byDisplayLine[p][lines[id]]; ok && !hostedTitles[s.title] {
+				n.Locator, n.Identifier = s.display, s.identifier
 			} else {
 				n.Locator = markerLocator(t.Documents[p].Text, id)
 			}
@@ -157,4 +173,20 @@ func readGraph(t *Tree, inv *Inventory) (*AuthoredGraph, error) {
 		}
 	}
 	return g, nil
+}
+
+// displayLine is the 0-based line of text block b's display begins on, found
+// as the build's add-claim placed the block claim's marker there: the one line
+// write.ExcerptLines finds for the display within the block's extent.
+func displayLine(text string, b Block) (int, bool) {
+	var within []int
+	for _, at := range write.ExcerptLines(text, b.Display) {
+		if at >= b.Start && at < b.End {
+			within = append(within, at)
+		}
+	}
+	if len(within) != 1 {
+		return 0, false
+	}
+	return within[0], true
 }

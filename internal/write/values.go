@@ -2,6 +2,7 @@ package write
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -15,23 +16,23 @@ import (
 	"kbase/internal/result"
 )
 
-// entryKey is the one top-level key of a values document: a list of entries,
-// each one edit or one print, the op fixing what an entry means.
+// entryKey is the top-level key of a values document: a list of entries, each
+// one edit or one print, the op fixing what an entry means.
 const entryKey = "entry"
 
-// excerptMaxChars is the citation gate's bound on an excerpt.
-const excerptMaxChars = 240
+// dryRunKey is the batch option beside entryKey that writes nothing.
+const dryRunKey = "dry-run"
+
+// commitKey is the batch option beside entryKey that makes git the batch's
+// undo.
+const commitKey = "commit"
+
+// operationKey names an entry's op in a Batch.
+const operationKey = "operation"
 
 var (
 	readerNumberRE = regexp.MustCompile(`^-?\d+(?:\.\d+)?$`)
-	axiomTokenRE   = regexp.MustCompile(`^Axiom (` + kb.AxiomLabel + `)$`)
-	citationKeyRE  = regexp.MustCompile(`^` + strings.TrimPrefix(kb.WorkIDPattern, kb.WorkPrefix+"-") + `$`)
 	blankLineRE    = regexp.MustCompile(`\n[` + strings.Replace(kb.PyWhitespace, `\n`, "", 1) + `]*\n`)
-)
-
-var (
-	axiomIDFullRE = regexp.MustCompile(`^` + kb.AxiomPrefix + "-" + kb.AxiomLabel + `$`)
-	workIDFullRE  = regexp.MustCompile(`^` + kb.WorkIDPattern + `$`)
 )
 
 // valueError is a checker's refusal, positioned at the node it failed on.
@@ -41,6 +42,7 @@ type valueError struct {
 	node    *yaml.Node
 	line    int
 	allowed []string
+	remedy  string
 }
 
 func refuse(field string, node *yaml.Node, format string, args ...any) *valueError {
@@ -50,10 +52,14 @@ func refuse(field string, node *yaml.Node, format string, args ...any) *valueErr
 // check reads one value node into its typed form.
 type check func(n *yaml.Node, field string) (any, *valueError)
 
+// field is one key a values entry or table may carry. typ and about are the
+// key's type and description as its op's help lists them: a caller-issued op's
+// keys carry both, a build-only op's and a table's neither.
 type field struct {
-	name     string
-	check    check
-	required bool
+	name       string
+	check      check
+	required   bool
+	typ, about string
 }
 
 func fieldNames(fields []field) []string {
@@ -166,6 +172,53 @@ func checkProse(n *yaml.Node, field string) (any, *valueError) {
 	return text, nil
 }
 
+// checkLine is a batch's prose value: one line, read collapsed — every
+// whitespace run one space, the ends trimmed. A line break (CR or LF) is
+// refused, and so are U+0008 and U+000C, a JSON writer's \b and \f where a TeX
+// \beta or \frac was meant. Where allowEmpty is false a value that collapses to
+// "" is refused.
+func checkLine(allowEmpty bool) check {
+	return func(n *yaml.Node, field string) (any, *valueError) {
+		text, err := lineAsGiven(n, field)
+		if err != nil {
+			return nil, err
+		}
+		line := kb.NormalizeSpace(text)
+		if line == "" && !allowEmpty {
+			return nil, refuse(field, n, "expected one line of prose, got an empty value")
+		}
+		return line, nil
+	}
+}
+
+// checkVerbatimLine is a one-line value used as written: a span matched
+// against the document, never collapsed.
+func checkVerbatimLine(n *yaml.Node, field string) (any, *valueError) {
+	text, err := lineAsGiven(n, field)
+	if err != nil {
+		return nil, err
+	}
+	if kb.NormalizeSpace(text) == "" {
+		return nil, refuse(field, n, "expected one line of prose, got an empty value")
+	}
+	return text, nil
+}
+
+// lineAsGiven is a prose value's text as given, refused where it is not a
+// string or carries a line break, U+0008 or U+000C.
+func lineAsGiven(n *yaml.Node, field string) (string, *valueError) {
+	text, err := requireString(n, field, "one line of prose")
+	if err != nil {
+		return "", err
+	}
+	if i := strings.IndexAny(text, "\r\n\b\f"); i >= 0 {
+		r, _ := utf8.DecodeRuneInString(text[i:])
+		return "", refuse(field, n, "carries U+%04X; a prose value is one line, with no line break, U+0008 or U+000C "+
+			"(a JSON \\b or \\f where a TeX backslash was meant: escape the backslash). Join the lines with a space", r)
+	}
+	return text, nil
+}
+
 // proseLine is the line of a prose value's offset-th line: a block scalar's
 // text opens on the line after its indicator.
 func proseLine(n *yaml.Node, offset int) int {
@@ -217,18 +270,6 @@ var (
 	checkBearing = checkScore("the domain one scoring edge's bearing carries", 1)
 )
 
-func checkExcerpt(n *yaml.Node, field string) (any, *valueError) {
-	v, err := checkProse(n, field)
-	if err != nil {
-		return nil, err
-	}
-	if size := utf8.RuneCountInString(kb.Strip(v.(string))); size > excerptMaxChars {
-		return nil, refuse(field, n, "is %d characters, over the %d-character bound the citation checker enforces. "+
-			"Quote the clause, not the section", size, excerptMaxChars)
-	}
-	return v, nil
-}
-
 // checkPath is a kb-root-relative path; containment is the store's question.
 func checkPath(n *yaml.Node, field string) (any, *valueError) {
 	text, err := requireString(n, field, "a kb-root-relative path")
@@ -240,7 +281,7 @@ func checkPath(n *yaml.Node, field string) (any, *valueError) {
 	}
 	if filepath.IsAbs(text) || strings.HasPrefix(text, "/") {
 		return nil, refuse(field, n, "%q is absolute. Paths are relative to kb-root/, not to the repository root and not "+
-			"to the filesystem — a register at <kb-root>/part3/claim-rigor.md is 'part3/claim-rigor.md'", text)
+			"to the filesystem — a leaf at <kb-root>/part3/results.md is 'part3/results.md'", text)
 	}
 	return text, nil
 }
@@ -258,10 +299,13 @@ func checkOneOf(vocabulary []string, what string) check {
 	return func(n *yaml.Node, field string) (any, *valueError) {
 		text, err := requireString(n, field, "a string")
 		if err != nil {
+			err.allowed = vocabulary
 			return nil, err
 		}
 		if !slices.Contains(vocabulary, text) {
-			return nil, refuse(field, n, "%q is outside the closed %s vocabulary %v", text, what, vocabulary)
+			err := refuse(field, n, "%q is outside the closed %s vocabulary %v", text, what, vocabulary)
+			err.allowed = vocabulary
+			return nil, err
 		}
 		return text, nil
 	}
@@ -272,17 +316,22 @@ var (
 	checkRelation = checkOneOf(kb.ScoringRelations, "relation")
 )
 
-// checkEdgeClass takes one of drop-claim-edges' two classes. A demoted value
-// is refused naming its producer: demoted rows are resolve-demoted's to
-// remove, not this op's.
-func checkEdgeClass(n *yaml.Node, field string) (any, *valueError) {
-	v, err := checkOneOf([]string{kb.ListRestsOn, kb.RelationReferences}, "edge-class")(n, field)
-	if err == nil {
-		return v, nil
+// authoredRelations is every relation an op writes an edge of, in the
+// relations table's order: all but demoted, whose records only the build
+// writes.
+var authoredRelations = append(slices.Clone(kb.ScoringRelations), kb.RelationReferences)
+
+// checkAuthoredRelation takes one of authoredRelations; demoted is refused
+// with demotedRemedy, the ops that resolve a demoted record.
+func checkAuthoredRelation(demotedRemedy string) check {
+	return func(n *yaml.Node, field string) (any, *valueError) {
+		v, err := checkOneOf(authoredRelations, "relation")(n, field)
+		if err != nil && isString(n) && n.Value == kb.RelationDemoted {
+			err.detail = "a demoted record is the build's, and this op writes no demoted record"
+			err.remedy = demotedRemedy
+		}
+		return v, err
 	}
-	text, _ := requireString(n, field, "a string")
-	return nil, refuse(field, n, "%q is outside the closed edge-class vocabulary [%s %s]; demoted rows are "+
-		"resolve-demoted's to remove, not drop-claim-edges'", text, kb.ListRestsOn, kb.RelationReferences)
 }
 
 // idChecker checks a node id's shape; existence is the op's question. The
@@ -313,11 +362,11 @@ var (
 	checkClaimID      = idChecker(kb.ClaimPrefix)
 	checkExperimentID = idChecker(kb.ExperimentPrefix)
 	checkEntryID      = idChecker(kb.ClaimPrefix, kb.AnalysisPrefix)
-	// checkTargetID is a scoring edge's target kind: a claim or an analysis.
-	checkTargetID = idChecker(kb.ClaimPrefix, kb.AnalysisPrefix)
 	// checkHostedID is a node a statement marker hosts: a claim, an analysis
 	// or an experiment.
 	checkHostedID = idChecker(kb.ClaimPrefix, kb.AnalysisPrefix, kb.ExperimentPrefix)
+	checkAxiomID  = idChecker(kb.AxiomPrefix)
+	checkWorkID   = idChecker(kb.WorkPrefix)
 )
 
 // checkSourceID is a scoring edge's source: a claim, an analysis, an
@@ -332,83 +381,34 @@ func checkSourceID(n *yaml.Node, field string) (any, *valueError) {
 	return checkHostedID(n, field)
 }
 
-// checkAxiomID is a declared axiom's id: the prefix and the label as authored,
-// which is no minted id and so is checked for its own shape.
-func checkAxiomID(n *yaml.Node, field string) (any, *valueError) {
-	expected := "an axiom id matching " + kb.AxiomPrefix + "-" + kb.AxiomLabel
-	token, err := requireString(n, field, expected)
-	if err != nil {
-		return nil, err
-	}
-	if !axiomIDFullRE.MatchString(token) {
-		return nil, refuse(field, n, "%q is not %s", token, expected)
-	}
-	return token, nil
-}
-
-func checkWorkID(n *yaml.Node, field string) (any, *valueError) {
-	token, err := requireString(n, field, "an id matching "+kb.WorkIDPattern)
-	if err != nil {
-		return nil, err
-	}
-	if !workIDFullRE.MatchString(token) {
-		return nil, refuse(field, n, "%q is not an external-work id matching %s", token, kb.WorkIDPattern)
-	}
-	return token, nil
-}
-
+// checkCitationKey is a work's label: its citation key.
 func checkCitationKey(n *yaml.Node, field string) (any, *valueError) {
 	token, err := requireString(n, field, "a citation key")
 	if err != nil {
 		return nil, err
 	}
-	if !citationKeyRE.MatchString(token) {
-		return nil, refuse(field, n, "%q is not a citation key — it must open and close alphanumeric, so the token has "+
-			"no trailing punctuation for a rests-on bullet's head to argue about", token)
+	if !kb.WorkLabel.MatchString(token) {
+		return nil, refuse(field, n, "%q is not a citation key: it must open and close alphanumeric, with only letters, digits and _.:+/- between", token)
 	}
 	return token, nil
-}
-
-// checkRationaleID is the id of a node carrying a rationale: a claim, an
-// analysis or a work.
-func checkRationaleID(n *yaml.Node, field string) (any, *valueError) {
-	if isString(n) && strings.HasPrefix(n.Value, kb.WorkPrefix+"-") {
-		return checkWorkID(n, field)
-	}
-	return checkEntryID(n, field)
-}
-
-// checkRigorID is the id of a node carrying a local rigor: a claim, an
-// analysis, an experiment or a work.
-func checkRigorID(n *yaml.Node, field string) (any, *valueError) {
-	switch {
-	case isString(n) && strings.HasPrefix(n.Value, kb.WorkPrefix+"-"):
-		return checkWorkID(n, field)
-	case isString(n) && strings.HasPrefix(n.Value, kb.ExperimentPrefix+"-"):
-		return checkExperimentID(n, field)
-	}
-	return checkEntryID(n, field)
 }
 
 // legacyInvariantPrefix opens the 1.x spelling of an axiom citation.
 const legacyInvariantPrefix = "INVARIANT-"
 
+// legacyAxiomPrefix opens the 3.0.0 spelling of an axiom citation.
+const legacyAxiomPrefix = "Axiom "
+
 // checkPremiseTarget is a premise's source by its id: a claim, an experiment,
 // a work or an axiom. The superseded axiom spellings, "Axiom <label>" and
-// INVARIANT-<label>, are refused naming the id.
+// INVARIANT-<label>, are refused: an axiom is named by its minted id.
 func checkPremiseTarget(n *yaml.Node, field string) (any, *valueError) {
 	token, err := requireString(n, field, "a claim, experiment, work or axiom id")
 	if err != nil {
 		return nil, err
 	}
-	label, legacy := "", false
-	if m := axiomTokenRE.FindStringSubmatch(token); m != nil {
-		label, legacy = m[1], true
-	} else if strings.HasPrefix(token, legacyInvariantPrefix) {
-		label, legacy = strings.TrimPrefix(token, legacyInvariantPrefix), true
-	}
-	if legacy {
-		return nil, refuse(field, n, "%q is a superseded axiom spelling; an axiom is named by its id, %s", token, kb.AxiomPrefix+"-"+label)
+	if strings.HasPrefix(token, legacyAxiomPrefix) || strings.HasPrefix(token, legacyInvariantPrefix) {
+		return nil, refuse(field, n, "%q is a superseded axiom spelling; name the axiom by its minted id, %s-<minted>: %s", token, kb.AxiomPrefix, kb.NodeLister)
 	}
 	switch {
 	case strings.HasPrefix(token, kb.AxiomPrefix+"-"):
@@ -491,9 +491,6 @@ func checkTable(n *yaml.Node, label string, specs []field) (map[string]any, *val
 		checked, err := spec.check(v, spec.name)
 		if err != nil {
 			err.field = dotted(label, err.field)
-			if err.allowed == nil {
-				err.allowed = allowed
-			}
 			return nil, err
 		}
 		out[spec.name] = checked
@@ -534,30 +531,14 @@ type restsOnValue struct {
 }
 
 var restsOnFields = []field{
-	{"id", checkPremiseTarget, true},
-	{"context", checkProse, false},
-	{"bearing", checkBearing, false},
+	{"id", checkPremiseTarget, true, "", ""},
+	{"context", checkProse, false, "", ""},
+	{"bearing", checkBearing, false, "", ""},
 }
 
 var referencesFields = []field{
-	{"id", checkClaimID, true},
-	{"context", checkProse, false},
-}
-
-// pairFields is one entry of an insert's pair lists: the claim or analysis the
-// edge points at, and its bearing, the pending judgement where left out.
-var pairFields = []field{
-	{"id", checkTargetID, true},
-	{"bearing", checkBearing, false},
-}
-
-// addedPairFields is one entry of add-pairs' lists: the claim or analysis the
-// edge points at, its bearing, the pending judgement where left out, and the
-// author's context.
-var addedPairFields = []field{
-	{"id", checkTargetID, true},
-	{"bearing", checkBearing, false},
-	{"context", checkProse, false},
+	{"id", checkClaimID, true, "", ""},
+	{"context", checkProse, false, "", ""},
 }
 
 func optionalString(m map[string]any, key string) string {
@@ -568,14 +549,6 @@ func optionalString(m map[string]any, key string) string {
 func optionalScore(m map[string]any, key string) *float64 {
 	v, _ := m[key].(*float64)
 	return v
-}
-
-func pairs(m map[string]any, key string) []pair {
-	var out []pair
-	for _, v := range listOf(m, key) {
-		out = append(out, v.(pair))
-	}
-	return out
 }
 
 func listOf(m map[string]any, key string) []any {
@@ -594,175 +567,171 @@ var checkReferences = tableList(referencesFields, "{ id, context } tables",
 		return restsOnValue{ID: m["id"].(string), Context: optionalString(m, "context")}, nil
 	})
 
-// suppliedPair is a pair-list table as its pair, judged where it carries a
-// bearing.
-func suppliedPair(m map[string]any, _ *yaml.Node, _ string) (any, *valueError) {
-	_, judged := m["bearing"]
-	return pair{ID: m["id"].(string), Context: optionalString(m, "context"), Score: optionalScore(m, "bearing"), Judged: judged}, nil
+// placementFields are the keys naming the line an add places its node's
+// statement marker on.
+var placementFields = []field{
+	{"document", checkPath, true, "string", "the leaf, kb-root-relative, whose line takes the statement marker"},
+	{"line", checkPositive, true, "integer", "that line's number, 1-based"},
+	{"snippet", checkLine(false), true, "string", "a few distinctive words of that line, which only verify it"},
 }
 
-var checkPairs = tableList(pairFields, "{ id, bearing } tables", suppliedPair)
+// editID is an edit's id: a node of any kind, so that one of another kind is
+// refused when it applies, naming the edit op for its kind.
+var editID = field{"id", checkSourceID, true, "string", ""}
 
-var checkAddedPairs = tableList(addedPairFields, "{ id, bearing, context } tables", suppliedPair)
-
-func scalarList(one check, of string) check {
-	return func(n *yaml.Node, field string) (any, *valueError) {
-		items, err := requireSequence(n, field, of)
-		if err != nil {
-			return nil, err
-		}
-		var out []string
-		for i, item := range items {
-			v, err := one(resolved(item), field)
-			if err != nil {
-				err.field = fmt.Sprintf("%s[%d]", field, i+1)
-				return nil, err
-			}
-			out = append(out, v.(string))
-		}
-		return out, nil
-	}
+// idAbout is editID described as about describes it, for one op's help.
+func idAbout(about string) field {
+	f := editID
+	f.about = about
+	return f
 }
 
-var checkProseList = scalarList(func(n *yaml.Node, f string) (any, *valueError) { return checkProse(n, f) }, "prose items")
-
-// insertCommon is the claim and analysis inserts' shared keys; each insert
-// adds the keys only its own node kind carries.
-var insertCommon = []field{
-	{"title", checkProse, true},
-	{"rigor", checkRigor, false},
-	{"rationale", checkProse, true},
-	{kb.ListRestsOn, checkRestsOn, false},
-	{"no-edge", checkProse, false},
-	{"document", checkPath, false},
+// kindEditID is the id key of the edit op for kind, whose ids open with
+// prefix.
+func kindEditID(kind, prefix string) field {
+	return idAbout("the " + kind + "'s id (" + prefix + "-…); another kind's is refused, naming its edit op")
 }
 
-var axiomLabelRE = regexp.MustCompile(`^` + kb.AxiomLabel + `$`)
+// scoreType is a rigor's or a bearing's type, as an op's help lists it.
+const scoreType = `number or "*pending*"`
 
-// checkAxiomLabel is an axiom's label as authored, the body of its id.
-func checkAxiomLabel(n *yaml.Node, field string) (any, *valueError) {
-	expected := "an axiom label matching " + kb.AxiomLabel
-	token, err := requireString(n, field, expected)
-	if err != nil {
-		return nil, err
-	}
-	if !axiomLabelRE.MatchString(token) {
-		return nil, refuse(field, n, "%q is not %s", token, expected)
-	}
-	return token, nil
-}
+// The node ops' shared keys: each as an add takes it, then as an edit does.
+var (
+	addedTitle      = field{"title", checkLine(false), true, "string", "the node's title, one line, unique within its kind"}
+	editedTitle     = field{"title", checkLine(false), false, "string", "the node's new title, one line, unique within its kind"}
+	addedRationale  = field{"rationale", checkLine(true), true, "string", "the node's rationale, one line"}
+	editedRationale = field{"rationale", checkLine(true), false, "string", "the node's new rationale, one line"}
+	addedRigor      = field{"rigor", checkRigor, false, scoreType, `the node's rigor, in [0, 1] (default: "*pending*"); one given, "*pending*" included, marks it manually scored`}
+	editedRigor     = field{"rigor", checkRigor, false, scoreType, "the node's new rigor, in [0, 1]; one given, the standing value included, marks it manually scored"}
+)
+
+// edgeSourceAbout and edgeTargetAbout describe the keys naming an edge's ends.
+const (
+	edgeSourceAbout = "the id of the edge's source node"
+	edgeTargetAbout = "the id of the edge's target node"
+)
+
+// judgedRelationsAbout closes a bearing's description: the relations whose
+// edge a given bearing marks manually scored.
+var judgedRelationsAbout = "where its relation is one a score run judges (" + strings.Join(kb.BearingWalkRelations, ", ") + ")"
 
 // opFields is every op's closed key vocabulary: an unknown key is refused,
 // never ignored, and a required key left out is refused by name.
 var opFields = map[string][]field{
-	"insert-claim-entry": append(slices.Clone(insertCommon), field{"locator", checkProse, false},
-		field{"strengthen-by", checkProseList, false}, field{kb.RefutesKey, checkPairs, false}),
-	"insert-analysis-entry": append(slices.Clone(insertCommon), field{kb.LiftsKey, checkPairs, false}, field{kb.RefutesKey, checkPairs, false}),
-	"insert-experiment-entry": {
-		{"document", checkPath, true},
-		{"title", checkProse, true},
-		{"status", checkStatus, true},
-		{"rigor", checkRigor, false},
-		{kb.SupportsKey, checkPairs, false},
-		{kb.LiftsKey, checkPairs, false},
-		{kb.RefutesKey, checkPairs, false},
+	EditClaim:    {kindEditID(kb.NodeKindClaim, kb.ClaimPrefix), editedTitle, editedRigor, editedRationale},
+	EditAnalysis: {kindEditID(kb.NodeKindAnalysis, kb.AnalysisPrefix), editedTitle, editedRigor, editedRationale},
+	EditExperiment: {kindEditID(kb.NodeKindExperiment, kb.ExperimentPrefix), editedTitle,
+		{"status", checkStatus, false, "string", "run or planned: whether the experiment has been run"}, editedRigor},
+	EditWork: {kindEditID(kb.NodeKindWork, kb.WorkPrefix),
+		{"label", checkCitationKey, false, "string", "the work's new citation key: letters, digits and _ . : + / -, opening and closing with a letter or digit; " +
+			"unique among works and unused as a key by any citation span or reference-list entry; every use of the old key as a key is rewritten to it"},
+		editedTitle,
+		{"rigor", checkRigor, false, scoreType, "the work's new rigor, in [0, 1]; a work's rigor carries no manual mark"}, editedRationale},
+	EditAxiom: {kindEditID(kb.NodeKindAxiom, kb.AxiomPrefix),
+		{"label", checkLine(false), false, "string", "the axiom's new label, one line of any text, unique among axioms; its heading in axioms.md is rewritten"},
+		editedTitle},
+	RemoveNode: {idAbout("the id of the node to remove, of any kind")},
+	MoveNode:   append([]field{idAbout("the id of the claim, analysis or experiment whose statement marker moves")}, placementFields...),
+	AddCitation: {{"document", checkPath, true, "string", "the KB document, kb-root-relative, whose line holds the text to link"},
+		{"line", checkPositive, true, "integer", "that line's number, 1-based"},
+		{"snippet", checkVerbatimLine, true, "string", "the span of that line the link replaces, occurring there once: " +
+			"the node's id, a verbatim span of its statement, or your paraphrase (with \"quote\")"},
+		{"id", checkSourceID, true, "string", "the cited node's id"},
+		{"quote", checkLine(false), false, "string", "where the snippet is your paraphrase, the passage it paraphrases, verbatim from the cited statement; " +
+			"left out, the snippet is the node's id (naming form) or a verbatim span of its statement"}},
+	AddClaim:    append([]field{addedTitle, addedRationale, addedRigor}, placementFields...),
+	AddAnalysis: append([]field{addedTitle, addedRationale, addedRigor}, placementFields...),
+	AddExperiment: append([]field{addedTitle, {"status", checkStatus, true, "string", "run or planned: whether the experiment has been run"},
+		addedRigor}, placementFields...),
+	AddWork: {
+		{"label", checkCitationKey, true, "string", "the work's citation key: letters, digits and _ . : + / -, opening and closing with a letter or digit; unique among works; the work's id is minted"},
+		addedTitle,
+		addedRationale,
+		{"rigor", checkRigor, false, scoreType, `the work's rigor, in [0, 1] (default: "*pending*"); a work's rigor carries no manual mark`},
 	},
-	"insert-work-entry": {
-		{"key", checkCitationKey, true},
-		{"title", checkProse, true},
-		{"rigor", checkRigor, false},
-		{"rationale", checkProse, true},
-	},
-	"insert-axiom-entry": {
-		{"label", checkAxiomLabel, true},
-		{"title", checkProse, true},
-	},
-	"set-bearing": {
-		{"id", checkSourceID, true},
-		{"target", checkTargetID, true},
-		{"relation", checkRelation, true},
-		{"bearing", checkBearing, true},
-	},
-	"set-rigor": {
-		{"id", checkRigorID, true},
-		{"rigor", checkRigor, true},
-	},
-	"set-rationale": {
-		{"id", checkRationaleID, true},
-		{"rationale", checkProse, true},
-	},
-	"set-status": {
-		{"id", checkExperimentID, true},
-		{"status", checkStatus, true},
-	},
-	"add-rests-on": {
-		{"id", checkEntryID, true},
-		{kb.ListRestsOn, checkRestsOn, false},
-		{"references", checkReferences, false},
+	AddAxiom: {
+		{"label", checkLine(false), true, "string", "the axiom's label, one line of any text, unique among axioms; the axiom's id is minted"},
+		addedTitle,
 	},
 	AddBuildEdges: {
-		{"id", checkEntryID, true},
-		{kb.ListRestsOn, checkRestsOn, false},
-		{"references", checkReferences, false},
+		{"id", checkEntryID, true, "", ""},
+		{kb.ListRestsOn, checkRestsOn, false, "", ""},
+		{"references", checkReferences, false, "", ""},
 	},
-	"add-pairs": {
-		{"id", checkHostedID, true},
-		{kb.SupportsKey, checkAddedPairs, false},
-		{kb.LiftsKey, checkAddedPairs, false},
-		{kb.RefutesKey, checkAddedPairs, false},
+	AddEdge: {
+		{"source", checkSourceID, true, "string", edgeSourceAbout},
+		{"target", checkSourceID, true, "string", edgeTargetAbout},
+		{"relation", checkAuthoredRelation("restore-demoted puts the demoted edge back, then re-run"), true, "string",
+			"one of " + strings.Join(authoredRelations, ", ") + "; the edge reads source relation target"},
+		{"bearing", checkBearing, false, scoreType, `in [0, 1] (default: "*pending*"), refused on ` + kb.RelationReferences +
+			`; one given, "*pending*" included, marks the edge manually scored ` + judgedRelationsAbout},
+		{"context", checkLine(true), false, "string", `one line, "" for none`},
 	},
-	ResolveDemoted: {
-		{"id", checkHostedID, true},
-		{"target", checkHostedID, true},
-		{"action", checkOneOf(resolveActions, "action"), true},
+	EditEdge: {
+		{"source", checkSourceID, true, "string", edgeSourceAbout},
+		{"target", checkSourceID, true, "string", edgeTargetAbout},
+		{"relation", checkAuthoredRelation("restore-demoted puts the demoted edge back, or remove-edge removes the demoted record; then re-run"), true,
+			"string", "the standing edge's relation, one of " + strings.Join(authoredRelations, ", ") + "; " + kb.RelationDemoted + " is refused"},
+		{"bearing", checkBearing, false, scoreType, "the edge's new bearing, in [0, 1], refused on " + kb.RelationReferences +
+			"; one given, the standing value included, marks the edge manually scored " + judgedRelationsAbout},
+		{"context", checkLine(true), false, "string", `the edge's new context, one line, "" for none`},
 	},
-	"drop-claim-edges": {
-		{"id", checkClaimID, true},
-		{"edge-class", checkEdgeClass, false},
+	RemoveEdge: {
+		{"source", checkSourceID, true, "string", edgeSourceAbout},
+		{"target", checkSourceID, true, "string", edgeTargetAbout},
+		{"relation", checkOneOf(kb.Relations, "relation"), true, "string", "the edge record's relation, one of " + strings.Join(kb.Relations, ", ")},
 	},
-	"drop-inbound-edges": {
-		{"id", checkClaimID, true},
+	RestoreDemoted: {
+		{"source", checkHostedID, true, "string", "the id of the demoted record's source node"},
+		{"target", checkHostedID, true, "string", "the id of the demoted record's target node"},
+		{"relation", checkOneOf([]string{kb.RelationDemoted}, "relation"), true, "string", kb.RelationDemoted + ", and no other"},
 	},
 	DemoteClaimEdge: {
-		{"id", checkHostedID, true},
-		{"target", checkHostedID, true},
+		{"source", checkHostedID, true, "", ""},
+		{"target", checkHostedID, true, "", ""},
+		{"relation", checkRelation, true, "", ""},
 	},
 	SplitClaim: {
-		{"id", checkClaimID, true},
-		{"title", checkProse, true},
-		{"rationale", checkProse, true},
-		{"document", checkPath, true},
-		{"line", checkPositive, true},
-		{"statement-end", checkPositive, false},
-		{"statement-line", checkPositive, false},
-	},
-	"drop-claim-node": {
-		{"id", checkClaimID, true},
-	},
-	"mark-claim-in-leaf": {
-		{"document", checkPath, true},
-		{"id", checkHostedID, true},
-		{"locator", checkProse, true},
-	},
-	"render-citation": {
-		{"excerpt", checkExcerpt, true},
-		{"cited-document", checkPath, true},
-		{"anchor", checkProse, true},
-		{"citing-document", checkPath, true},
+		{"id", checkClaimID, true, "", ""},
+		{"title", checkProse, true, "", ""},
+		{"rationale", checkProse, true, "", ""},
+		{"document", checkPath, true, "", ""},
+		{"line", checkPositive, true, "", ""},
+		{"statement-end", checkPositive, false, "", ""},
+		{"statement-line", checkPositive, false, "", ""},
 	},
 }
 
-// entry is one accepted values entry: its 1-based position and its checked
-// values, keyed by the op's vocabulary.
+// entry is one accepted values entry: its 1-based position, its op, and its
+// checked values, keyed by the op's vocabulary.
 type entry struct {
 	Index  int
+	Op     string
 	Values map[string]any
+}
+
+// batch is an accepted values document: its entries, in order, and whether
+// it is a dry run and whether it commits.
+type batch struct {
+	entries []entry
+	dryRun  bool
+	commit  bool
 }
 
 func (e entry) str(key string) string     { return optionalString(e.Values, key) }
 func (e entry) score(key string) *float64 { return optionalScore(e.Values, key) }
-func (e entry) list(key string) []string  { v, _ := e.Values[key].([]string); return v }
 func (e entry) has(key string) bool       { _, ok := e.Values[key]; return ok }
+
+// names is the node ids the entry's values name: its id, source and target.
+func (e entry) names() []string {
+	var ids []string
+	for _, key := range []string{"id", "source", "target"} {
+		if id := e.str(key); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
 
 // count is the whole number checkPositive read at key, 0 where absent.
 func (e entry) count(key string) int { n, _ := e.Values[key].(int); return n }
@@ -775,78 +744,155 @@ func (e entry) restsOn(key string) []restsOnValue {
 	return out
 }
 
-func (e entry) pairs(key string) []pair { return pairs(e.Values, key) }
-
 // parseValues checks a values document — YAML, or JSON, which YAML reads —
-// against op's vocabulary. It returns every entry, or every refusal and no
-// entry: a batch is all-or-nothing.
-func parseValues(data []byte, op string) ([]entry, []result.Item) {
-	fields, ok := opFields[op]
-	if !ok {
-		panic("write: no vocabulary for op " + op)
+// as op's: a batch of op's entries, or, where op is Batch, of entries each
+// naming its op under operation. This is the batch's shape phase: it returns
+// every entry, or every refusal and no entry, each op's own checks over its
+// entries included. A dry run is reported wherever the document states it.
+func parseValues(data []byte, op string) (batch, []result.Item) {
+	top := []string{commitKey, dryRunKey, entryKey}
+	if op != Batch {
+		if _, ok := opFields[op]; !ok {
+			panic("write: no vocabulary for op " + op)
+		}
 	}
 	if !utf8.Valid(data) {
 		line := bytes.Count(data[:invalidUTF8At(data)], []byte("\n")) + 1
-		return nil, []result.Item{{Key: entryKey, Line: line, Allowed: []string{entryKey},
+		return batch{}, []result.Item{{Key: entryKey, Line: line, Allowed: top,
 			Detail: "is not valid UTF-8. A values document is read as strict UTF-8 and never decoded with replacement characters"}}
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, []result.Item{{Key: entryKey, Line: yamlErrorLine(err), Allowed: []string{entryKey},
+		return batch{}, []result.Item{{Key: entryKey, Line: yamlErrorLine(err), Allowed: top,
 			Detail: "is not parseable YAML or JSON: " + err.Error()}}
 	}
 	if doc.Kind == 0 || len(doc.Content) == 0 {
-		return nil, []result.Item{{Key: entryKey, Line: 1, Allowed: []string{entryKey},
+		return batch{}, []result.Item{{Key: entryKey, Line: 1, Allowed: top,
 			Detail: "the document is empty; every op reads its values from the entry list"}}
 	}
 	root := resolved(doc.Content[0])
 	if root.Kind != yaml.MappingNode {
-		return nil, []result.Item{{Key: entryKey, Line: root.Line, Column: root.Column, Allowed: []string{entryKey},
+		return batch{}, []result.Item{{Key: entryKey, Line: root.Line, Column: root.Column, Allowed: top,
 			Detail: fmt.Sprintf("expected a table holding the entry list, got %s", typename(root))}}
 	}
 	var refusals []result.Item
-	top, verr := mappingPairs(root, "", []string{entryKey})
+	pairs, verr := mappingPairs(root, "", top)
 	if verr != nil {
-		return nil, []result.Item{verr.located(0)}
+		return batch{}, []result.Item{verr.located(0)}
 	}
+	var b batch
 	var entries *yaml.Node
-	for _, p := range top {
-		if p[0].Value != entryKey {
-			refusals = append(refusals, result.Item{Key: keyName(p[0].Value), Line: p[0].Line, Column: p[0].Column, Allowed: []string{entryKey},
-				Detail: "is not a key of a values document. The only top-level key is entry; the op travels on the command line and is never named inside the document"})
-			continue
+	for _, p := range pairs {
+		switch {
+		case p[0].Value == entryKey:
+			entries = p[1]
+		case p[0].Value == dryRunKey || p[0].Value == commitKey:
+			option := &b.dryRun
+			if p[0].Value == commitKey {
+				option = &b.commit
+			}
+			if p[1].Kind != yaml.ScalarNode || p[1].ShortTag() != "!!bool" || p[1].Decode(option) != nil {
+				refusals = append(refusals, result.Item{Key: p[0].Value, Line: p[1].Line, Column: p[1].Column,
+					Detail: fmt.Sprintf("expected true or false, got %s", typename(p[1]))})
+			}
+		default:
+			refusals = append(refusals, result.Item{Key: keyName(p[0].Value), Line: p[0].Line, Column: p[0].Column, Allowed: top,
+				Detail: "is not a key of a values document; its top-level keys are " + strings.Join(top, ", ")})
 		}
-		entries = p[1]
 	}
 	switch {
 	case entries == nil:
-		return nil, append(refusals, result.Item{Key: entryKey, Line: root.Line, Column: root.Column, Allowed: []string{entryKey},
+		return b, append(refusals, result.Item{Key: entryKey, Line: root.Line, Column: root.Column, Allowed: top,
 			Detail: "is missing; every op reads its values from the entry list"})
 	case entries.Kind != yaml.SequenceNode:
-		return nil, append(refusals, result.Item{Key: entryKey, Line: entries.Line, Column: entries.Column, Allowed: []string{entryKey},
+		return b, append(refusals, result.Item{Key: entryKey, Line: entries.Line, Column: entries.Column, Allowed: top,
 			Detail: fmt.Sprintf("expected a list of tables, got %s", typename(entries))})
-	case len(entries.Content) == 0:
-		return nil, append(refusals, result.Item{Key: entryKey, Line: entries.Line, Column: entries.Column, Allowed: []string{entryKey},
-			Detail: "is empty; a values document with no entries names no work"})
 	}
-	var accepted []entry
 	for i, raw := range entries.Content {
-		values, entryRefusals := checkEntry(resolved(raw), i+1, fields)
+		e, entryRefusals := checkBatchEntry(resolved(raw), i+1, op)
 		refusals = append(refusals, entryRefusals...)
 		if len(entryRefusals) == 0 {
-			accepted = append(accepted, entry{Index: i + 1, Values: values})
+			b.entries = append(b.entries, e)
 		}
 	}
+	refusals = append(refusals, batchChecks(b.entries)...)
 	if len(refusals) > 0 {
-		return nil, refusals
+		b.entries = nil
+		return b, refusals
 	}
-	return accepted, nil
+	return b, nil
 }
 
-// checkEntry checks one entry: unknown keys, then missing required keys and
-// values, every refusal collected.
-func checkEntry(n *yaml.Node, index int, fields []field) (map[string]any, []result.Item) {
-	allowed := fieldNames(fields)
+// checkBatchEntry checks one entry as op's, or, where op is Batch, as the op
+// its operation key names.
+func checkBatchEntry(n *yaml.Node, index int, op string) (entry, []result.Item) {
+	if op != Batch {
+		values, refusals := checkEntry(n, index, op, fieldNames(opFields[op]))
+		return entry{Index: index, Op: op, Values: values}, refusals
+	}
+	ops := Ops()
+	if n.Kind != yaml.MappingNode {
+		return entry{}, []result.Item{{Key: entryKey, Entry: index, Line: n.Line, Column: n.Column, Allowed: []string{operationKey},
+			Detail: fmt.Sprintf("expected a table naming its op under operation, got %s", typename(n))}}
+	}
+	rest := *n
+	rest.Content = nil
+	var named *yaml.Node
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == operationKey && named == nil {
+			named = resolved(n.Content[i+1])
+			continue
+		}
+		rest.Content = append(rest.Content, n.Content[i], n.Content[i+1])
+	}
+	if named == nil {
+		return entry{}, []result.Item{{Key: operationKey, Entry: index, Line: n.Line, Column: n.Column, Allowed: ops,
+			Detail: "is required and was not supplied: each entry of a mixed batch names its op"}}
+	}
+	name, verr := checkOneOf(ops, "write op")(named, operationKey)
+	if verr != nil {
+		return entry{}, []result.Item{verr.located(index)}
+	}
+	values, refusals := checkEntry(&rest, index, name.(string), append(fieldNames(opFields[name.(string)]), operationKey))
+	return entry{Index: index, Op: name.(string), Values: values}, refusals
+}
+
+// batchChecks is each op's own checks over its entries in the batch, before
+// any entry applies: every refusal at once.
+func batchChecks(entries []entry) []result.Item {
+	var ops []string
+	byOp := map[string][]entry{}
+	for _, e := range entries {
+		if _, seen := byOp[e.Op]; !seen {
+			ops = append(ops, e.Op)
+		}
+		byOp[e.Op] = append(byOp[e.Op], e)
+	}
+	var refusals []result.Item
+	for _, op := range ops {
+		spec, ok := writeOps[op]
+		if !ok || spec.edit.prior == nil {
+			continue
+		}
+		var refused result.Refusal
+		if err := spec.edit.prior(byOp[op]); errors.As(err, &refused) {
+			refusals = append(refusals, refused...)
+		}
+	}
+	return refusals
+}
+
+// checkEntry checks one entry against op's fields, allowed being every key it
+// may carry: unknown keys, then missing required keys and values, every
+// refusal collected. An edit's unknown key allows the fields its kind may
+// change.
+func checkEntry(n *yaml.Node, index int, op string, allowed []string) (map[string]any, []result.Item) {
+	fields := opFields[op]
+	slices.Sort(allowed)
+	unknownAllowed := allowed
+	if isNodeEdit(op) {
+		unknownAllowed = editFields(op)
+	}
 	if n.Kind != yaml.MappingNode {
 		return nil, []result.Item{{Key: entryKey, Entry: index, Line: n.Line, Column: n.Column, Allowed: allowed,
 			Detail: fmt.Sprintf("expected a table, got %s", typename(n))}}
@@ -859,7 +905,7 @@ func checkEntry(n *yaml.Node, index int, fields []field) (map[string]any, []resu
 	given := map[string]*yaml.Node{}
 	for _, p := range pairs {
 		if !slices.ContainsFunc(fields, func(f field) bool { return f.name == p[0].Value }) {
-			refusals = append(refusals, result.Item{Key: keyName(p[0].Value), Entry: index, Line: p[0].Line, Column: p[0].Column, Allowed: allowed,
+			refusals = append(refusals, result.Item{Key: keyName(p[0].Value), Entry: index, Line: p[0].Line, Column: p[0].Column, Allowed: unknownAllowed,
 				Detail: "is not a key this op takes. The vocabulary is closed and total — an unrecognized key is refused, never ignored"})
 			continue
 		}
@@ -877,9 +923,6 @@ func checkEntry(n *yaml.Node, index int, fields []field) (map[string]any, []resu
 		}
 		checked, err := spec.check(v, spec.name)
 		if err != nil {
-			if err.allowed == nil {
-				err.allowed = allowed
-			}
 			refusals = append(refusals, err.located(index))
 			continue
 		}
@@ -889,7 +932,7 @@ func checkEntry(n *yaml.Node, index int, fields []field) (map[string]any, []resu
 }
 
 func (e *valueError) located(index int) result.Item {
-	r := result.Item{Key: e.field, Entry: index, Detail: e.detail, Allowed: e.allowed}
+	r := result.Item{Key: e.field, Entry: index, Detail: e.detail, Allowed: e.allowed, Remedy: e.remedy}
 	if e.node != nil {
 		r.Line, r.Column = e.node.Line, e.node.Column
 	}

@@ -3,15 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
+	"kbase/internal/log"
 	"kbase/internal/mcp"
+	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 )
 
@@ -56,65 +61,142 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	}
 
 	run("done", "verify")
-	run("done", "refresh")
-	run("unchanged", "refresh")
+	commitKB(t, repo)
+	run("done", "update-format")
+	run("refused", "update-format")
+	commitKB(t, repo)
+	run("unchanged", "update-format")
 	run("done", "verify")
-	run("unchanged", "render-claim-graph")
 
-	insert := writeValues(t, values, "insert.yaml", "entry:\n- title: A Result\n  rigor: 0.5\n  rationale: Shown.\n"+
-		"- title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n")
-	first := run("done", "insert-claim-entry", "--values", insert)
-	ids := anyStrings(first.Values["ids"])
-	if len(ids) != 2 || !slices.Equal(anyStrings(first.Values["minted"]), ids) || first.Values["refreshed"] == nil {
-		t.Fatalf("insert: %v", first.Values)
+	writeRepo(t, repo, map[string]string{"kb-root/a.md": "[↑ KB](entry-point.md)\n\n# A\n\nA result is shown.\n\nAnother result is shown too.\n"})
+	add := writeValues(t, values, "add.yaml", "entry:\n"+
+		"- title: A Result\n  rigor: 0.5\n  rationale: Shown.\n  document: a.md\n  line: 5\n  snippet: A result is shown\n"+
+		"- title: Another Result\n  rigor: 0.4\n  rationale: Shown too.\n  document: a.md\n  line: 7\n  snippet: Another result is shown too\n")
+	first := run("done", "add-claim", "--values", add)
+	ids := first.entryIDs()
+	for _, e := range first.items("entries") {
+		if e["outcome"] != toolresult.Done || e["operation"] != "add-claim" {
+			t.Errorf("add entry %v, want a done add-claim", e)
+		}
 	}
-	differ := writeValues(t, values, "differ.yaml", "entry:\n- title: A Result\n  rigor: 0.9\n  rationale: Shown.\n")
-	again := run("unchanged", "insert-claim-entry", "--no-refresh", "--values", differ)
-	adopted, _ := again.Values["adopted"].([]any)
-	if a, _ := adopted[0].(map[string]any); len(adopted) != 1 || a["entry"] != 1 || a["id"] != ids[0] || !slices.Equal(anyStrings(a["differs"]), []string{"rigor"}) {
-		t.Errorf("re-issued insert: adopted %v", again.Values["adopted"])
+	if len(ids) != 2 || first.Values["sheet"] == nil {
+		t.Fatalf("add: %v", first.Values)
 	}
-	if refreshed, ok := again.Values["refreshed"]; !ok || refreshed != nil {
-		t.Errorf("refreshed under --no-refresh = %v, want null", again.Values["refreshed"])
+	again := run("refused", "add-claim", "--values", add)
+	if items := again.items("refusals"); len(items) != 1 || items[0]["entry"] != 1 || items[0]["detail"] != "node exists: "+ids[0] {
+		t.Errorf("re-issued add: refusals %v, want entry 1, node exists: %s", again.Values["refusals"], ids[0])
+	}
+	dry := run("done", "edit-claim", "--dry-run", "--values", writeValues(t, values, "dry.yaml", "entry:\n- id: "+ids[0]+"\n  rigor: 0.25\n"))
+	if dry.Values["dry-run"] != true || len(anyStrings(dry.Values["written"])) == 0 {
+		t.Errorf("dry run: %v, want dry-run true and what it would write", dry.Values)
+	}
+	mixed := run("done", "write", "--values", writeValues(t, values, "mixed.yaml", "entry:\n"+
+		"- operation: edit-claim\n  id: "+ids[0]+"\n  rigor: 0.25\n- operation: add-edge\n  source: "+ids[0]+"\n  target: "+ids[1]+"\n  relation: supports\n"))
+	if e := mixed.items("entries"); len(e) != 2 || e[0]["operation"] != "edit-claim" || e[1]["operation"] != "add-edge" {
+		t.Errorf("kbase write: entries %v, want edit-claim then add-edge", mixed.Values["entries"])
+	}
+	named := run("refused", "edit-claim", "--values", writeValues(t, values, "named.yaml", "entry:\n- operation: edit-claim\n  id: "+ids[0]+"\n  rigor: 0.5\n"))
+	if items := named.items("refusals"); len(items) != 1 || items[0]["key"] != "operation" {
+		t.Errorf("edit-claim over an entry naming its op: %v, want operation refused", items)
 	}
 	bad := writeValues(t, values, "bad.yaml", "entry:\n- id: "+ids[0]+"\n  rigour: 0.5\n")
-	refusal := run("refused", "set-rigor", "--values", bad)
-	if items := refusal.items("refusals"); len(items) != 2 || items[0]["key"] != "rigour" || items[0]["entry"] != 1 {
-		t.Errorf("set-rigor refusal: %v", items)
+	refusal := run("refused", "edit-claim", "--values", bad)
+	if items := refusal.items("refusals"); len(items) != 1 || items[0]["key"] != "rigour" || items[0]["entry"] != 1 {
+		t.Errorf("edit-claim refusal: %v", items)
 	}
-	citation := writeValues(t, values, "cite.yaml", "entry:\n- citing-document: a.md\n  cited-document: nowhere.md\n  anchor: a\n  excerpt: words\n")
-	run("refused", "render-citation", "--values", citation)
+	absent := writeValues(t, values, "absent.yaml", "entry:\n- document: a.md\n  line: 1\n  snippet: "+ids[0]+"\n  id: "+ids[0]+"\n")
+	run("refused", "add-citation", "--values", absent)
 
 	for _, args := range [][]string{
-		{"deps", ids[0]}, {"deps", ids[0], "-i"}, {"gated-on", ids[0]}, {"cited-by", ids[0]}, {"find", ""},
-		{"referenced-by", ids[0]}, {"strength-below", "--max-strength", "0.5"}, {"subtree", ""}, {"weak-points"},
-		{"show", ids[0]}, {"stats"}, {"edge-census"}, {"edges"}, {"edges", "--relation", kb.RelationFounds},
+		{"find"}, {"show", ids[0]}, {"stats"}, {"edges"}, {"edges", "--relation", kb.RelationFounds}, {"edges", "--id", ids[0], "--direction", "out"},
+		{"citations-of", ids[0]}, {"trace", ids[0], "--direction", "in"}, {"trace", ids[0], "--direction", "out", "--sort", "contribution", "--limit", "-1"},
 	} {
 		run("done", args...)
 	}
 	run("refused", "show", "clm-zzzzzz")
-	run("refused", "strength-below", "--max-strength", "half")
+	if items := run("refused", "trace", "clm-zzzzzz", "--direction", "in").items("refusals"); len(items) != 1 || items[0]["detail"] != "no node clm-zzzzzz" {
+		t.Errorf("trace clm-zzzzzz refusal: %v, want no node", items)
+	}
+	if items := run("refused", "citations-of", "clm-zzzzzz").items("refusals"); len(items) != 1 || items[0]["detail"] != "no node clm-zzzzzz" {
+		t.Errorf("citations-of clm-zzzzzz refusal: %v, want no node", items)
+	}
+	run("refused", "find", "--max", "half")
+	if items := run("refused", "find", "--pending", "--max", "0.5").items("refusals"); len(items) != 1 || items[0]["check"] != toolresult.CheckUsage ||
+		items[0]["key"] != "--pending" {
+		t.Errorf("find --pending --max 0.5 refusal: %v, want one usage item naming --pending", items)
+	}
 	unknown := run("refused", "edges", "--relation", "nope", "--relation", "nope")
-	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--relation" ||
+	if items := unknown.items("refusals"); len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--relation" ||
 		!slices.Equal(anyStrings(items[0]["allowed"]), kb.Relations) || !strings.Contains(items[0]["detail"].(string), "nope") {
 		t.Errorf("edges --relation nope --relation nope refusal: %v, want one item", items)
 	}
 	if items := run("refused", "edges", "--relation", "").items("refusals"); len(items) != 1 || items[0]["key"] != "--relation" {
 		t.Errorf("edges --relation \"\" refusal: %v", items)
 	}
-	page := run("done", "find", "", "--limit", "1", "--offset", "1")
-	if page.Values["count"] != 2 || page.Values["offset"] != 1 || page.Values["truncated"] != false || len(page.Values["results"].([]any)) != 1 {
-		t.Errorf("find --limit 1 --offset 1 = %v, want the second of two, nothing past it", page.Values)
+	claims := run("done", "find", "--kind", "claim", "--sort", "id")
+	if claims.Values["count"] != 2 || len(claims.Values["results"].([]any)) != 2 {
+		t.Errorf("find --kind claim = %v, want both claims", claims.Values)
 	}
-	if head := run("done", "find", "", "--limit", "1"); head.Values["truncated"] != true {
-		t.Errorf("find --limit 1 = %v, want truncated", head.Values)
+	for _, limit := range []string{"1", "-1"} {
+		got := run("done", "find", "--kind", "claim", "--sort", "id", "--limit", limit)
+		want := claims.Values["results"].([]any)[:1]
+		if limit == "-1" {
+			want = claims.Values["results"].([]any)[1:]
+		}
+		if got.Values["count"] != 1 || !reflect.DeepEqual(got.Values["results"], want) {
+			t.Errorf("find --kind claim --sort id --limit %s = %v, want %v", limit, got.Values, want)
+		}
 	}
-	run("refused", "find", "", "--limit", "-1")
+	for _, args := range [][]string{{"find", "--limit", "1"}, {"find", "--sort", "id", "--limit", "0"}} {
+		if items := run("refused", args...).items("refusals"); len(items) != 1 || items[0]["key"] != "--limit" {
+			t.Errorf("%q refusal: %v, want one item naming --limit", args, items)
+		}
+	}
+	// stats' help names the find call giving the full list behind each ranked
+	// section, as each surface renders it; run as rendered, each call answers
+	// a list whose head is the section.
+	stats := run("done", "stats").Values["results"].(map[string]any)
+	resultIDs := func(rows any) []any {
+		var out []any
+		for _, r := range rows.([]any) {
+			out = append(out, r.(map[string]any)["id"])
+		}
+		return out
+	}
+	sectionLimits := map[string]int{"highest_leverage": *query.HighestLeverage().Limit, "weakest": *query.Weakest().Limit}
+	requireHead := func(surface, section string, full []any) {
+		t.Helper()
+		if got := resultIDs(stats[section]); !slices.Equal(got, full[:min(len(full), sectionLimits[section])]) {
+			t.Errorf("%s: stats %s = %v, want the head of its find call's answer %v", surface, section, got, full)
+		}
+	}
+	cliHelp, _ := kbase(t, repo, "stats", "--help")
+	cliCalls := regexp.MustCompile("`kbase (find(?: --[a-z-]+ [^ ,`\n]+)+)` for ([a-z_]+)").FindAllStringSubmatch(cliHelp, -1)
+	srv := servedServer(rootCmd, mcp.LocatedAt(realPath(t, repo)), &bytes.Buffer{}, log.Discard())
+	mcpCalls := regexp.MustCompile("`query (\\{\"operation\":\"find\",\"arguments\":\\{[^{}]*\\}\\})` for ([a-z_]+)").
+		FindAllStringSubmatch(readResource(t, srv, mcp.HelpURIPrefix+"stats"), -1)
+	if len(cliCalls) != len(sectionLimits) || len(mcpCalls) != len(sectionLimits) {
+		t.Fatalf("stats' help renders %q at the command line and %q over MCP, want one find call per ranked section", cliCalls, mcpCalls)
+	}
+	for _, c := range cliCalls {
+		requireHead("cli", c[2], resultIDs(run("done", strings.Fields(c[1])...).Values["results"]))
+	}
+	for _, c := range mcpCalls {
+		var args map[string]any
+		if err := json.Unmarshal([]byte(c[1]), &args); err != nil {
+			t.Fatal(err)
+		}
+		doc, isError := callTool(t, srv, queryFamily, args)
+		if isError {
+			t.Fatalf("mcp: %s answers %v", c[1], doc)
+		}
+		requireHead("mcp", c[2], resultIDs(doc["results"]))
+	}
 
 	outside := t.TempDir()
-	out, code := kbase(t, outside, "refresh")
-	if d := checkDocument(t, "refresh", out); d.Outcome != "refused" || code != 1 {
-		t.Errorf("refresh outside a worktree: %s", out)
+	out, code := kbase(t, outside, "update-format")
+	if d := checkDocument(t, "update-format", out); d.Outcome != "refused" || code != 1 {
+		t.Errorf("update-format outside a worktree: %s", out)
 	}
 }
 

@@ -1,9 +1,9 @@
 package kb
 
-import "kbase/internal/formats/format300"
+import "kbase/internal/formats/format400"
 
 // IndexFileExt is the extension of every file under .index/.
-const IndexFileExt = format300.IndexFileExt
+const IndexFileExt = format400.IndexFileExt
 
 // The rows index.Derive yields from the KB's records, one type per row set.
 
@@ -12,6 +12,7 @@ type NodeRow struct {
 	NodeType           string   `json:"node_type"`
 	ID                 string   `json:"id"`
 	Title              string   `json:"title"`
+	Label              string   `json:"label"`
 	CanonicalPath      string   `json:"canonical_path"`
 	CanonicalAnchor    string   `json:"canonical_anchor"`
 	Status             string   `json:"status"`
@@ -19,44 +20,29 @@ type NodeRow struct {
 	DerivationStrength *float64 `json:"derivation_strength"`
 	Strength           *float64 `json:"strength"`
 	BuildStatus        *string  `json:"build_status"`
-	BuildBand          string   `json:"build_band"`
+	StrengthBand       string   `json:"strength_band"`
 	Rationale          string   `json:"rationale"`
 	PremiseCount       int      `json:"premise_count"`
-	StrengthenByCount  int      `json:"strengthen_by_count"`
 	CitationCount      int      `json:"citation_count"`
 }
 
 // EdgeRow is one edge's row. Bearing is a number in [0, 1], the
 // PendingLiteral, or nil where the relation allows none. ManuallyScored is the
 // record's manually-scored flag, nil where its type carries none.
+// ReplacedRelation is a demoted record's, "" on every other.
 type EdgeRow struct {
-	Source         string  `json:"source"`
-	Target         string  `json:"target"`
-	Relation       string  `json:"relation"`
-	TargetKind     string  `json:"target_kind"`
-	Bearing        any     `json:"bearing"`
-	Context        *string `json:"context"`
-	ManuallyScored *bool   `json:"manually_scored"`
-}
-
-// StrengthenByRow is one strengthen-by item's row.
-type StrengthenByRow struct {
-	ClaimID      string   `json:"claim_id"`
-	ItemIdx      int      `json:"item_idx"`
-	Text         string   `json:"text"`
-	MentionedIDs []string `json:"mentioned_ids"`
+	Source           string  `json:"source"`
+	Target           string  `json:"target"`
+	Relation         string  `json:"relation"`
+	TargetKind       string  `json:"target_kind"`
+	Bearing          any     `json:"bearing"`
+	Context          *string `json:"context"`
+	ManuallyScored   *bool   `json:"manually_scored"`
+	ReplacedRelation string  `json:"replaced_relation"`
 }
 
 // CiteRow is one citation's row.
 type CiteRow struct {
 	ClaimID  string `json:"claim_id"`
 	LeafPath string `json:"leaf_path"`
-}
-
-// AggregateRow is one index node's subtree row.
-type AggregateRow struct {
-	NodePath           string   `json:"node_path"`
-	NodeKind           string   `json:"node_kind"`
-	SubtreeClaims      []string `json:"subtree_claims"`
-	SubtreeExperiments []string `json:"subtree_experiments"`
 }

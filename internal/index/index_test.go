@@ -77,27 +77,27 @@ func TestGraphStrength(t *testing.T) {
 			claim("clm-work01", f(0.9)), claim("clm-workpd", f(0.9)), claim("clm-workns", f(0.9)),
 			claim("clm-targ01", f(0.8)), claim("clm-refut1", f(0.9)), claim("clm-refr01", f(0.3)),
 		},
-		Axioms: []kb.AxiomNode{{ID: "axm-S1", Title: "I"}},
+		Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "I"}},
 		Analyses: []kb.AnalysisNode{
 			{ID: "ana-lift01", Rigor: f(0.9)}, {ID: "ana-lift02", Rigor: f(1)}, {ID: "ana-ref01", Rigor: f(1)},
 			{ID: "ana-both1", Rigor: f(1)}, {ID: "ana-ref02", Rigor: f(1)}, {ID: "ana-lift03", Rigor: f(1)},
 			{ID: "ana-ref03", Rigor: f(1)}, {ID: "ana-min01", Rigor: f(0.5)}, {ID: "ana-cap01", Rigor: f(0.9)},
 		},
 		Experiments: []kb.ExperimentNode{
-			{ID: "exp-run001", Status: "run", Rigor: f(1)}, {ID: "exp-pend01", Status: "pending", Rigor: f(1)},
+			{ID: "exp-run001", Status: "run", Rigor: f(1)}, {ID: "exp-pend01", Status: kb.ExperimentPlanned, Rigor: f(1)},
 			{ID: "exp-boost1", Status: "run", Rigor: f(0.9)}, {ID: "exp-skept1", Status: "run", Rigor: f(1)},
 		},
-		Works: []kb.WorkNode{{ID: "wrk-a", Rigor: f(0.5)}, {ID: "wrk-b"}, {ID: "wrk-c", Rigor: f(0.9)}},
+		Works: []kb.WorkNode{{ID: "wrk-a00000", Label: "a", Rigor: f(0.5)}, {ID: "wrk-b00000", Label: "b"}, {ID: "wrk-c00000", Label: "c", Rigor: f(0.9)}},
 		Founds: []kb.BearingEdge{
-			founds("wrk-c", "clm-base01", one), founds("wrk-a", "clm-bare02", kb.Bearing{Value: 0.9}),
-			founds("wrk-c", "clm-cap001", one), founds("axm-S1", "clm-axm04", kb.Bearing{Value: 0.4}),
-			founds("axm-S1", "clm-axm00", kb.Bearing{Value: 0}), founds("wrk-a", "clm-work00", kb.Bearing{Value: 0}),
-			founds("wrk-a", "clm-work01", kb.Bearing{Value: 0.3}), founds("wrk-a", "clm-workpd", kb.Bearing{Pending: true}),
-			founds("wrk-b", "clm-workns", one), founds("wrk-c", "clm-targ01", one),
-			founds("wrk-a", "clm-refr01", kb.Bearing{Value: 0.6}),
-			founds("axm-S1", "ana-lift01", one), founds("axm-S1", "ana-lift02", one), founds("axm-S1", "ana-ref01", one),
-			founds("axm-S1", "ana-both1", one), founds("axm-S1", "ana-ref02", one), founds("axm-S1", "ana-lift03", one),
-			founds("axm-S1", "ana-ref03", one), founds("axm-S1", "ana-cap01", one),
+			founds("wrk-c00000", "clm-base01", one), founds("wrk-a00000", "clm-bare02", kb.Bearing{Value: 0.9}),
+			founds("wrk-c00000", "clm-cap001", one), founds("axm-s10000", "clm-axm04", kb.Bearing{Value: 0.4}),
+			founds("axm-s10000", "clm-axm00", kb.Bearing{Value: 0}), founds("wrk-a00000", "clm-work00", kb.Bearing{Value: 0}),
+			founds("wrk-a00000", "clm-work01", kb.Bearing{Value: 0.3}), founds("wrk-a00000", "clm-workpd", kb.Bearing{Pending: true}),
+			founds("wrk-b00000", "clm-workns", one), founds("wrk-c00000", "clm-targ01", one),
+			founds("wrk-a00000", "clm-refr01", kb.Bearing{Value: 0.6}),
+			founds("axm-s10000", "ana-lift01", one), founds("axm-s10000", "ana-lift02", one), founds("axm-s10000", "ana-ref01", one),
+			founds("axm-s10000", "ana-both1", one), founds("axm-s10000", "ana-ref02", one), founds("axm-s10000", "ana-lift03", one),
+			founds("axm-s10000", "ana-ref03", one), founds("axm-s10000", "ana-cap01", one),
 		},
 		Scorable: []kb.ScorableEdge{
 			scorable(kb.RelationSupports, "clm-base01", "clm-weak01", 1),
@@ -253,9 +253,9 @@ func TestAPremiseLessAnalysisDerivesItsRigor(t *testing.T) {
 func TestWorkAndAxiomFeedTheirRigorAndDeriveNoStrength(t *testing.T) {
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{{ID: "clm-work01", Title: "W", Rigor: f(0.9)}, {ID: "clm-axm001", Title: "X", Rigor: f(0.9)}},
-		Axioms: []kb.AxiomNode{{ID: "axm-S1", Title: "S1"}},
-		Works:  []kb.WorkNode{{ID: "wrk-a", Title: "A", Rigor: f(0.6)}},
-		Founds: []kb.BearingEdge{founds("wrk-a", "clm-work01", kb.Bearing{Value: 0.5}), founds("axm-S1", "clm-axm001", kb.Bearing{Value: 0.5})},
+		Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "S1"}},
+		Works:  []kb.WorkNode{{ID: "wrk-a00000", Label: "a", Title: "A", Rigor: f(0.6)}},
+		Founds: []kb.BearingEdge{founds("wrk-a00000", "clm-work01", kb.Bearing{Value: 0.5}), founds("axm-s10000", "clm-axm001", kb.Bearing{Value: 0.5})},
 	}
 	strength := strengthOf(g)
 	for _, tc := range []struct {
@@ -275,7 +275,7 @@ func TestWorkAndAxiomFeedTheirRigorAndDeriveNoStrength(t *testing.T) {
 		t.Fatal(err)
 	}
 	finals := strength.finals()
-	for id, rigor := range map[string]float64{"wrk-a": 0.6, "axm-S1": kb.AxiomRigor} {
+	for id, rigor := range map[string]float64{"wrk-a00000": 0.6, "axm-s10000": kb.AxiomRigor} {
 		row := nodeRow(t, rows, id)
 		if row.Rigor == nil || *row.Rigor != rigor {
 			t.Errorf("%s row rigor = %v, want %v", id, row.Rigor, rigor)
@@ -295,8 +295,8 @@ func TestWorkAndAxiomFeedTheirRigorAndDeriveNoStrength(t *testing.T) {
 func TestDependentUsesItsSourcesExactStrength(t *testing.T) {
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{claim("clm-aaaaaa", f(0.7)), claim("clm-bbbbbb", f(0.9)), claim("clm-cccccc", f(0.9))},
-		Works:  []kb.WorkNode{{ID: "wrk-a", Rigor: f(0.7)}},
-		Founds: []kb.BearingEdge{founds("wrk-a", "clm-aaaaaa", kb.Bearing{Value: 1})},
+		Works:  []kb.WorkNode{{ID: "wrk-a00000", Label: "a", Rigor: f(0.7)}},
+		Founds: []kb.BearingEdge{founds("wrk-a00000", "clm-aaaaaa", kb.Bearing{Value: 1})},
 		Scorable: []kb.ScorableEdge{scorable(kb.RelationSupports, "clm-aaaaaa", "clm-bbbbbb", 0.72),
 			scorable(kb.RelationSupports, "clm-bbbbbb", "clm-cccccc", 0.72)},
 	}
@@ -338,8 +338,8 @@ func TestClaimRefuterAndPairsIntoAnalysesReachTheRecords(t *testing.T) {
 		Analyses: []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "Ana A", Rigor: f(0.5)}, {ID: "ana-bbbbbb", Title: "Ana B", Rigor: f(0.9)}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "Ex A", Status: "run", Rigor: f(0.9)},
 			{ID: "exp-bbbbbb", Title: "Ex B", Status: "run", Rigor: f(1)}},
-		Axioms: []kb.AxiomNode{{ID: "axm-S1", Title: "The rule"}},
-		Founds: []kb.BearingEdge{founds("axm-S1", "clm-targ01", one), founds("axm-S1", "clm-refr01", one), founds("axm-S1", "ana-bbbbbb", one)},
+		Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "The rule"}},
+		Founds: []kb.BearingEdge{founds("axm-s10000", "clm-targ01", one), founds("axm-s10000", "clm-refr01", one), founds("axm-s10000", "ana-bbbbbb", one)},
 		Scorable: []kb.ScorableEdge{scorable(kb.RelationRefutes, "clm-refr01", "clm-targ01", 1),
 			scorable(kb.RelationLifts, "exp-aaaaaa", "ana-aaaaaa", 1), scorable(kb.RelationRefutes, "exp-bbbbbb", "ana-bbbbbb", 0.25)},
 	}
@@ -428,130 +428,85 @@ func writeKB(t *testing.T, files map[string]string) string {
 	return root
 }
 
-// foreignDomainKB is a KB of g's records and two volumes, alpha hosting
+// twoVolumeKB is a KB of g's records and two volumes, alpha hosting
 // clm-aa1111 and beta hosting clm-bb2222.
-func foreignDomainKB(g kb.Graph) map[string]string {
+func twoVolumeKB(g kb.Graph) map[string]string {
 	files := graphFiles(g)
 	maps.Copy(files, map[string]string{
 		kb.EntryPointFile: "# KB\n\n- [alpha](alpha/index.md)\n- [beta](beta/index.md)\n",
 		"alpha/index.md":  "[↑ KB](../entry-point.md)\n\n# Alpha\n\n- [one](one.md)\n",
-		"alpha/one.md":    "[↑ Alpha](index.md)\n\n# One\n\nOne. <!-- claim-rigor: clm-aa1111 -->\n",
+		"alpha/one.md":    "[↑ Alpha](index.md)\n\n# One\n\nOne. <!-- kbase-id: clm-aa1111 -->\n",
 		"beta/index.md":   "[↑ KB](../entry-point.md)\n\n# Beta\n\n- [two](two.md)\n",
-		"beta/two.md":     "[↑ Beta](index.md)\n\n# Two\n\nTwo. <!-- claim-rigor: clm-bb2222 -->\n",
+		"beta/two.md":     "[↑ Beta](index.md)\n\n# Two\n\nTwo. <!-- kbase-id: clm-bb2222 -->\n",
 	})
 	return files
 }
 
-func TestCitationFindings(t *testing.T) {
-	target := "# Target\n\n## The Section\n\nThe load-bearing clause lives here, stated plainly.\n"
-	naming := "Rationale prose naming clm-bb2222 from the other domain."
-	foreign := func(noEdge string, edges ...kb.ScorableEdge) map[string]string {
-		return foreignDomainKB(kb.Graph{Claims: []kb.ClaimNode{
-			{ID: "clm-aa1111", Title: "One", Rationale: naming, NoEdge: noEdge}, {ID: "clm-bb2222", Title: "Two"}}, Scorable: edges})
-	}
-	entry := "## Entry\n<!-- id: clm-aa1111 -->\n\n" + naming + "\n"
-	long := strings.Repeat("x", excerptMaxChars+1)
-	bound := strings.Repeat("y", excerptMaxChars)
+// TestBareIDFindings: the id of a node of any kind the records carry,
+// standing in prose, is a bare-id fault, link text being prose; one inside a
+// fence, an inline code span, a statement marker, a citation's link title or a
+// link's destination is not, nor a placeholder id, nor an id no record
+// carries, nor one on a register page.
+func TestBareIDFindings(t *testing.T) {
+	g := kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aa1111", Title: "One"}},
+		Works: []kb.WorkNode{{ID: "wrk-s00000", Label: "smith2020", Title: "Smith 2020"}}, Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "S1"}}}
+	volumes := twoVolumeKB(kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aa1111", Title: "One"}, {ID: "clm-bb2222", Title: "Two"}}})
+	volumes["alpha/"+kb.RegisterFile] = "## One" + kb.StatementMarker("clm-aa1111") + "\n\n- rests-on:\n  - clm-bb2222 — Two\n"
 	ep := kb.EntryPointFile
 	for _, tc := range []struct {
 		name  string
 		files map[string]string
 		want  []string
 	}{
-		{"invariant id", map[string]string{ep: "See INVARIANT-S2 for the numbering.\n"}, []string{checkChannel}},
-		{"bare claim id", map[string]string{ep: "The claim clm-aa1111 supports this.\n"}, []string{checkChannel}},
-		{"clean prose", map[string]string{ep: "Nothing citation-shaped here at all.\n"}, nil},
-		{"fenced example", map[string]string{ep: "How:\n\n```\nSee INVARIANT-S2 and clm-aa1111, per Invariant 11.\n```\n"}, nil},
-		{"sanctioned channels", map[string]string{
-			"claim-rigor.md": "## A Claim\n<!-- id: clm-aa1111 -->\n\n- rigor: 0.75\n- rests-on:\n  - INVARIANT-S2 (axiom scaffold)\n  - Axiom S1 (bearing 0.8)\n  - clm-bb2222 — a real dependency (strength 0.80) (bearing 1.0)\n- strength: 0.75 (ok to build on, see caveats)\n",
-			"leaf.md":        "<!-- claim-rigor: clm-aa1111 -->\n\nProse.\n",
-		}, nil},
-		{"axiom declaration sections", map[string]string{
-			"axioms.md": "# Axioms\n\n### Axiom S1: First rule\n\nHolds with Axiom S2 and INVARIANT-S3 around it.\n",
-		}, nil},
-		{"axiom token outside its declaration", map[string]string{
-			"axioms.md": "# Axioms\n\n## Preamble\n\nThis corpus relies on Axiom S2 throughout.\n\n### Axiom S2: Axiom numbering\n\nBody.\n",
-		}, []string{checkChannel}},
-		{"bare axiom token in prose", map[string]string{ep: "See Axiom S1 for the design rule.\n"}, []string{checkChannel}},
-		{"declaration outside axioms.md", map[string]string{
-			"AGENTS.md": "# Agents\n\n### INVARIANT-S1: First rule\n\nHolds jointly with INVARIANT-S2.\n\n### INVARIANT-S2: Axiom numbering\n\nBody.\n",
-		}, []string{checkChannel}},
-		{"axiom token in AGENTS.md prose", map[string]string{
-			"AGENTS.md": "# Agents\n\nFollow Axiom S2 when in doubt.\n\n### INVARIANT-S1: First rule\n\nBody.\n",
-		}, []string{checkChannel}},
-		{"leaf body exempt", map[string]string{
-			"leaf.md": "The source says INVARIANT-S2 and clm-aa1111, per Invariant 4.\n",
-		}, nil},
-		{"well-formed authority citation", map[string]string{
-			ep: `As established in ["The load-bearing clause lives here"](target.md#the-section).` + "\n", "target.md": target,
-		}, nil},
-		{"unresolvable target", map[string]string{ep: `See ["the clause"](nowhere.md#x).` + "\n"}, []string{checkReferent}},
-		{"missing anchor", map[string]string{
-			ep: `See ["The load-bearing clause lives here"](target.md#no-such).` + "\n", "target.md": target,
-		}, []string{checkReferent}},
-		{"absent excerpt", map[string]string{
-			ep: `See ["a clause never written there"](target.md#the-section).` + "\n", "target.md": target,
-		}, []string{checkExcerpt}},
-		{"whitespace-normalized excerpt", map[string]string{
-			ep: `See ["The load-bearing   clause    lives here"](target.md#the-section).` + "\n", "target.md": target,
-		}, nil},
-		{"excerpt without anchor", map[string]string{
-			ep: `See ["The load-bearing clause lives here"](target.md).` + "\n", "target.md": target,
-		}, []string{checkExcerpt}},
-		{"bloated excerpt", map[string]string{
-			ep: `See ["` + long + `"](target.md#the-section).` + "\n", "target.md": "# T\n\n## The Section\n\n" + long + "\n",
-		}, []string{checkExcerpt}},
-		{"excerpt at the bound", map[string]string{
-			ep: `See ["` + bound + `"](target.md#the-section).` + "\n", "target.md": "# T\n\n## The Section\n\n" + bound + "\n",
-		}, nil},
-		{"blank excerpt", map[string]string{
-			ep: `See [" "](target.md#the-section) for the rule.` + "\n", "target.md": target,
-		}, []string{checkExcerpt}},
-		{"excerpt only inside a fence at the target", map[string]string{
-			ep:          `Authority: ["the moon is made of cheese"](target.md#the-section).` + "\n",
-			"target.md": "# Target\n\n## The Section\n\nThe real clause.\n\n```\nthe moon is made of cheese\n```\n",
-		}, []string{checkExcerpt}},
-		{"anchor only as a fenced heading", map[string]string{
-			ep:          `Authority: ["invented authority text"](target.md#fake-section).` + "\n",
-			"target.md": "# Target\n\n```markdown\n## Fake Section\n\ninvented authority text\n```\n",
-		}, []string{checkReferent}},
-		{"typographic quotes", map[string]string{
-			ep: "Authority: [“a clause that is not in the target”](target.md#the-section).\n", "target.md": target,
-		}, []string{checkExcerpt}},
-		{"bracket inside the link text", map[string]string{
-			ep: `Authority: ["the rule [see note] applies"](does-not-exist.md#nope).` + "\n",
-		}, []string{checkReferent}},
-		{"non-durable target", map[string]string{
-			ep: `See ["the clause"](../elsewhere/notes.md#x).` + "\n",
-		}, []string{checkDurable}},
-		{"external link", map[string]string{ep: "See [the spec](https://example.invalid/spec).\n"}, nil},
-		{"foreign-domain reference without an edge", foreign(""), []string{checkEdge}},
-		{"foreign-domain reference with an edge", foreign("", scorable(kb.RelationSupports, "clm-bb2222", "clm-aa1111", 1)), nil},
-		{"no-edge exemption", foreign("cited as contrast"), nil},
-		{"register page out of the channel check", func() map[string]string {
-			files := foreign("cited as contrast")
-			files["alpha/"+kb.RegisterFile] = entry
-			return files
-		}(), nil},
-		{"register file outside a volume", map[string]string{"loose/" + kb.RegisterFile: entry}, []string{checkChannel}},
-		{".index out of scope", map[string]string{".index/SCHEMA.md": "# Schema\n\n1. clm-aa1111: the index is derived.\n"}, nil},
+		{"bare ids of every kind", map[string]string{ep: "The claim clm-aa1111 rests on wrk-s00000 and axm-s10000.\n"},
+			[]string{"entry-point.md:1 clm-aa1111", "entry-point.md:1 wrk-s00000", "entry-point.md:1 axm-s10000"}},
+		{"an id as a link's text", map[string]string{ep: "See [clm-aa1111](leaf.md).\n"}, []string{"entry-point.md:1 clm-aa1111"}},
+		{"a fenced block", map[string]string{ep: "How:\n\n```\nclm-aa1111\n```\n"}, nil},
+		{"an inline code span", map[string]string{ep: "Write `clm-aa1111` as a citation.\n"}, nil},
+		{"a statement marker", map[string]string{"leaf.md": "# Leaf\n\nProse." + kb.StatementMarker("clm-aa1111") + "\n"}, nil},
+		{"a citation's link title", map[string]string{ep: `See [One](leaf.md#leaf "clm-aa1111").` + "\n"}, nil},
+		{"a link's destination", map[string]string{ep: "See [One](leaf.md#one-clm-aa1111).\n"}, nil},
+		{"a placeholder id", map[string]string{ep: "An id such as clm-xxxxxx.\n"}, nil},
+		{"an id no record carries", map[string]string{ep: "See clm-zzzzzz, wrk-zzzzzz and axm-zzzzzz.\n"}, nil},
+		{"an id inside a word", map[string]string{ep: "preclm-aa1111 is no id.\n"}, nil},
+		{"a register page", volumes, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			files := graphFiles(kb.Graph{})
+			files := graphFiles(g)
 			maps.Copy(files, tc.files)
-			findings, err := CitationFindings(kb.OnDisk(writeKB(t, files)))
+			findings, err := BareIDFindings(kb.OnDisk(writeKB(t, files)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			var got []string
-			for _, fd := range findings {
-				got = append(got, fd.Check)
+			if len(findings) != len(tc.want) {
+				t.Fatalf("findings %v, want one per %q", findings, tc.want)
 			}
-			slices.Sort(got)
-			got = slices.Compact(got)
-			if !slices.Equal(got, tc.want) {
-				t.Errorf("checks = %q, want %q; findings %v", got, tc.want, findings)
+			for i, fd := range findings {
+				site, id, _ := strings.Cut(tc.want[i], " ")
+				if fd.Check != CheckBareID || fmt.Sprintf("%s:%d", fd.Path, fd.Line) != site || !strings.Contains(fd.Detail, id) {
+					t.Errorf("finding %+v, want a %s fault at %s naming %s", fd, CheckBareID, site, id)
+				}
 			}
 		})
+	}
+}
+
+// TestVerifyRefusesABareUnknownIDOnce: a claim id no record carries standing
+// in prose is one fault, unknown-id, and no bare-id.
+func TestVerifyRefusesABareUnknownIDOnce(t *testing.T) {
+	files := graphFiles(kb.Graph{})
+	files[kb.EntryPointFile] = "See clm-zzzzzz.\n"
+	findings, err := Verify(kb.OnDisk(writeKB(t, files)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range findings {
+		if f.Path == kb.EntryPointFile && f.Line == 1 {
+			got = append(got, f.Check)
+		}
+	}
+	if want := []string{kb.CheckUnknownID}; !slices.Equal(got, want) {
+		t.Errorf("verify's faults at %s:1 = %q, want %q", kb.EntryPointFile, got, want)
 	}
 }

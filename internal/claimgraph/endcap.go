@@ -4,8 +4,6 @@ import (
 	"cmp"
 	"slices"
 	"strings"
-
-	"kbase/internal/kb"
 )
 
 // claimSite is a claim's identity before an id exists: its document and its
@@ -20,11 +18,9 @@ type CitedWork struct {
 	Named      bool
 }
 
-// ID is the work's node id, derived from its key.
-func (w CitedWork) ID() string { return kb.WorkPrefix + "-" + w.Key }
-
 // endcap is every external work a claim rests on, and by which claims: per
-// claim site, the work ids it rests on, sorted and deduplicated.
+// claim site, the citation keys of the works it rests on, sorted and
+// deduplicated.
 type endcap struct {
 	works    []CitedWork
 	pairings map[claimSite][]string
@@ -66,7 +62,7 @@ func scanEndcap(inv *Inventory) endcap {
 			if pairings[s] == nil {
 				pairings[s] = map[string]bool{}
 			}
-			pairings[s][CitedWork{Key: c.Key}.ID()] = true
+			pairings[s][c.Key] = true
 		}
 	}
 	e := endcap{pairings: map[claimSite][]string{}}

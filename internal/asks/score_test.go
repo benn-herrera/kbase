@@ -179,7 +179,7 @@ func scoreJudgement(text string) (read, hit string) {
 var scoreNumberRE = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?|\.[0-9]+`)
 
 // scoreJudgementREs are the spellings scoreJudgement refuses besides a decimal,
-// each keyed by what it reads as. A band's words are kb.BuildBandLadder's: its
+// each keyed by what it reads as. A band's words are kb.StrengthBandLadder's: its
 // slugs spell them hyphenated and its phrases spaced, and a template states
 // neither.
 var scoreJudgementREs = []struct {
@@ -187,7 +187,7 @@ var scoreJudgementREs = []struct {
 	re   *regexp.Regexp
 }{
 	{"a percentage, which reads as a score", regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?\s?%`)},
-	{"a build band's word, which reads as the outcome", regexp.MustCompile(`(?i)\b(?:ok|caveats|input[ -]only|not[ -]build|unsubstantiated)\b`)},
+	{"a strength band's word, which reads as the outcome", regexp.MustCompile(`(?i)\b(?:ok|caveats|input[ -]only|not[ -]build|unsubstantiated)\b`)},
 	{"a weight or a maximum, which reads as a term of the score", regexp.MustCompile(`(?i)\b(?:weights?|weighted|maximum|max)\b`)},
 }
 

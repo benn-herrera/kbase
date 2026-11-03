@@ -1,0 +1,11 @@
+{"id":"ana-aaaaaa","title":"Its Proof","rigor":"*pending*","manually-scored":false,"rationale":"","judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"id":"ana-bbbbbb","title":"A — Pair","rigor":"*pending*","manually-scored":false,"rationale":"","judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"id":"axm-37bekj","label":"S3","title":"A labelling convention"}
+{"id":"clm-aaaaaa","title":"Main Result","rigor":"*pending*","manually-scored":false,"rationale":"","judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"id":"clm-bbbbbb","title":"A — Pair","rigor":"*pending*","manually-scored":false,"rationale":"","judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"id":"clm-cccccc","title":"An Unhosted Claim","rigor":"*pending*","manually-scored":false,"rationale":"","judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"id":"wrk-omcjwo","label":"smith2020","title":"Smith 2020","rigor":0.9,"rationale":""}
+{"relation":"founds","source":"axm-37bekj","target":"ana-aaaaaa","context":"","bearing":1}
+{"relation":"founds","source":"wrk-omcjwo","target":"clm-aaaaaa","context":"","bearing":0.8}
+{"relation":"lifts","source":"ana-aaaaaa","target":"clm-aaaaaa","context":"","bearing":"*pending*","manually-scored":false,"judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"relation":"lifts","source":"ana-bbbbbb","target":"clm-bbbbbb","context":"","bearing":"*pending*","manually-scored":false,"judged-hash":"0000000000000000000000000000000000000000000000000000000000000000"}

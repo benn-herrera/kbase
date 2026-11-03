@@ -170,7 +170,7 @@ func TestLiveBuildCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(*liveOut, buildrecords.NodePassFile), b, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(*liveOut, filepath.Base(buildrecords.NodePassFile)), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if states[ReadLanded] != len(np.Leaves) {

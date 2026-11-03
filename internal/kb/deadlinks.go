@@ -14,15 +14,15 @@ import (
 )
 
 // Kinds of dead link: a target inside the repository, one that escapes it, and
-// a register page's fragment naming no entry derived for that page.
+// a fragment naming no anchor of the document it reaches.
 const (
 	BrokenIntra    = "broken intra"
 	BrokenInter    = "broken inter"
 	BrokenFragment = "broken fragment"
 )
 
-// DeadLink is one link whose target names no file, or no entry of the register
-// page it names.
+// DeadLink is one link whose target names no file, or no anchor of the
+// document it names.
 type DeadLink struct {
 	// File is the document holding the link, relative to the scanned root.
 	File   string
@@ -53,10 +53,16 @@ func DeadLinks(src *Source) ([]DeadLink, error) {
 // DeadLinksIn is DeadLinks over the KB's files, each target judged against
 // repo, a directory at or above kb-root: broken intra where it lies under
 // repo, broken inter only where it escapes it, and spelled as written below
-// repo. pages, where it is not nil, is every register page by kb-root-relative
-// slash path and the slugs of the entries derived for it, none for a page no
-// longer called for: a link that reaches a page's file and carries a fragment
-// none of its slugs is, is broken fragment.
+// repo; a migrated source's target inside kb-root is judged through the
+// source (targetExists). pages, where it is not nil, is every register page
+// by kb-root-relative slash path and the slugs of the entries derived for it,
+// none for a page no longer called for, and turns the fragment check on: a
+// link carrying a fragment into a Markdown document under kb-root, a bare
+// #fragment into its own document included, is broken fragment where the
+// fragment is none of a page's slugs, or, on any other document, none of its
+// anchors (documentAnchors). Where pages is nil no fragment is checked: the
+// document-graph gate reads pandoc's output while a wrapped cross-reference
+// still links a bare LaTeX label, which names no heading.
 func DeadLinksIn(src *Source, repo string, pages map[string][]string) ([]DeadLink, error) {
 	root := src.Root()
 	repo, err := filepath.Abs(repo)
@@ -68,6 +74,7 @@ func DeadLinksIn(src *Source, repo string, pages map[string][]string) ([]DeadLin
 		return nil, err
 	}
 	listings := map[string]map[string]bool{}
+	anchors := map[string]map[string]bool{}
 	var dead []DeadLink
 	for _, file := range files {
 		text, err := src.ReadFile(file)
@@ -84,20 +91,28 @@ func DeadLinksIn(src *Source, repo string, pages map[string][]string) ([]DeadLin
 					continue
 				}
 				target := StripTarget(raw)
-				if target == "" || strings.HasSuffix(target, ".tex") {
-					continue
-				}
 				resolved := filepath.FromSlash(target)
-				if !filepath.IsAbs(resolved) {
+				switch {
+				case target == "" && pages != nil && strings.HasPrefix(unwrapTarget(raw), "#"):
+					resolved = file
+				case target == "" || strings.HasSuffix(target, ".tex"):
+					continue
+				case !filepath.IsAbs(resolved):
 					resolved = filepath.Join(filepath.Dir(file), resolved)
 				}
-				found, err := existsAsSpelled(resolved, repo, listings)
+				found, err := targetExists(src, resolved, repo, pages, listings)
 				if err != nil {
 					return nil, err
 				}
+				broken := false
+				if found && pages != nil {
+					if broken, err = brokenFragment(src, raw, resolved, pages, anchors); err != nil {
+						return nil, err
+					}
+				}
 				kind := BrokenIntra
 				switch {
-				case found && !brokenFragment(raw, resolved, root, pages):
+				case found && !broken:
 					continue
 				case found:
 					kind = BrokenFragment
@@ -111,23 +126,57 @@ func DeadLinksIn(src *Source, repo string, pages map[string][]string) ([]DeadLin
 	return dead, nil
 }
 
-// brokenFragment is whether the link raw, its file resolved under kb-root at
-// root, reaches a page of pages through a fragment that names none of its
-// slugs.
-func brokenFragment(raw, resolved, root string, pages map[string][]string) bool {
+// brokenFragment is whether the link raw, its file resolved, carries a
+// fragment naming no anchor of a Markdown document under kb-root: on a page of
+// pages none of its slugs, never the page standing; on any other document none
+// of documentAnchors, cached in anchors by path. An empty fragment names the
+// document's top. A target outside kb-root, or not a Markdown file, has no
+// anchors kbase reads.
+func brokenFragment(src *Source, raw, resolved string, pages map[string][]string, anchors map[string]map[string]bool) (bool, error) {
 	_, fragment, ok := strings.Cut(unwrapTarget(raw), "#")
-	if !ok || !Within(root, resolved) {
-		return false
+	if !ok || fragment == "" || !Within(src.Root(), resolved) || !strings.HasSuffix(resolved, ".md") {
+		return false, nil
 	}
-	rel, err := filepath.Rel(root, resolved)
+	rel, err := filepath.Rel(src.Root(), resolved)
 	if err != nil {
-		return false
+		return false, err
 	}
-	slugs, isPage := pages[filepath.ToSlash(rel)]
 	if decoded, err := url.PathUnescape(fragment); err == nil {
 		fragment = decoded
 	}
-	return isPage && !slices.Contains(slugs, fragment)
+	if slugs, isPage := pages[filepath.ToSlash(rel)]; isPage {
+		return !slices.Contains(slugs, fragment), nil
+	}
+	if !src.IsFile(resolved) {
+		return false, nil
+	}
+	live, cached := anchors[resolved]
+	if !cached {
+		text, err := src.ReadText(resolved)
+		if err != nil {
+			return false, err
+		}
+		live = documentAnchors(text)
+		anchors[resolved] = live
+	}
+	return !live[fragment], nil
+}
+
+// elementIDRE is the id attribute of an HTML element, as a rendered
+// reference-list entry's <div id="ref-<key>"> carries one.
+var elementIDRE = regexp.MustCompile(`<[A-Za-z][^<>]*?\sid="([^"]+)"`)
+
+// documentAnchors is every anchor a link's fragment can name in text: each
+// heading's (HeadingAnchors) and each HTML element's id outside code.
+func documentAnchors(text string) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range HeadingAnchors(text) {
+		out[a] = true
+	}
+	for _, m := range elementIDRE.FindAllStringSubmatch(StripCode(text), -1) {
+		out[m[1]] = true
+	}
+	return out
 }
 
 // rawTargets are the destinations a line declares, inline and by definition.
@@ -139,6 +188,30 @@ func rawTargets(line string) []string {
 		}
 	}
 	return out
+}
+
+// targetExists is whether the link target p names a file the KB reads. Inside
+// kb-root of a migrated source, whose converted files stand only in memory
+// until the save, that is a file the source holds or a register page of
+// pages, which the save renders, and never a path the migration made
+// obsolete; anywhere else it is a file on disk, spelled as written.
+func targetExists(src *Source, p, repo string, pages map[string][]string, listings map[string]map[string]bool) (bool, error) {
+	if src.Migrated() && Within(src.Root(), p) {
+		if rel, err := filepath.Rel(src.Root(), p); err == nil {
+			if _, isPage := pages[filepath.ToSlash(rel)]; isPage {
+				return true, nil
+			}
+		}
+		if rel, ok := src.RepoRel(p); ok {
+			if _, held := src.files[rel]; held {
+				return true, nil
+			}
+			if src.isObsolete(rel) {
+				return false, nil
+			}
+		}
+	}
+	return existsAsSpelled(p, repo, listings)
 }
 
 // existsAsSpelled is whether p exists with every segment below root spelled

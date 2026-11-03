@@ -13,6 +13,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/argmark"
 	"kbase/internal/asks"
 	"kbase/internal/filelock"
 	"kbase/internal/result"
@@ -119,8 +120,8 @@ func ReadHolder(dir string) (Holder, error) {
 		return Holder{}, fmt.Errorf("%s: %w", path, err)
 	}
 	if h.Kind != KindBuild && h.Kind != KindScore {
-		return Holder{}, result.Refusal{{Check: CheckStateDir, Path: path, Key: "--state-dir",
-			Remedy: "update kbase, or use another --state-dir",
+		return Holder{}, result.Refusal{{Check: CheckStateDir, Path: path, Key: argmark.Flag("state-dir"),
+			Remedy: "update kbase, or use another " + argmark.Flag("state-dir"),
 			Detail: fmt.Sprintf("the holder record names kind %q; this kbase writes %q or %q", h.Kind, KindBuild, KindScore)}}
 	}
 	return h, nil
@@ -232,8 +233,8 @@ func (inv Invocation) recorded() bool {
 	return false
 }
 
-// stands reports whether the invocation is the run status and rewind-build read
-// the build's position from: every run but one that refused or asked to be
+// stands reports whether the invocation is the run status reads the build's
+// position from: every run but one that refused or asked to be
 // retried without recording a boundary — that one wrote nothing, so the run
 // before it is the one the build stands at.
 func (inv Invocation) stands() bool {

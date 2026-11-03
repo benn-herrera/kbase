@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"kbase/internal/buildstore"
@@ -14,6 +15,7 @@ import (
 	"kbase/internal/modelclient"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // closeLog counts the closes the clients a verb opened reported.
@@ -71,15 +73,36 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 		assertClosed(t, log.n, 1)
 	})
 
-	t.Run("configure, refused after the dial", func(t *testing.T) {
+	t.Run("configure-models, done", func(t *testing.T) {
 		log.n = 0
 		var stdout, stderr bytes.Buffer
-		code, err := runConfigure(context.Background(), configureOptions{
-			providerOptions: providerOptions{Providers: pool(), Stderr: &stderr, NewClient: newClient(), WriteDir: t.TempDir()},
+		dir := t.TempDir()
+		writeConfig(t, dir, config.ProvidersFileName, "[solo]\nbaseUrl = \"http://solo.example/v1\"\n")
+		opts := namedLayer(dir)
+		opts.Stderr, opts.NewClient = &stderr, newClient()
+		code, err := runConfigureModels(context.Background(), configureModelsOptions{
+			providerOptions: opts,
+			Models:          map[config.Role]string{config.RoleText: "solo/m1"},
 			Stdout:          &stdout,
 		})
-		if err != nil || code != toolresult.ExitCode(toolresult.Refused) {
-			t.Fatalf("configure: exit %d, %v", code, err)
+		if err != nil || code != 0 {
+			t.Fatalf("configure-models: exit %d, %v", code, err)
+		}
+		assertClosed(t, log.n, 1)
+	})
+
+	t.Run("configure-providers, dialled", func(t *testing.T) {
+		log.n = 0
+		var stdout, stderr bytes.Buffer
+		opts := namedLayer(t.TempDir())
+		opts.Stderr, opts.NewClient = &stderr, newClient()
+		code, err := runConfigureProviders(context.Background(), configureProvidersOptions{
+			providerOptions: opts, Name: "solo", BaseURL: "http://solo.example/v1",
+			StoredKeys: config.StoredKeys{Keys: map[string]secret.Key{"solo": secret.NewKey(testAPIKey)}},
+			Stdout:     &stdout,
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("configure-providers: exit %d, %v", code, err)
 		}
 		assertClosed(t, log.n, 1)
 	})
@@ -97,6 +120,25 @@ func TestVerbsCloseEveryClientTheyOpen(t *testing.T) {
 		}
 		assertClosed(t, log.n, 1)
 	})
+}
+
+// TestShowConfigDropsACredentialedBaseURL: a providers.toml entry whose
+// baseUrl carries credentials is dropped as it loads, so show-config lists the
+// provider with no base-url, and no part of the URL reaches its output.
+func TestShowConfigDropsACredentialedBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"https://u:k@host/v1\"\n")
+	doc, stdout, stderr, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
+	providers := doc.items("providers")
+	if code != 0 || len(providers) != 1 || providers[0]["name"] != "lab" {
+		t.Fatalf("exit %d, providers %v; want lab listed", code, providers)
+	}
+	if _, ok := providers[0]["base-url"]; ok {
+		t.Error("the dropped provider carries a base-url")
+	}
+	if strings.Contains(stdout+stderr, "u:k@") {
+		t.Error("the base URL's credentials reached the output")
+	}
 }
 
 // assertClosed fails t unless n clients were closed — want them all.

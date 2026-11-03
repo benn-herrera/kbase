@@ -9,10 +9,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"kbase/internal/buildstore"
+	"kbase/internal/log"
+	"kbase/internal/log/logtest"
 	"kbase/internal/query"
 	"kbase/internal/result"
 )
@@ -48,7 +51,7 @@ func replayed(t *testing.T, dir string) (*Replay, ReplayResult) {
 	}
 	ask, _ := asking(t, []asked{{reply: "none"}})
 	res, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{BackEnd: "provider", Provider: "local", Model: "small",
-		Started: minute(1000)})
+		Started: minute(1000)}, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +110,7 @@ func TestReplaySelectsOnePass(t *testing.T) {
 		refus string
 	}{
 		{pass: query.PassRigor, calls: 1},
-		{pass: query.PassBoth, calls: 1},
+		{pass: query.PassAll, calls: 1},
 		{pass: "", calls: 1},
 		{pass: query.PassBearing, refus: "--pass"},
 		{pass: "sideways", refus: "--pass"},
@@ -140,7 +143,7 @@ func TestReplaySelectsOnePass(t *testing.T) {
 // capture and is not read.
 func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	src, ix, _ := runSet(t)
-	set, err := query.ScoringSet(ix, query.PassBoth)
+	set, err := query.ScoringSet(ix, query.PassAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +154,7 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 		}
 	}
 	h := header()
-	h.Pass = query.PassBoth
+	h.Pass = query.PassAll
 	l, err := Create(t.TempDir(), h)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +162,7 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	defer l.Close()
 	ask, _ := asking(t, []asked{{reply: "none"}})
 	write, _ := writing()
-	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassBoth, Launch: sequentialLaunch(ask), Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassAll, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +281,7 @@ func TestReplayOfARemovedRunRecreatesNothing(t *testing.T) {
 		t.Fatal("a replay of a removed run asked")
 		return Reply{}, nil
 	}
-	if _, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}); err == nil {
+	if _, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}, log.Discard()); err == nil {
 		t.Error("the replay of a removed run succeeded")
 	}
 	if _, err := os.Stat(l.Dir()); !errors.Is(err, os.ErrNotExist) {
@@ -315,7 +318,7 @@ func TestReplayFailsWhereItsDirectoryIsRemovedUnderIt(t *testing.T) {
 		}
 		return Reply{Text: "none"}, nil
 	}
-	if _, err := rp.Walk(context.Background(), sequentialLaunch(removing), ReplayHeader{Started: minute(1000)}); err == nil ||
+	if _, err := rp.Walk(context.Background(), sequentialLaunch(removing), ReplayHeader{Started: minute(1000)}, log.Discard()); err == nil ||
 		!strings.Contains(err.Error(), rp.Dir()) {
 		t.Errorf("Walk = %v, want a failure naming %s", err, rp.Dir())
 	}
@@ -357,7 +360,7 @@ func TestReplayAppendsEachFileOnceAfterItsAsks(t *testing.T) {
 		}
 		return Reply{Text: "none"}, nil
 	}
-	if _, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}); err != nil {
+	if _, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}, log.Discard()); err != nil {
 		t.Fatal(err)
 	}
 	var items []string
@@ -371,6 +374,41 @@ func TestReplayAppendsEachFileOnceAfterItsAsks(t *testing.T) {
 		if got := len(lines(t, filepath.Join(rp.Dir(), f))); got != 2 {
 			t.Errorf("%s holds %d lines, want one per asked item", f, got)
 		}
+	}
+}
+
+// TestReplayLogsItsProgress: the walk's last progress line counts what the
+// replay's result counts, every item answered or one failing, and none left.
+func TestReplayLogsItsProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		second       string
+		done, failed int
+	}{
+		{"every item answered", "none", 2, 0},
+		{"one item failing", "about half", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rp := twoItemRun(t, t.TempDir())
+			var calls int
+			ask := func(context.Context, string) (Reply, error) {
+				if calls++; calls == 2 {
+					return Reply{Text: tc.second}, nil
+				}
+				return Reply{Text: "none"}, nil
+			}
+			var lg logtest.Capture
+			res, err := rp.Walk(context.Background(), sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}, &lg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Counts.Done != tc.done || res.Counts.Failed != tc.failed {
+				t.Errorf("counts = %+v, want %d done and %d failed", res.Counts, tc.done, tc.failed)
+			}
+			if got, want := lg.Last("info", "replay progress"), []any{"done", tc.done, "failed", tc.failed, "remaining", 0, "total", 2}; !slices.Equal(got, want) {
+				t.Errorf("last progress %v, want %v", got, want)
+			}
+		})
 	}
 }
 
@@ -388,12 +426,18 @@ func TestReplayCancelledMidWalkKeepsWhatItAsked(t *testing.T) {
 		}
 		return Reply{Text: "none"}, nil
 	}
-	res, err := rp.Walk(ctx, sequentialLaunch(ask), ReplayHeader{Started: minute(1000)})
+	var lg logtest.Capture
+	res, err := rp.Walk(ctx, sequentialLaunch(ask), ReplayHeader{Started: minute(1000)}, &lg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Outcome != result.Cancelled {
 		t.Errorf("outcome = %q, want cancelled", res.Outcome)
+	}
+	c := res.Counts
+	remaining := c.Total - c.Done - c.Failed
+	if got, want := lg.Last("info", "replay progress"), []any{"done", c.Done, "failed", c.Failed, "remaining", remaining, "total", c.Total}; remaining <= 0 || !slices.Equal(got, want) {
+		t.Errorf("last progress %v, want %v with some left", got, want)
 	}
 	for _, f := range []string{linesFile, capturesFile, comparisonFile} {
 		if got := len(lines(t, filepath.Join(rp.Dir(), f))); got != 1 {

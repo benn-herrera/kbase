@@ -2,18 +2,19 @@ package buildstore
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/gitledger"
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/result"
 	"kbase/internal/statedir"
-	"kbase/internal/write"
 )
 
 // The states status reports.
@@ -45,12 +46,7 @@ func (o MonitorOptions) repo() (*gitledger.Repo, error) {
 	if o.Logger == nil {
 		o.Logger = log.Discard()
 	}
-	repo, err := gitledger.Open(o.WorkDir, OwnedPaths, o.Logger)
-	var nw gitledger.NotWorktreeError
-	if errors.As(err, &nw) {
-		return nil, result.Refusal{{Check: CheckWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
-	}
-	return repo, err
+	return OpenRepo(o.WorkDir, OwnedPaths, o.Logger)
 }
 
 // Open is the repository, kb-root/ and the state store, a store newer than
@@ -208,7 +204,10 @@ func (r storeReading) started() string {
 }
 
 // Status is the build's state read from the holder lock, the progress record
-// and the commit trail, and the size of the answer cache.
+// and the commit trail — each stage done or not done, its commit left to
+// BuildTrail — and the size of the answer cache. Where no build stands it
+// reports state none, no stage done and no current stage, and none of a run's
+// fields.
 func Status(opts MonitorOptions) (string, []result.Field) {
 	repo, kbRoot, dir, err := opts.Open()
 	if err != nil {
@@ -223,20 +222,29 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 	if err != nil {
 		return MonitorEnd(placement, err)
 	}
+	none, err := noBuild(repo, kbRoot, read.live, trail)
+	if err != nil {
+		return MonitorEnd(placement, err)
+	}
+	if none {
+		read.last, trail = nil, nil
+	}
 	last, state := read.last, read.state()
-	recorded := RecordedStages(trail)
-	stages := make([]result.Record, len(Stages))
+	recorded := RecordedStages(CurrentTrail(trail))
+	done, notDone := []string{}, []string{}
 	var current any
-	for i, s := range Stages {
-		var commit any
-		if c := recorded[s.ID]; c != "" {
-			commit = c
+	for _, s := range Stages {
+		if recorded[s.ID] != "" {
+			done = append(done, s.ID)
+			continue
 		}
-		stages[i] = result.Record{{Key: "stage", Value: s.ID}, {Key: "commit", Value: commit}}
-		if current == nil && recorded[s.ID] == "" {
+		if current == nil && !none {
 			current = currentStage(s, last)
 		}
+		notDone = append(notDone, s.ID)
 	}
+	stages := result.Record{{Key: "done", Value: done}, {Key: "not-done", Value: notDone},
+		{Key: "rewind", Value: "each completed stage's commit, with the command that rewinds to it, is in " + argmark.Call("build-trail", nil)}}
 	var run Event
 	if last != nil {
 		run = last[0]
@@ -284,6 +292,26 @@ func Status(opts MonitorOptions) (string, []result.Field) {
 		result.Field{Key: "cache-bytes", Value: cacheBytes},
 		result.Field{Key: "resume", Value: Nullable(command)},
 	)
+}
+
+// noBuild is whether no build stands for status and build-trail to read: no
+// build run holds the store, and kb-root/ is absent from the worktree or the
+// trail is empty above a removal of it. A fresh build runs before it writes
+// kb-root/, so a live run is read as it stands.
+func noBuild(repo *gitledger.Repo, kbRoot string, live bool, trail []gitledger.Entry) (bool, error) {
+	if live {
+		return false, nil
+	}
+	if _, err := os.Lstat(kbRoot); errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	if len(trail) > 0 {
+		return false, nil
+	}
+	removal, err := repo.Removal()
+	return removal != "", err
 }
 
 // MonitorEnd is a status read or cancel that stopped on err, with what it had
@@ -346,14 +374,16 @@ func Nullable[T comparable](v T) any {
 	return v
 }
 
-// RecordedCommand renders a recorded invocation for a document, and reports
-// whether it reads as a kbase build invocation at all: a record naming another
-// program was not written by kbase, and is never rendered for a harness to run.
+// RecordedCommand is a recorded invocation as a document carries it, the
+// marked call each surface spells — a kbase build command line at the command
+// line, the build tool's call over MCP — and whether it reads as a kbase build
+// invocation at all: a record naming another program was not written by
+// kbase, and is never rendered for a harness to run.
 func RecordedCommand(argv []string) (string, bool) {
 	if len(argv) < 2 || argv[0] != "kbase" || argv[1] != "build" {
 		return "", false
 	}
-	return ShellJoin(argv), true
+	return argmark.Recorded(argv[1], argv[2:]), true
 }
 
 // ShellJoin quotes each word a POSIX shell would split or expand.
@@ -370,9 +400,9 @@ func ShellJoin(argv []string) string {
 }
 
 // ProjectRoot is path made absolute against the working directory, where it
-// is a git worktree root. Any other path is refused, check worktree, under
-// key.
-func ProjectRoot(path, key string) (string, error) {
+// is a git worktree root. Any other path is refused, check worktree, keyed
+// by the project-dir argument.
+func ProjectRoot(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -382,11 +412,57 @@ func ProjectRoot(path, key string) (string, error) {
 		return "", err
 	}
 	if root != abs {
-		return "", result.Refusal{{Check: CheckWorktree, Key: key, Path: abs,
+		return "", result.Refusal{{Check: CheckWorktree, Key: argmark.Flag("project-dir"), Path: abs,
 			Detail: abs + " is not a git worktree root",
 			Remedy: "name the directory that holds .git and kb-root/, not kb-root/ or a subdirectory"}}
 	}
 	return abs, nil
+}
+
+// OpenRepo is the repository holding dir, owning the given root-relative
+// paths. kbase runs git over a KB only where git's worktree root is the
+// directory kb.RepositoryRoot finds from dir; anywhere else it is refused,
+// check worktree, with the remedy for the cause: no worktree at all, git
+// redirected by GIT_DIR or GIT_WORK_TREE, or a .git at kbase's root that git
+// does not accept, so that git reads an enclosing repository.
+func OpenRepo(dir string, owned []string, lg log.Logger) (*gitledger.Repo, error) {
+	repo, err := gitledger.Open(dir, owned, lg)
+	var nw gitledger.NotWorktreeError
+	if errors.As(err, &nw) {
+		return nil, result.Refusal{{Check: CheckWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
+	}
+	if err != nil {
+		return nil, err
+	}
+	kbaseRoot, err := kb.RepositoryRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	if kbaseRoot != "" {
+		ours, err := filepath.EvalSymlinks(kbaseRoot)
+		if err != nil {
+			return nil, err
+		}
+		gits, err := filepath.EvalSymlinks(repo.Root)
+		if err != nil {
+			return nil, err
+		}
+		if ours == gits {
+			return repo, nil
+		}
+	}
+	// Git finds a worktree where no .git stands at or above dir only when
+	// redirected.
+	if kbaseRoot == "" || os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != "" {
+		ours := kbaseRoot
+		if ours == "" {
+			ours = "any directory holding a .git at or above " + dir
+		}
+		return nil, result.Refusal{{Check: CheckWorktree, Path: dir, Remedy: "unset GIT_DIR and GIT_WORK_TREE, then re-run",
+			Detail: fmt.Sprintf("GIT_DIR or GIT_WORK_TREE redirects git to %s, which is not %s; kbase runs git only where the repository root holding the .git is git's worktree root", repo.Root, ours)}}
+	}
+	return nil, result.Refusal{{Check: CheckWorktree, Path: kbaseRoot, Remedy: ShellJoin([]string{"git", "init", kbaseRoot}),
+		Detail: fmt.Sprintf("%s is not a repository git accepts, so git reads the enclosing %s as the worktree root; kbase runs git only where the two agree", filepath.Join(kbaseRoot, ".git"), repo.Root)}}
 }
 
 // Locate is the kb-root and the state store a build started from
@@ -420,9 +496,3 @@ func Launched(dir string, pid int) (entered bool, resume string, err error) {
 	}
 	return false, "", nil
 }
-
-// StartWait bounds how long the starter of a build in its own process waits
-// for it to enter its first stage or exit: past the build's own waits for
-// the operation lock, the holder lock and a writer in progress, and its launch
-// checks.
-const StartWait = write.LockWait + 2*LockWait + 6*time.Second

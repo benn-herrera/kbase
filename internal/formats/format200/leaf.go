@@ -207,7 +207,7 @@ func pairValueText(v Value) string {
 // own line and yields no edge.
 func scorePairs(node Frontmatter, key, relation, sourceKind, rel, id string, faults *[]AnnotationFault) []Edge {
 	var out []Edge
-	allowed := "[0, 1] or " + PendingLiteral
+	domain := "[0, 1] or " + PendingLiteral
 	for _, entry := range node[key].Entries {
 		target, score, single := scorePair(entry)
 		switch {
@@ -231,9 +231,9 @@ func scorePairs(node Frontmatter, key, relation, sourceKind, rel, id string, fau
 		}
 		bearing, ok := BearingFromValue(score.Str)
 		if score.IsList || score.IsBool || !ok {
-			*faults = append(*faults, AnnotationFault{Field: key, Path: rel, Line: entry.Line, Allowed: allowed,
+			*faults = append(*faults, AnnotationFault{Field: key, Path: rel, Line: entry.Line,
 				Remedy: "write a number in [0, 1] or " + PendingLiteral,
-				Detail: key + " for " + target + " is " + pairValueText(score) + " — must be in " + allowed})
+				Detail: key + " for " + target + " is " + pairValueText(score) + " — must be in " + domain})
 			continue
 		}
 		out = append(out, Edge{Source: id, Target: target, Relation: relation, TargetKind: targetKind,

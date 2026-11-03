@@ -30,11 +30,11 @@ func testGraphRecords(edit func(*kb.Graph)) kb.Graph {
 		},
 		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "An Analysis", Rigor: rigor(0.7), Rationale: "r."}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "An Experiment", Status: "run", Rigor: rigor(0.9)}},
-		Works:       []kb.WorkNode{{ID: "wrk-www001", Title: "A Cited Work", Rigor: rigor(0.9), Rationale: "w."}},
-		Axioms:      []kb.AxiomNode{{ID: "axm-S1", Title: "The design rule"}},
+		Works:       []kb.WorkNode{{ID: "wrk-www001", Label: "www001", Title: "A Cited Work", Rigor: rigor(0.9), Rationale: "w."}},
+		Axioms:      []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "The design rule"}},
 		Founds: []kb.BearingEdge{
 			{Source: "wrk-www001", Target: "clm-cccccc", Context: "the work's frame", Bearing: kb.Bearing{Value: 0.5}},
-			{Source: "axm-S1", Target: "clm-cccccc", Bearing: kb.Bearing{Value: 1}},
+			{Source: "axm-s10000", Target: "clm-cccccc", Bearing: kb.Bearing{Value: 1}},
 		},
 		Scorable: []kb.ScorableEdge{{Relation: kb.RelationLifts, Source: "ana-aaaaaa", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.9}}},
 	}
@@ -61,22 +61,22 @@ func editedTestKB(t *testing.T, edit func(*kb.Graph)) *kb.Source {
 		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n- [ana](ana.md)\n- [exp](exp.md)\n",
 		"vol/a.md": "[↑ Vol](index.md)\n\n# A\n\n" +
 			"The section's opening prose, which is no claim's statement.\n\n" +
-			"The claim's own paragraph, stated mid-section. <!-- claim-rigor: clm-aaaaaa -->\n\n" +
+			"The claim's own paragraph, stated mid-section. <!-- kbase-id: clm-aaaaaa -->\n\n" +
 			"More section prose after it.\n\n" +
-			"> **Proposition.** The quoted claim. <!-- claim-rigor: clm-bbbbbb -->\n>\n> Its proof follows.\n\n" +
-			"A premise of the quoted claim. <!-- claim-rigor: clm-cccccc -->\n\n" +
-			"A claim quoting `- rigor: 0.50` from a register. <!-- claim-rigor: clm-dddddd -->\n\n" +
-			"A claim whose title names a quantity in prose. <!-- claim-rigor: clm-eeeeee -->\n",
-		"vol/ana.md": "[↑ Vol](index.md)\n\n# An Analysis\n\nThe analysis states its own case. <!-- claim-rigor: ana-aaaaaa -->\n",
-		"vol/exp.md": "[↑ Vol](index.md)\n\n# An Experiment\n\nThe run shows what it shows. <!-- claim-rigor: exp-aaaaaa -->\n",
-		"axioms.md":  "# Axioms\n\n### Axiom S1: The design rule\n\nThe design rule holds throughout the corpus.\n",
+			"> **Proposition.** The quoted claim. <!-- kbase-id: clm-bbbbbb -->\n>\n> Its proof follows.\n\n" +
+			"A premise of the quoted claim. <!-- kbase-id: clm-cccccc -->\n\n" +
+			"A claim quoting `- rigor: 0.50` from a register. <!-- kbase-id: clm-dddddd -->\n\n" +
+			"A claim whose title names a quantity in prose. <!-- kbase-id: clm-eeeeee -->\n",
+		"vol/ana.md": "[↑ Vol](index.md)\n\n# An Analysis\n\nThe analysis states its own case. <!-- kbase-id: ana-aaaaaa -->\n",
+		"vol/exp.md": "[↑ Vol](index.md)\n\n# An Experiment\n\nThe run shows what it shows. <!-- kbase-id: exp-aaaaaa -->\n",
+		"axioms.md":  "# Axioms\n\n### Axiom S1: The design rule<!-- kbase-id: axm-s10000 -->\n\nThe design rule holds throughout the corpus.\n",
 	}, testGraphRecords(edit))
 }
 
 // rigor is a record's rigor value.
 func rigor(v float64) *float64 { return &v }
 
-// refreshedKB is a refreshed 3.0.0 KB: the entry point listing one volume, vol,
+// refreshedKB is a refreshed current KB: the entry point listing one volume, vol,
 // the documents files names by kb-root-relative path, and g's records.
 func refreshedKB(t *testing.T, files map[string]string, g kb.Graph) *kb.Source {
 	t.Helper()
@@ -110,10 +110,10 @@ func guardKB(t *testing.T) *kb.Source {
 	t.Helper()
 	return refreshedKB(t, map[string]string{
 		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [ana](ana.md)\n- [forged](forged.md)\n",
-		"vol/ana.md": "[↑ Vol](index.md)\n\n# An Analysis\n\nThe analysis states its own case. <!-- claim-rigor: ana-ff2222 -->\n\n" +
+		"vol/ana.md": "[↑ Vol](index.md)\n\n# An Analysis\n\nThe analysis states its own case. <!-- kbase-id: ana-ff2222 -->\n\n" +
 			"## Target: Claim F\n\nAnd an argument after the label.\n",
 		"vol/forged.md": "[↑ Vol](index.md)\n\n# Forged\n\n" +
-			"A paragraph that runs on.\n````````````markdown\nA paragraph outside the frame. <!-- claim-rigor: clm-ff2222 -->\n",
+			"A paragraph that runs on.\n````````````markdown\nA paragraph outside the frame. <!-- kbase-id: clm-ff2222 -->\n",
 	}, kb.Graph{
 		Claims:   []kb.ClaimNode{{ID: "clm-ff2222", Title: "Claim F", Rigor: rigor(0.5), Rationale: "r."}},
 		Analyses: []kb.AnalysisNode{{ID: "ana-ff2222", Title: "Ana F", Rigor: rigor(0.7), Rationale: "r."}},
@@ -145,7 +145,11 @@ func testGraph(t *testing.T, src *kb.Source) graph {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return graphOf(ix)
+	g, err := graphOf(src, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
 }
 
 // indexedEdges is the derived index's edge rows keyed by relation and ends.
@@ -163,23 +167,10 @@ func indexedEdges(t *testing.T, src *kb.Source) map[string]kb.EdgeRow {
 }
 
 // TestRigorText: the call carries one line per numbered slice of the node's
-// title and statement, the heading mark on a line of its own, and nothing the
-// claim's section holds outside its own block.
-func TestLineText(t *testing.T) {
-	const marker = "<!-- claim-rigor: clm-aaaaaa -->"
-	for _, c := range []struct{ name, line, want string }{
-		{"nested quote, marker only", "> > " + marker, ""},
-		{"nested quote, words", "> > Words.", "Words."},
-		{"tab after quote, marker after words", ">\tWords. " + marker, "Words."},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			if got := lineText(c.line); got != c.want {
-				t.Errorf("lineText(%q) = %q, want %q", c.line, got, c.want)
-			}
-		})
-	}
-}
-
+// title and its statement as kb.Statement reads it — markers and blockquote
+// prefixes removed, a claim's paragraph and not the block around it — the
+// heading mark on a line of its own, and nothing the claim's section holds
+// outside its own paragraph.
 func TestRigorText(t *testing.T) {
 	src := testKB(t)
 	g := testGraph(t, src)
@@ -192,8 +183,8 @@ func TestRigorText(t *testing.T) {
 			[]string{"\n1| Claim A", "\n2| The claim's own paragraph, stated mid-section."},
 			[]string{"opening prose", "More section prose", "# Claim A"}},
 		{"claim in a blockquote", "clm-bbbbbb",
-			[]string{"\n1| Claim B", "\n2| > **Proposition.** The quoted claim.", "\n4| > Its proof follows."},
-			[]string{"More section prose"}},
+			[]string{"\n1| Claim B", "\n2| **Proposition.** The quoted claim."},
+			[]string{"More section prose", "Its proof follows", "> ", "kbase-id"}},
 		{"analysis", "ana-aaaaaa", []string{"\n1| An Analysis", "\n2| The analysis states its own case."}, nil},
 		{"experiment", "exp-aaaaaa", []string{"\n1| An Experiment", "\n2| The run shows what it shows."}, nil},
 		{"title naming a quantity", "clm-eeeeee", []string{"\n1| Bearing 0.5 In Words", "\n2| A claim whose title names a quantity in prose."}, nil},
@@ -235,7 +226,7 @@ func TestClaimMarkerOnAHeading(t *testing.T) {
 	src := refreshedKB(t, map[string]string{
 		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
 		"vol/a.md": "[↑ Vol](index.md)\n\n# A\n\n" +
-			"## The Claimed Section <!-- claim-rigor: clm-aaaaaa -->\n\n" +
+			"## The Claimed Section <!-- kbase-id: clm-aaaaaa -->\n\n" +
 			"The section's opening paragraph.\n\n" +
 			"``` math\n# not a heading\n\\dot x = 0\n```\n\n" +
 			"A second paragraph of the same section.\n\n" +
@@ -243,7 +234,7 @@ func TestClaimMarkerOnAHeading(t *testing.T) {
 			"The subsection's prose, still the claim's.\n\n" +
 			"## The Next Section\n\n" +
 			"Prose the claim does not own.\n\n" +
-			"## Empty <!-- claim-rigor: clm-bbbbbb -->\n\n" +
+			"## Empty <!-- kbase-id: clm-bbbbbb -->\n\n" +
 			"## After The Empty One\n\n" +
 			"More prose nobody owns.\n",
 	}, testGraphRecords(func(g *kb.Graph) {
@@ -251,20 +242,16 @@ func TestClaimMarkerOnAHeading(t *testing.T) {
 			{ID: "clm-aaaaaa", Title: "The Claimed Section", Rigor: rigor(0.8), Rationale: "r."},
 			{ID: "clm-bbbbbb", Title: "Empty", Rigor: rigor(0.6), Rationale: "r."},
 		}
-		g.Scorable = nil
+		g.Scorable, g.Founds = nil, nil
 	}))
 	g := testGraph(t, src)
 
-	passages, err := claimPassages(src, g, g.nodes["clm-aaaaaa"])
-	if err != nil {
-		t.Fatal(err)
-	}
 	want := "The section's opening paragraph.\n\n``` math\n# not a heading\n\\dot x = 0\n```\n\n" +
 		"A second paragraph of the same section.\n\n### A Subsection\n\nThe subsection's prose, still the claim's."
-	if len(passages) != 1 || passages[0].text != want {
-		t.Fatalf("claimPassages = %+v, want the section under the heading", passages)
+	if got := g.statements["clm-aaaaaa"]; got != want {
+		t.Fatalf("the statement = %q, want the section under the heading", got)
 	}
-	if at, want := passages[0].line, lineIn(t, src, "vol/a.md", "The section's opening paragraph."); at != want {
+	if at, want := g.lines["clm-aaaaaa"], lineIn(t, src, "vol/a.md", "The section's opening paragraph."); at != want {
 		t.Errorf("the statement opens on line %d, want %d", at, want)
 	}
 
@@ -296,7 +283,7 @@ func TestClaimMarkerOnAHeading(t *testing.T) {
 func TestRigorTextRefusesWorkAndAxiom(t *testing.T) {
 	src := testKB(t)
 	g := testGraph(t, src)
-	for _, id := range []string{"wrk-www001", "axm-S1"} {
+	for _, id := range []string{"wrk-www001", "axm-s10000"} {
 		_, err := rigorText(src, g, id)
 		var out outOfScopeError
 		if !errors.As(err, &out) || out.ID != id {
@@ -330,11 +317,11 @@ func TestBearingText(t *testing.T) {
 		want   []string
 		absent []string
 	}{
-		{"an axiom's founds edge", kb.RelationFounds + " axm-S1→clm-cccccc",
+		// No leaf hosts an axiom, so its end is its title alone.
+		{"an axiom's founds edge", kb.RelationFounds + " axm-s10000→clm-cccccc",
 			[]string{"\n" + sourceLabel + "\n", "\n1| The design rule",
-				"\n2| The design rule holds throughout the corpus.",
-				"\n" + targetLabel + "\n", "\n3| Claim C", "\n4| A premise of the quoted claim."},
-			[]string{"- rigor:", contextLabel}},
+				"\n" + targetLabel + "\n", "\n2| Claim C", "\n3| A premise of the quoted claim."},
+			[]string{"- rigor:", contextLabel, "holds throughout the corpus"}},
 		{"a work's founds edge", kb.RelationFounds + " wrk-www001→clm-cccccc",
 			[]string{"\n" + sourceLabel + "\n", "\n1| A Cited Work", "\n" + targetLabel + "\n",
 				"\n2| Claim C", "\n3| A premise of the quoted claim.",
@@ -562,31 +549,9 @@ func TestNumberedRendering(t *testing.T) {
 	}
 }
 
-func TestBlockExtent(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		lines []string
-		at    int
-		first int
-		last  int
-	}{
-		{"a paragraph's several lines", []string{"# H", "one", "two <!-- m -->", "", "after"}, 2, 1, 2},
-		{"a line alone between blanks", []string{"# H", "", "alone <!-- m -->", "", "after"}, 2, 2, 2},
-		{"a blockquote whole", []string{"", "> one", ">", "> two <!-- m -->", ">", "> three", "", "after"}, 3, 1, 5},
-		{"clipped at the heading below", []string{"para <!-- m -->", "## Next", "body"}, 0, 0, 0},
-		{"a fence's lines", []string{"``` math", "x <!-- m -->", "```", "", "after"}, 1, 0, 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			first, last := blockExtent(tc.lines, tc.at)
-			if first != tc.first || last != tc.last {
-				t.Errorf("extent = %d..%d, want %d..%d", first, last, tc.first, tc.last)
-			}
-		})
-	}
-}
-
-// TestStatementBySplitForm: the two split forms give the statements
-// they state, and a leaf holding neither gives what it always did.
+// TestStatementBySplitForm: the statements a run's graph reads through
+// kb.Statement, the two split forms included, and the line of the leaf each
+// opens on, which the guard names a hit by.
 func TestStatementBySplitForm(t *testing.T) {
 	m := kb.StatementMarker
 	leaf := "[↑ Vol](index.md)\n\n# A\n\n" +
@@ -595,7 +560,7 @@ func TestStatementBySplitForm(t *testing.T) {
 		"## Prose\n\n" +
 		"S1. S2 opens. " + m("clm-bbbbbb") + " S3. " + m("ana-bbbbbb") + "\n\n" +
 		"## Hand\n\n" +
-		"S1. S2 opens. <!--claim-rigor:  clm-cccccc--> S3. " + m("ana-cccccc") + "\n\n" +
+		"S1. S2 opens. <!--kbase-id:  clm-cccccc--> S3. " + m("ana-cccccc") + "\n\n" +
 		"## Migration\n\n" +
 		"> **Theorem 2.** Every flow. " + m("clm-dddddd") + " " + m("ana-dddddd") + "\n\n" +
 		"## Alone\n\n" +
@@ -620,8 +585,10 @@ func TestStatementBySplitForm(t *testing.T) {
 		"## Tight list\n\n" +
 		"- Item one holds.\n- Item two opens here. " + m("clm-pppppp") + " More. " + m("ana-pppppp") + "\n\n" +
 		"## One marker\n\n" +
-		"Both named here. <!-- claim-rigor: clm-qqqqqq ana-qqqqqq --> And more.\n\n" +
-		"## Fenced paragraph\n\nR1 holds. " + m("clm-rrrrrr") + " R2 follows.\n``` math\na = b\n\nc = d\n```\nSo R3. " + m("ana-rrrrrr") + "\n"
+		"Both named here. <!-- kbase-id: clm-qqqqqq ana-qqqqqq --> And more.\n\n" +
+		"## Fenced paragraph\n\nR1 holds. " + m("clm-rrrrrr") + " R2 follows.\n``` math\na = b\n\nc = d\n```\nSo R3. " + m("ana-rrrrrr") + "\n\n" +
+		"## Cure Is Hard" + m("clm-ssssss") + m("ana-ssssss") + "\n\nThe section both read.\n\n" +
+		"## Abutting in a paragraph\n\nEvery flow abuts." + m("clm-tttttt") + m("ana-tttttt") + "\nA second line.\n"
 	src := refreshedKB(t, map[string]string{
 		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
 		"vol/a.md":     leaf,
@@ -642,6 +609,8 @@ func TestStatementBySplitForm(t *testing.T) {
 			{ID: "clm-oooooo", Title: "C8", Rigor: rigor(0.5), Rationale: "r."},
 			{ID: "clm-pppppp", Title: "C9", Rigor: rigor(0.5), Rationale: "r."},
 			{ID: "clm-qqqqqq", Title: "C11", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-ssssss", Title: "C13", Rigor: rigor(0.5), Rationale: "r."},
+			{ID: "clm-tttttt", Title: "C14", Rigor: rigor(0.5), Rationale: "r."},
 		},
 		Analyses: []kb.AnalysisNode{
 			{ID: "ana-rrrrrr", Title: "A12", Rationale: "r."},
@@ -658,6 +627,8 @@ func TestStatementBySplitForm(t *testing.T) {
 			{ID: "ana-nnnnnn", Title: "A7", Rationale: "r."},
 			{ID: "ana-pppppp", Title: "A9", Rationale: "r."},
 			{ID: "ana-qqqqqq", Title: "A11", Rationale: "r."},
+			{ID: "ana-ssssss", Title: "A13", Rationale: "r."},
+			{ID: "ana-tttttt", Title: "A14", Rationale: "r."},
 		},
 		Scorable: []kb.ScorableEdge{
 			{Relation: kb.RelationLifts, Source: "ana-aaaaaa", Target: "clm-aaaaaa", Bearing: kb.Bearing{Pending: true}},
@@ -674,62 +645,58 @@ func TestStatementBySplitForm(t *testing.T) {
 			{Relation: kb.RelationLifts, Source: "ana-pppppp", Target: "clm-pppppp", Bearing: kb.Bearing{Pending: true}},
 			{Relation: kb.RelationLifts, Source: "ana-qqqqqq", Target: "clm-qqqqqq", Bearing: kb.Bearing{Pending: true}},
 			{Relation: kb.RelationLifts, Source: "ana-rrrrrr", Target: "clm-rrrrrr", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-ssssss", Target: "clm-ssssss", Bearing: kb.Bearing{Pending: true}},
+			{Relation: kb.RelationLifts, Source: "ana-tttttt", Target: "clm-tttttt", Bearing: kb.Bearing{Pending: true}},
 		},
 	})
 	g := testGraph(t, src)
-	// open is a fragment of the line the passage opens on.
+	// open is a fragment of the line the statement opens on. Every statement is
+	// kb.Statement's reading: markers and blockquote prefixes removed, a line
+	// they leave empty carried blank.
 	cases := []struct {
 		name, id, open, want string
 	}{
 		{"claim in a blockquote with a blank analysis line", "clm-aaaaaa", "The display line.", "The display line."},
-		{"analysis on the blank quoted line", "ana-aaaaaa", "> **Lemma.**",
-			"> **Lemma.**\n> " + m("ana-aaaaaa") + "\n> The display line. " + m("clm-aaaaaa") + "\n> 1. An item."},
+		{"analysis on the blank quoted line", "ana-aaaaaa", "> **Lemma.**", "**Lemma.**\n\nThe display line.\n1. An item."},
 		{"claim marker with text after it", "clm-bbbbbb", m("clm-bbbbbb"), "S1. S2 opens."},
 		{"analysis on that line", "ana-bbbbbb", m("clm-bbbbbb"), "S1. S2 opens. S3."},
 		{"hand-typed claim marker", "clm-cccccc", "clm-cccccc", "S1. S2 opens."},
 		{"analysis beside it", "ana-cccccc", "clm-cccccc", "S1. S2 opens. S3."},
-		{"migration claim", "clm-dddddd", "Theorem 2.",
-			"> **Theorem 2.** Every flow. " + m("clm-dddddd") + " " + m("ana-dddddd")},
-		{"migration analysis", "ana-dddddd", "Theorem 2.",
-			"> **Theorem 2.** Every flow. " + m("clm-dddddd") + " " + m("ana-dddddd")},
-		{"analysis alone after the heading", "ana-eeeeee", m("ana-eeeeee"), m("ana-eeeeee") + "\n\nProse of the section."},
-		{"claim of an earlier build", "clm-ffffff", "The display line. " + m("clm-ffffff"),
-			"> The display line. " + m("clm-ffffff") + "\n>\n> A second paragraph."},
-		{"equation in a proof another claim's analysis splits", "clm-iiiiii", "**proof**",
-			"> **proof**\n> " + m("ana-hhhhhh") + "\n> *Proof.* We have\n> ``` math\n> x = 1 \\label{eq:g} " + m("clm-iiiiii") + "\n> ```"},
+		{"migration claim", "clm-dddddd", "Theorem 2.", "**Theorem 2.** Every flow."},
+		{"migration analysis", "ana-dddddd", "Theorem 2.", "**Theorem 2.** Every flow."},
+		{"analysis alone after the heading", "ana-eeeeee", "Prose of the section.", "Prose of the section."},
+		{"claim of an earlier build, its paragraph", "clm-ffffff", "The display line. " + m("clm-ffffff"), "The display line."},
+		{"equation in a proof another claim's analysis splits, its paragraph", "clm-iiiiii", "*Proof.* We have",
+			"*Proof.* We have\n``` math\nx = 1 \\label{eq:g}\n```"},
 		{"analysis marked on a text line of a split blockquote", "ana-kkkkkk", "**Theorem 4.**",
-			"> **Theorem 4.**\n> " + m("ana-jjjjjj") + "\n> Iota holds here. " + m("clm-jjjjjj") + " " + m("ana-kkkkkk") + "\n\nAfter the quote."},
+			"**Theorem 4.**\n\nIota holds here.\n\nAfter the quote."},
 		{"prose claim opening on a later line", "clm-llllll", "Lead in.", "Lead in.\nThe third opening sentence holds here."},
 		{"its analysis, the paragraph", "ana-llllll", "Lead in.",
 			"Lead in.\nThe third opening sentence holds here. More follows.\nAnd a third line."},
 		{"prose claim ending its line", "clm-mmmmmm", "The fourth opening sentence", "The fourth opening sentence holds here."},
 		{"its analysis, the two lines", "ana-mmmmmm", "The fourth opening sentence",
 			"The fourth opening sentence holds here.\nMore follows on the next line."},
-		{"migration pair in a paragraph, the claim", "clm-nnnnnn", "Every flow holds.",
-			"Every flow holds. " + m("clm-nnnnnn") + " " + m("ana-nnnnnn") + "\nA second line."},
-		{"migration pair in a paragraph, the analysis", "ana-nnnnnn", "Every flow holds.",
-			"Every flow holds. " + m("clm-nnnnnn") + " " + m("ana-nnnnnn") + "\nA second line."},
-		{"claim marker with text after it and no lifting analysis", "clm-oooooo", "T1. T2 opens.",
-			"T1. T2 opens. " + m("clm-oooooo") + " T3."},
+		{"migration pair in a paragraph, the claim", "clm-nnnnnn", "Every flow holds.", "Every flow holds.\nA second line."},
+		{"migration pair in a paragraph, the analysis", "ana-nnnnnn", "Every flow holds.", "Every flow holds.\nA second line."},
+		{"claim marker with text after it and no lifting analysis", "clm-oooooo", "T1. T2 opens.", "T1. T2 opens. T3."},
 		{"prose claim in a tight list", "clm-pppppp", "Item two opens here.", "- Item two opens here."},
 		{"its analysis, the list item", "ana-pppppp", "Item two opens here.", "- Item two opens here. More."},
-		{"claim and its analysis named by one marker", "clm-qqqqqq", "Both named here.",
-			"Both named here. <!-- claim-rigor: clm-qqqqqq ana-qqqqqq --> And more."},
+		{"claim and its analysis named by one marker", "clm-qqqqqq", "Both named here.", "Both named here. And more."},
 		{"claim before a fence with a blank line", "clm-rrrrrr", "R1 holds.", "R1 holds."},
 		{"its analysis, the paragraph through the fence", "ana-rrrrrr", "R1 holds.",
 			"R1 holds. R2 follows.\n``` math\na = b\n\nc = d\n```\nSo R3."},
+		{"claim abutting its analysis at a heading's end, the section", "clm-ssssss", "The section both read.", "The section both read."},
+		{"its analysis, the same section", "ana-ssssss", "The section both read.", "The section both read."},
+		{"claim abutting its analysis in a paragraph, the paragraph", "clm-tttttt", "Every flow abuts.", "Every flow abuts.\nA second line."},
+		{"its analysis, the paragraph", "ana-tttttt", "Every flow abuts.", "Every flow abuts.\nA second line."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := statementPassages(src, g, g.nodes[c.id])
-			if err != nil {
-				t.Fatal(err)
+			if got := g.statements[c.id]; got != c.want {
+				t.Fatalf("the statement of %s = %q, want %q", c.id, got, c.want)
 			}
-			if len(got) != 1 || got[0].text != c.want {
-				t.Fatalf("statementPassages(%s) = %+v, want one passage %q", c.id, got, c.want)
-			}
-			if want := lineIn(t, src, "vol/a.md", c.open); got[0].line != want {
-				t.Errorf("passage opens on line %d, want %d", got[0].line, want)
+			if want := lineIn(t, src, "vol/a.md", c.open); g.lines[c.id] != want {
+				t.Errorf("the statement opens on line %d, want %d", g.lines[c.id], want)
 			}
 		})
 	}

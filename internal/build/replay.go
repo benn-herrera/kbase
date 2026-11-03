@@ -114,7 +114,7 @@ func OpenReplay(stateDir, start, kind string, failedOnly bool, limit int) (*Repl
 					continue
 				}
 				if len(rec.Inputs)+len(it.Inputs) == 0 {
-					return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path,
+					return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path,
 						Detail: fmt.Sprintf("%s group %s, item %s records no template inputs: an earlier kbase wrote it", rec.Kind, rec.Group, it.Item)}}
 				}
 				selected.Items = append(selected.Items, it)
@@ -135,7 +135,7 @@ func OpenReplay(stateDir, start, kind string, failedOnly bool, limit int) (*Repl
 		return nil, err
 	}
 	if !recorded && len(captures) == 0 {
-		return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
+		return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
 			Detail: "the trail records no ask: it was built without inference, or asked nothing"}}
 	}
 	for _, c := range captures {
@@ -146,14 +146,14 @@ func OpenReplay(stateDir, start, kind string, failedOnly bool, limit int) (*Repl
 			continue
 		}
 		if !c.HasInputs {
-			return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: c.Path,
+			return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: c.Path,
 				Detail: "the overview call's capture records no excerpts: an earlier kbase wrote it"}}
 		}
 		rp.overviews = append(rp.overviews, c)
 		taken++
 	}
 	if len(rp.groups) == 0 && len(rp.overviews) == 0 {
-		return nil, result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
+		return nil, result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: trail,
 			Detail: "the selection is empty: no recorded ask matches the kind, --failed and --limit given"}}
 	}
 	parent := filepath.Join(trail, replaysDir)
@@ -174,7 +174,7 @@ func replayTrail(stateDir, start string) (string, error) {
 	}
 	path := filepath.Join(stateDir, buildstore.ScratchDir, buildstore.TrailsDir)
 	if len(trails) == 0 {
-		return "", result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail stands in the state store"}}
+		return "", result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail stands in the state store"}}
 	}
 	if start == "" {
 		return trails[0], nil
@@ -187,11 +187,11 @@ func replayTrail(stateDir, start string) (string, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return "", result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail's start commit begins " + start}}
+		return "", result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path, Detail: "no build trail's start commit begins " + start}}
 	case 1:
 		return filepath.Join(path, matches[0]), nil
 	}
-	return "", result.Refusal{{Check: buildstore.CheckUsage, Key: buildstore.ReplayKey, Path: path,
+	return "", result.Refusal{{Check: result.CheckUsage, Key: buildstore.ReplayKey, Path: path,
 		Detail: fmt.Sprintf("%s begins more than one build trail's start commit: %s", start, strings.Join(matches, ", "))}}
 }
 
@@ -263,7 +263,8 @@ type overviewReplayed struct {
 // on its text role, every call on p.Queue — recording the replay under its
 // directory alone and taking no lock. Once replay.yaml is written it keeps
 // itself and the newest buildstore.KeptRuns-1 other replays of its trail's
-// replays/, by start. Once the walk has drained it checks the
+// replays/, by start. While it walks it logs its progress to lg through
+// buildstore.ReplayProgress. Once the walk has drained it checks the
 // replay directory still stands, then writes the replay's group records and
 // comparison.jsonl. A call that never completes is a failed row, not the
 // replay's error: the error is a fault of the replay itself — a trail that no
@@ -287,7 +288,10 @@ func (rp *Replay) Walk(ctx context.Context, p Provider, lg log.Logger) (ReplayRe
 		return res, fmt.Errorf("prune the replays: %w", err)
 	}
 
-	batch := asks.NewReplayBatch(ctx, call.New(p.MultichoiceClient, rp.Dir, lg).Launch(p.Queue, p.Multichoice))
+	progress := buildstore.StartReplayProgress(lg, res.Counts.Total)
+	defer progress.End()
+	launch := call.New(p.MultichoiceClient, p.MultichoiceProvider, rp.Dir, lg).Launch(p.Queue, p.Multichoice)
+	batch := asks.NewReplayBatch(ctx, countedLaunch(launch, progress))
 	for _, g := range rp.groups {
 		if err := batch.AskGroup(g.rec.Kind, g.rec.Group, g.items); err != nil {
 			break
@@ -296,8 +300,10 @@ func (rp *Replay) Walk(ctx context.Context, p Provider, lg log.Logger) (ReplayRe
 	recs, walkErr := batch.Wait()
 	overviews := make([]overviewReplayed, len(rp.overviews))
 	if walkErr == nil {
-		walkErr = rp.askOverviews(ctx, call.New(p.OverviewClient, rp.Dir, lg).PassageLaunch(p.Queue, p.Overview), overviews)
+		walkErr = rp.askOverviews(ctx, call.New(p.OverviewClient, p.OverviewProvider, rp.Dir, lg).PassageLaunch(p.Queue, p.Overview), overviews, progress)
 	}
+
+	rows, unasked := rp.compare(recs, overviews, &res)
 
 	// An item in flight when a prune removed the replay may have recreated
 	// parts of its directory through call's own writes; none of the replay's
@@ -313,7 +319,6 @@ func (rp *Replay) Walk(ctx context.Context, p Provider, lg log.Logger) (ReplayRe
 		return res, errors.Join(fmt.Errorf("the replay directory %s was removed under the walk: %w", rp.dir, err), rmErr)
 	}
 
-	rows, unasked := rp.compare(recs, overviews, &res)
 	if len(rows) > 0 {
 		if err := rp.write(recs, rows); err != nil {
 			return res, err
@@ -354,10 +359,34 @@ func (rp *Replay) setUp(header []byte) error {
 	return atomicfile.Write(filepath.Join(rp.dir, replayFile), header, nil)
 }
 
+// countedLaunch is launch with each item counted into progress by its last
+// call, which is how the item ends: done where it returned no error, failed
+// where it never completed, and neither where it stopped the batch.
+func countedLaunch(launch asks.Launch, progress *buildstore.ReplayProgress) asks.Launch {
+	return func(ctx context.Context, wg *sync.WaitGroup, item func(asks.MultichoiceReader) func(error)) error {
+		return launch(ctx, wg, func(read asks.MultichoiceReader) func(error) {
+			var last error
+			after := item(func(ctx context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
+				reply, err := read(ctx, q)
+				last = err
+				return reply, err
+			})
+			var incomplete asks.IncompleteError
+			switch {
+			case last == nil:
+				progress.Done()
+			case errors.As(last, &incomplete):
+				progress.Failed()
+			}
+			return after
+		})
+	}
+}
+
 // askOverviews asks each selected overview call as its own item through
-// launch, with its recorded inputs and attempt, into out. It stops launching
-// where the context ends.
-func (rp *Replay) askOverviews(ctx context.Context, launch asks.PassageLaunch, out []overviewReplayed) error {
+// launch, with its recorded inputs and attempt, into out, counting each into
+// progress. It stops launching where the context ends.
+func (rp *Replay) askOverviews(ctx context.Context, launch asks.PassageLaunch, out []overviewReplayed, progress *buildstore.ReplayProgress) error {
 	var wg sync.WaitGroup
 	errs := make([]error, len(rp.overviews))
 	var launchErr error
@@ -374,11 +403,13 @@ func (rp *Replay) askOverviews(ctx context.Context, launch asks.PassageLaunch, o
 			switch {
 			case errors.As(err, &incomplete):
 				out[i].outcome = asks.Failed
+				progress.Failed()
 			case err != nil:
 				errs[i] = err
 				return nil
 			default:
 				_, _, out[i].outcome = judgeOverview(reply)
+				progress.Done()
 			}
 			out[i].asked = true
 			return func(err error) { errs[i] = err }

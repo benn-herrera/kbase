@@ -49,9 +49,9 @@ func TestAnOpOverASymlinkedDocumentRefuses(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	res := run(t, root, "mark-claim-in-leaf", "entry:\n- document: leaf.md\n  id: "+seedClaim+"\n  locator: a second paragraph names a bound\n")
+	res := run(t, root, MoveNode, "entry:\n- id: "+seedClaim+"\n  document: leaf.md\n  line: 7\n  snippet: names a bound\n")
 	if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Check != kb.CheckSymlink {
-		t.Fatalf("mark-claim-in-leaf over a symlinked leaf: %+v", res)
+		t.Fatalf("move-node over a symlinked leaf: %+v", res)
 	}
 	if data, _ := os.ReadFile(outside); string(data) != leaf {
 		t.Error("the refused op reached the file the link names")

@@ -2,6 +2,7 @@ package index
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,37 +48,43 @@ func nodeRow(t *testing.T, rows Rows, id string) kb.NodeRow {
 // no canonical path or anchor; an analysis's and an experiment's path is the
 // host leaf and their anchor the slug of the heading above the marker, a heading
 // inside code not counting; a work is on the root page, and an axiom on none,
-// anchored at its axioms.md heading.
+// anchored at the axioms.md heading carrying its marker — after an unmarked
+// heading of the same text, so at its -1 suffix — and an axiom with no marked
+// heading has no anchor. Each node a page renders has its entry's anchor
+// there, an analysis's and an experiment's from its own title.
 func TestDerivePlacesEveryKind(t *testing.T) {
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "In a volume"}, {ID: "clm-bbbbbb", Title: "In a directory no volume is"},
 			{ID: "clm-cccccc", Title: "At the root"}, {ID: "clm-dddddd", Title: "Unmarked"}},
 		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "A method"}},
-		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "A run", Status: "run"}, {ID: "exp-bbbbbb", Title: "Unmarked", Status: "pending"}},
-		Works:       []kb.WorkNode{{ID: "wrk-key2020", Title: "Key, A. 2020. *Book*."}},
-		Axioms:      []kb.AxiomNode{{ID: "axm-A1", Title: "A rule"}},
+		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "A run", Status: "run"}, {ID: "exp-bbbbbb", Title: "Unmarked", Status: kb.ExperimentPlanned}},
+		Works:       []kb.WorkNode{{ID: "wrk-k00000", Label: "key2020", Title: "Key, A. 2020. *Book*."}},
+		Axioms:      []kb.AxiomNode{{ID: "axm-a10000", Label: "A1", Title: "A rule"}, {ID: "axm-a20000", Label: "A2", Title: "No heading"}},
 	}
 	rows, err := Derive(graphKB(t, g, map[string]string{
+		kb.AxiomsFile: "# Axioms\n\n### Axiom A1: A rule\n\nAn unmarked heading of the same text.\n\n" +
+			kb.AxiomHeadingLine("A1", "A rule", "axm-a10000") + "\n",
 		kb.EntryPointFile: "# KB\n\n- [v](v/index.md)\n",
 		"v/index.md":      "[↑ KB](../entry-point.md)\n\n# V\n\n- [leaf](leaf.md)\n",
-		"v/leaf.md": "[↑ V](index.md)\n\n# Leaf\n\nA claim. <!-- claim-rigor: clm-aaaaaa -->\n\n" +
-			"## Method\n<!-- claim-rigor: ana-aaaaaa -->\n\n### Run\n\n```\n# not a heading\n```\n<!-- claim-rigor: exp-aaaaaa -->\n",
-		"loose/x.md": "# X\n\nSays so. <!-- claim-rigor: clm-bbbbbb -->\n",
-		"top.md":     "# Top\n\nSays so. <!-- claim-rigor: clm-cccccc -->\n",
+		"v/leaf.md": "[↑ V](index.md)\n\n# Leaf\n\nA claim. <!-- kbase-id: clm-aaaaaa -->\n\n" +
+			"## Method\n<!-- kbase-id: ana-aaaaaa -->\n\n### Run\n\n```\n# not a heading\n```\n<!-- kbase-id: exp-aaaaaa -->\n",
+		"loose/x.md": "# X\n\nSays so. <!-- kbase-id: clm-bbbbbb -->\n",
+		"top.md":     "# Top\n\nSays so. <!-- kbase-id: clm-cccccc -->\n",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ id, path, anchor, page string }{
-		{"clm-aaaaaa", "v/claim-rigor.md", "in-a-volume", "v/claim-rigor.md"},
-		{"ana-aaaaaa", "v/leaf.md", "method", "v/claim-rigor.md"},
-		{"exp-aaaaaa", "v/leaf.md", "run", "v/claim-rigor.md"},
-		{"clm-bbbbbb", "claim-rigor.md", "in-a-directory-no-volume-is", "claim-rigor.md"},
-		{"clm-cccccc", "claim-rigor.md", "at-the-root", "claim-rigor.md"},
-		{"clm-dddddd", "", "", ""},
-		{"exp-bbbbbb", "", "", ""},
-		{"wrk-key2020", "claim-rigor.md", "key-a-2020-book", "claim-rigor.md"},
-		{"axm-A1", "axioms.md", "axiom-a1-a-rule", ""},
+	for _, tc := range []struct{ id, path, anchor, page, entry string }{
+		{"clm-aaaaaa", "v/kb-summary.md", "in-a-volume", "v/kb-summary.md", "in-a-volume"},
+		{"ana-aaaaaa", "v/leaf.md", "method", "v/kb-summary.md", "a-method"},
+		{"exp-aaaaaa", "v/leaf.md", "run", "v/kb-summary.md", "a-run"},
+		{"clm-bbbbbb", "kb-summary.md", "in-a-directory-no-volume-is", "kb-summary.md", "in-a-directory-no-volume-is"},
+		{"clm-cccccc", "kb-summary.md", "at-the-root", "kb-summary.md", "at-the-root"},
+		{"clm-dddddd", "", "", "", ""},
+		{"exp-bbbbbb", "", "", "", ""},
+		{"wrk-k00000", "kb-summary.md", "key-a-2020-book", "kb-summary.md", "key-a-2020-book"},
+		{"axm-a10000", "axioms.md", "axiom-a1-a-rule-1", "", ""},
+		{"axm-a20000", "axioms.md", "", "", ""},
 	} {
 		r := nodeRow(t, rows, tc.id)
 		if r.CanonicalPath != tc.path || r.CanonicalAnchor != tc.anchor {
@@ -86,6 +93,13 @@ func TestDerivePlacesEveryKind(t *testing.T) {
 		if page, ok := rows.RegisterPages[tc.id]; page != tc.page || ok != (tc.page != "") {
 			t.Errorf("%s: register page %q (placed %t), want %q", tc.id, page, ok, tc.page)
 		}
+		if entry, ok := rows.RegisterAnchors[tc.id]; entry != tc.entry || ok != (tc.entry != "") {
+			t.Errorf("%s: register entry anchor %q (placed %t), want %q", tc.id, entry, ok, tc.entry)
+		}
+	}
+	wantHostAnchors := map[string]string{"clm-aaaaaa": "leaf", "ana-aaaaaa": "method", "exp-aaaaaa": "run", "clm-bbbbbb": "x", "clm-cccccc": "top"}
+	if !maps.Equal(rows.HostAnchors, wantHostAnchors) {
+		t.Errorf("host anchors %v, want %v", rows.HostAnchors, wantHostAnchors)
 	}
 }
 
@@ -106,25 +120,23 @@ func TestDeriveOverTheSheetFixture(t *testing.T) {
 	if len(rows.Nodes) != sheetFixtureNodes || len(rows.Edges) != sheetFixtureEdges {
 		t.Errorf("%d nodes and %d edges, want %d and %d", len(rows.Nodes), len(rows.Edges), sheetFixtureNodes, sheetFixtureEdges)
 	}
-	if len(rows.Degraded) != 0 {
-		t.Errorf("the fixture loads degraded: %+v", rows.Degraded)
-	}
 	for _, tc := range []struct{ id, path, anchor, strength string }{
-		{"clm-aaa001", "alpha/claim-rigor.md", "theorem-1", "0.90"},
-		{"clm-aaa002", "alpha/claim-rigor.md", "equation-eqflow-flow-dynamics", "0.95"},
-		{"clm-aaa003", "alpha/claim-rigor.md", "the-gradient-nabla-f-is-bounded-when-a-b-c", "0.60"},
-		{"clm-aaa004", "alpha/claim-rigor.md",
+		{"clm-aaa001", "alpha/kb-summary.md", "theorem-1", "0.90"},
+		{"clm-aaa002", "alpha/kb-summary.md", "equation-eqflow--flow-dynamics", "0.95"},
+		{"clm-aaa003", "alpha/kb-summary.md", "the-gradient-nabla-f-is-bounded-when-a--b--c", "0.60"},
+		{"clm-aaa004", "alpha/kb-summary.md",
 			"a-deliberately-long-prose-claim-title-that-runs-well-past-the-three-wrapped-lines-a-sheet-label-allows-before-it-is-cut", "0.40"},
 		{"clm-aaa005", "", "", "0.00"},
 		{"clm-aaa006", "", "", "0.00"},
 		{"clm-bbb001", "", "", "0.88"},
-		{"clm-bbb002", "beta/claim-rigor.md", "the-governance-bifurcation", "0.66"},
+		{"clm-bbb002", "beta/kb-summary.md", "the-governance-bifurcation", "0.66"},
 		{"clm-bbb003", "", "", kb.PendingLiteral},
 		{"ana-aaa007", "alpha/analysis.md", "a-supporting-lemma", "0.80"},
 		{"exp-aaa008", "alpha/experiments/flow.md", "flow-simulation", "0.80"},
-		{"axm-1", "axioms.md", "axiom-1-agents-act-on-what-they-observe", "1.00"},
-		{"axm-S1", "axioms.md", "axiom-s1-conservation-of-stock", "1.00"},
-		{"wrk-smith2020", "claim-rigor.md", "smith-a-2020-markets-fixture-press", "0.90"},
+		// The 3.0.0 axm-1, axm-S1 and wrk-smith2020 as the conversion mints them.
+		{"axm-kbrt32", "axioms.md", "axiom-1-agents-act-on-what-they-observe", "1.00"},
+		{"axm-7b65tg", "axioms.md", "axiom-s1-conservation-of-stock", "1.00"},
+		{"wrk-omcjwo", "kb-summary.md", "smith-a-2020-markets-fixture-press", "0.90"},
 	} {
 		r := nodeRow(t, rows, tc.id)
 		strength := r.Strength
@@ -144,141 +156,75 @@ func TestDeriveOverTheSheetFixture(t *testing.T) {
 		"clm-aaa004 alpha/results.md", "clm-bbb002 beta/governance.md"}; !slices.Equal(cited, want) {
 		t.Errorf("cites %q, want %q", cited, want)
 	}
-	want := []kb.AggregateRow{{NodePath: kb.EntryPointFile, NodeKind: kb.DocumentEntryPoint,
-		SubtreeClaims:      []string{"clm-aaa001", "clm-aaa002", "clm-aaa003", "clm-aaa004", "clm-bbb002"},
-		SubtreeExperiments: []string{"exp-aaa008"}}}
-	if len(rows.Aggregates) != 1 || rows.Aggregates[0].NodePath != want[0].NodePath || rows.Aggregates[0].NodeKind != want[0].NodeKind ||
-		!slices.Equal(rows.Aggregates[0].SubtreeClaims, want[0].SubtreeClaims) ||
-		!slices.Equal(rows.Aggregates[0].SubtreeExperiments, want[0].SubtreeExperiments) {
-		t.Errorf("aggregates %+v, want %+v", rows.Aggregates, want)
-	}
 }
 
-// TestDeriveRefusesNeitherACycleNorADanglingEdge: a supports cycle and an edge
-// whose source no record carries leave Derive answering, every edge a row.
-func TestDeriveRefusesNeitherACycleNorADanglingEdge(t *testing.T) {
+// TestDeriveRefusesTheIntegrityFaults: one edge identity on two records, an
+// edge naming a node no record carries, and a cycle among the scoring edges
+// are each a load error — check metadata, the edge file, a detail naming the
+// record and the remedy in git — and nothing else is refused.
+func TestDeriveRefusesTheIntegrityFaults(t *testing.T) {
 	one := kb.Bearing{Value: 1}
-	g := kb.Graph{
-		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A"}, {ID: "clm-bbbbbb", Title: "B"}},
-		Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: one},
-			{Relation: kb.RelationSupports, Source: "clm-bbbbbb", Target: "clm-aaaaaa", Bearing: one}},
-		Founds: []kb.BearingEdge{{Source: "wrk-gone", Target: "clm-aaaaaa", Bearing: one}},
+	claims := []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A"}, {ID: "clm-bbbbbb", Title: "B"}}
+	ab := kb.ScorableEdge{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: one}
+	for _, tc := range []struct {
+		name   string
+		g      kb.Graph
+		detail string
+	}{
+		{"one identity on two records",
+			kb.Graph{Claims: claims, Scorable: []kb.ScorableEdge{ab, {Relation: ab.Relation, Source: ab.Source, Target: ab.Target, Context: "again", Bearing: one}}},
+			"the edge supports clm-aaaaaa → clm-bbbbbb is on more than one record"},
+		{"one demoted identity on two records",
+			kb.Graph{Claims: claims, Demoted: []kb.DemotedEdge{
+				{Source: "clm-aaaaaa", Target: "clm-bbbbbb", ReplacedRelation: kb.RelationSupports, Bearing: one},
+				{Source: "clm-aaaaaa", Target: "clm-bbbbbb", ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Pending: true}}}},
+			"the edge demoted supports clm-aaaaaa → clm-bbbbbb is on more than one record"},
+		{"an edge naming no node",
+			kb.Graph{Claims: claims, Founds: []kb.BearingEdge{{Source: "wrk-g00000", Target: "clm-aaaaaa", Bearing: one}}},
+			"the edge founds wrk-g00000 → clm-aaaaaa names wrk-g00000, which no node record carries"},
+		{"an edge naming two missing nodes",
+			kb.Graph{Claims: claims, References: []kb.UnscoredEdge{{Source: "clm-yyyyyy", Target: "clm-zzzzzz"}}},
+			"the edge references clm-yyyyyy → clm-zzzzzz names clm-yyyyyy and clm-zzzzzz, which no node record carries"},
+		{"a cycle among the scoring edges",
+			kb.Graph{Claims: claims, Scorable: []kb.ScorableEdge{ab, {Relation: kb.RelationSupports, Source: "clm-bbbbbb", Target: "clm-aaaaaa", Bearing: one}}},
+			"closes a cycle among the scoring edges"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Derive(graphKB(t, tc.g, map[string]string{kb.EntryPointFile: "# KB\n"}))
+			var refused result.Refusal
+			if !errors.As(err, &refused) || len(refused) != 1 {
+				t.Fatalf("Derive = %v, want one refusal item", err)
+			}
+			if it := refused[0]; it.Check != kb.CheckMetadata || it.Path != kb.GraphEdgesFile || it.Remedy != kb.ConsistentRecordsRemedy ||
+				!strings.Contains(it.Detail, tc.detail) {
+				t.Errorf("refusal %+v, want check %s, path %s, remedy %q and a detail holding %q",
+					it, kb.CheckMetadata, kb.GraphEdgesFile, kb.ConsistentRecordsRemedy, tc.detail)
+			}
+		})
 	}
-	rows, err := Derive(graphKB(t, g, map[string]string{kb.EntryPointFile: "# KB\n"}))
-	if err != nil {
-		t.Fatalf("Derive = %v, want rows", err)
-	}
-	if len(rows.Edges) != 3 {
-		t.Errorf("%d edge rows, want 3", len(rows.Edges))
-	}
-}
-
-// TestDeriveKeepsOneRecordOfAnEdgeIdentity: of the records sharing an
-// identity the walk reads the one of the higher bearing, a number above
-// pending, and the first on a tie; of a demoted record's the replaced edge's
-// bearing decides, and its replaced relation is part of its identity; of
-// references, the first. Each record left out is one warning.
-func TestDeriveKeepsOneRecordOfAnEdgeIdentity(t *testing.T) {
-	b := func(v float64) kb.Bearing { return kb.Bearing{Value: v} }
-	pending := kb.Bearing{Pending: true}
-	g := kb.Graph{
-		Claims:   []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A", Rigor: f(1)}, {ID: "clm-bbbbbb", Title: "B", Rigor: f(1)}},
-		Analyses: []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "M"}},
-		Works:    []kb.WorkNode{{ID: "wrk-key2020", Title: "W", Rigor: f(1)}},
-		Founds: []kb.BearingEdge{{Source: "wrk-key2020", Target: "clm-aaaaaa", Bearing: pending},
-			{Source: "wrk-key2020", Target: "clm-aaaaaa", Bearing: b(0.3)}},
-		Scorable: []kb.ScorableEdge{
-			{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Context: "first", Bearing: b(0.5)},
-			{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Context: "second", Bearing: b(0.5)},
-			{Relation: kb.RelationLifts, Source: "ana-aaaaaa", Target: "clm-bbbbbb", Bearing: b(0.4)},
-			{Relation: kb.RelationLifts, Source: "ana-aaaaaa", Target: "clm-bbbbbb", Bearing: b(0.8)},
-		},
-		Demoted: []kb.DemotedEdge{
-			{Source: "ana-aaaaaa", Target: "clm-aaaaaa", ReplacedRelation: kb.RelationLifts, Bearing: pending},
-			{Source: "ana-aaaaaa", Target: "clm-aaaaaa", ReplacedRelation: kb.RelationLifts, Bearing: b(0.2)},
-			{Source: "ana-aaaaaa", Target: "clm-aaaaaa", ReplacedRelation: kb.RelationRefutes, Bearing: b(0.1)},
-		},
-		References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Context: "one"},
-			{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Context: "two"}},
-	}
-	rows, err := Derive(graphKB(t, g, map[string]string{kb.EntryPointFile: "# KB\n"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := kb.Graph{
-		Founds:     g.Founds[1:],
-		Scorable:   []kb.ScorableEdge{g.Scorable[0], g.Scorable[3]},
-		Demoted:    g.Demoted[1:],
-		References: g.References[:1],
-	}
-	r := rows.Resolved
-	if !slices.Equal(r.Founds, want.Founds) || !slices.Equal(r.Scorable, want.Scorable) ||
-		!slices.Equal(r.Demoted, want.Demoted) || !slices.Equal(r.References, want.References) {
-		t.Errorf("resolved edges %+v %+v %+v %+v, want %+v %+v %+v %+v", r.Founds, r.Scorable, r.Demoted, r.References,
-			want.Founds, want.Scorable, want.Demoted, want.References)
-	}
-	if len(rows.Degraded) != 5 {
-		t.Errorf("warnings %+v, want one per record left out, 5", rows.Degraded)
-	}
-	for id, want := range map[string]string{"clm-aaaaaa": "0.30", "clm-bbbbbb": "0.15"} {
-		if got := FormatStrengthDisplay(nodeRow(t, rows, id).Strength); got != want {
-			t.Errorf("%s strength %s, want %s from the records kept", id, got, want)
-		}
+	// A demoted record beside the scorable record it replaced is two
+	// identities, and no fault.
+	g := kb.Graph{Claims: claims, Scorable: []kb.ScorableEdge{ab},
+		Demoted: []kb.DemotedEdge{{Source: ab.Source, Target: ab.Target, ReplacedRelation: kb.RelationSupports, Bearing: one}}}
+	if _, err := Derive(graphKB(t, g, map[string]string{kb.EntryPointFile: "# KB\n"})); err != nil {
+		t.Errorf("Derive over a scorable and a demoted record of one pair = %v, want rows", err)
 	}
 }
 
-// TestDeriveDropsADanglingEdge: an edge record of any relation with an end no
-// node record carries is dropped from the walk, with a warning naming the
-// missing ids.
-func TestDeriveDropsADanglingEdge(t *testing.T) {
-	one := kb.Bearing{Value: 1}
-	g := kb.Graph{
-		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A", Rigor: f(1)}},
-		Works:  []kb.WorkNode{{ID: "wrk-key2020", Title: "W", Rigor: f(0.5)}},
-		Founds: []kb.BearingEdge{{Source: "wrk-key2020", Target: "clm-aaaaaa", Bearing: one},
-			{Source: "wrk-gone", Target: "clm-aaaaaa", Bearing: one}},
-		Scorable:   []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-zzzzzz", Bearing: one}},
-		References: []kb.UnscoredEdge{{Source: "clm-zzzzzz", Target: "clm-yyyyyy"}},
-		Demoted:    []kb.DemotedEdge{{Source: "clm-yyyyyy", Target: "clm-aaaaaa", ReplacedRelation: kb.RelationSupports, Bearing: one}},
-	}
-	rows, err := Derive(graphKB(t, g, map[string]string{kb.EntryPointFile: "# KB\n"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := rows.Resolved
-	if !slices.Equal(r.Founds, g.Founds[:1]) || len(r.Scorable)+len(r.References)+len(r.Demoted) != 0 {
-		t.Errorf("resolved edges %+v %+v %+v %+v, want the one founds record naming two nodes", r.Founds, r.Scorable, r.References, r.Demoted)
-	}
-	var missing []string
-	for _, w := range rows.Degraded {
-		missing = append(missing, w.Detail)
-	}
-	for _, want := range []string{"wrk-gone", "clm-zzzzzz", "clm-zzzzzz or clm-yyyyyy", "clm-yyyyyy"} {
-		if !slices.ContainsFunc(missing, func(d string) bool { return strings.HasSuffix(d, "no record carries "+want) }) {
-			t.Errorf("no warning names %s as missing; the warnings are %q", want, missing)
-		}
-	}
-	if len(rows.Degraded) != 4 {
-		t.Errorf("%d warnings, want one per record dropped, 4", len(rows.Degraded))
-	}
-	if got := FormatStrengthDisplay(nodeRow(t, rows, "clm-aaaaaa").Strength); got != "0.50" {
-		t.Errorf("clm-aaaaaa strength %s, want 0.50", got)
-	}
-}
-
-// TestDeriveBreaksACycleForTheWalk: a supports cycle is cut by BreakCycles,
-// the cut kept as a demoted record, and both claims derive a strength.
-func TestDeriveBreaksACycleForTheWalk(t *testing.T) {
+// TestDeriveOverCyclesBreaksACycleForTheWalk: over the build's records, a
+// supports cycle is cut by BreakCycles, the cut kept as a demoted record, and
+// both claims derive a strength.
+func TestDeriveOverCyclesBreaksACycleForTheWalk(t *testing.T) {
 	one := kb.Bearing{Value: 1}
 	back := kb.ScorableEdge{Relation: kb.RelationSupports, Source: "clm-bbbbbb", Target: "clm-aaaaaa", Context: "back", Bearing: kb.Bearing{Value: 0.5}}
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A", Rigor: f(0.9)}, {ID: "clm-bbbbbb", Title: "B", Rigor: f(1)}},
-		Works:  []kb.WorkNode{{ID: "wrk-key2020", Title: "W", Rigor: f(0.8)}},
-		Founds: []kb.BearingEdge{{Source: "wrk-key2020", Target: "clm-aaaaaa", Bearing: one}},
+		Works:  []kb.WorkNode{{ID: "wrk-k00000", Label: "key2020", Title: "W", Rigor: f(0.8)}},
+		Founds: []kb.BearingEdge{{Source: "wrk-k00000", Target: "clm-aaaaaa", Bearing: one}},
 		Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: one},
 			back},
 	}
-	rows, err := Derive(graphKB(t, g, map[string]string{kb.EntryPointFile: "# KB\n"}))
+	rows, err := DeriveOverCycles(graphKB(t, g, map[string]string{kb.EntryPointFile: "# KB\n"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,9 +232,6 @@ func TestDeriveBreaksACycleForTheWalk(t *testing.T) {
 		ReplacedRelation: kb.RelationSupports, Bearing: back.Bearing}}
 	if r := rows.Resolved; !slices.Equal(r.Scorable, g.Scorable[:1]) || !slices.Equal(r.Demoted, wantDemoted) {
 		t.Errorf("resolved %+v and %+v, want %+v and %+v", r.Scorable, r.Demoted, g.Scorable[:1], wantDemoted)
-	}
-	if len(rows.Degraded) != 1 {
-		t.Errorf("warnings %+v, want the one cut", rows.Degraded)
 	}
 	for _, id := range []string{"clm-aaaaaa", "clm-bbbbbb"} {
 		if got := FormatStrengthDisplay(nodeRow(t, rows, id).Strength); got != "0.80" {
@@ -308,9 +251,9 @@ func TestDeriveCutsInTheLeafsOrder(t *testing.T) {
 		Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: one},
 			{Relation: kb.RelationSupports, Source: "clm-bbbbbb", Target: "clm-aaaaaa", Bearing: one}},
 	}
-	rows, err := Derive(graphKB(t, g, map[string]string{
+	rows, err := DeriveOverCycles(graphKB(t, g, map[string]string{
 		kb.EntryPointFile: "# KB\n\n- [Leaf](leaf.md)\n",
-		"leaf.md":         "[↑ KB](entry-point.md)\n\n# Leaf\n\nB. <!-- claim-rigor: clm-bbbbbb -->\n\nA. <!-- claim-rigor: clm-aaaaaa -->\n",
+		"leaf.md":         "[↑ KB](entry-point.md)\n\n# Leaf\n\nB. <!-- kbase-id: clm-bbbbbb -->\n\nA. <!-- kbase-id: clm-aaaaaa -->\n",
 	}))
 	if err != nil {
 		t.Fatal(err)

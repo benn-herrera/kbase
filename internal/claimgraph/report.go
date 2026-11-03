@@ -68,8 +68,12 @@ func (r Report) Failures() []result.Item {
 		}
 		it := result.Item{Check: f.Check, Detail: "the check failed; the stage's report holds what it found"}
 		for _, ff := range f.Fields {
-			if d, ok := ff.Value.(string); ok && ff.Key == "detail" {
-				it.Detail = d
+			s, ok := ff.Value.(string)
+			switch {
+			case ok && ff.Key == "detail":
+				it.Detail = s
+			case ok && ff.Key == "remedy":
+				it.Remedy = s
 			}
 		}
 		out = append(out, it)
@@ -90,6 +94,8 @@ func (r Report) Records() []result.Record {
 // what that comparison found.
 type stop struct {
 	check, detail string
+	// remedy is the command that clears the stop, "" where none does.
+	remedy string
 	// fault is another failure that came with the stop, such as group
 	// records left unwritten; nil for a bare stop.
 	fault error
@@ -102,7 +108,11 @@ func stopf(check, format string, args ...any) *stop {
 }
 
 func (e *stop) finding() Finding {
-	return Finding{StatusFail, e.check, result.Record{{Key: "detail", Value: e.detail}}}
+	fields := result.Record{{Key: "detail", Value: e.detail}}
+	if e.remedy != "" {
+		fields = append(fields, result.Field{Key: "remedy", Value: e.remedy})
+	}
+	return Finding{StatusFail, e.check, fields}
 }
 
 // counts is a zero-form count per name, names in the order given.

@@ -4,15 +4,16 @@ package main
 
 import (
 	"context"
-	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
+	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	"kbase/internal/modelclient"
@@ -33,6 +34,10 @@ type scoreReplayOptions struct {
 	// failed.
 	Failed bool
 
+	// Limit is the --limit flag: it bounds the items re-asked; 0 re-asks every
+	// one.
+	Limit int
+
 	// Given is score's own flags the invocation set, by name.
 	Given []string
 }
@@ -42,27 +47,33 @@ type scoreReplayOptions struct {
 var scoreReplayFlags = []string{"replay", "pass", "failed", "limit", "scoring-model", "state-dir", "timeout", "ask-concurrency"}
 
 // replayRunRE is the shape of the run --replay names: a real or a dry run's id
-// as kb.MintID mints it, never a path.
-var replayRunRE = regexp.MustCompile(`^(` + score.RunKindReal + `|` + score.RunKindDry + `)-` + runIDBody + `$`)
+// as kb.MintID mints it — the kind, then the id body's length of its alphabet,
+// which holds no regular-expression metacharacter — never a path.
+var replayRunRE = regexp.MustCompile(`^(` + score.RunKindReal + `|` + score.RunKindDry + `)-[` + kb.HashAlphabet + `]{` +
+	strconv.Itoa(kb.HashLen) + `}$`)
 
 var (
 	scoreFlagReplay string
 	scoreFlagFailed bool
+	scoreFlagLimit  int
 )
 
 func init() {
 	scoreCmd.Flags().StringVar(&scoreFlagReplay, "replay", "",
 		"re-ask this run's captured calls under this binary's templates and compare; lands nothing")
 	scoreCmd.Flags().BoolVar(&scoreFlagFailed, "failed", false, "with --replay, re-ask only the items the run last recorded failed")
-	mcp.ExcludeFlag(scoreCmd.Flags().Lookup("replay"))
-	mcp.ExcludeFlag(scoreCmd.Flags().Lookup("failed"))
+	scoreCmd.Flags().IntVar(&scoreFlagLimit, "limit", 0, "with --replay, stop after this many items (default: every item)")
+	for _, name := range []string{"replay", "failed", "limit"} {
+		mcp.ExcludeFlag(scoreCmd.Flags().Lookup(name))
+	}
 	scoreReplay = func(cmd *cobra.Command) func(scoreOptions) (int, error) {
 		given := changedLocalFlags(cmd)
-		if !slices.Contains(given, "replay") && !slices.Contains(given, "failed") {
+		if !slices.Contains(given, "replay") && !slices.Contains(given, "failed") && !slices.Contains(given, "limit") {
 			return nil
 		}
 		return func(opts scoreOptions) (int, error) {
-			return runScoreReplay(scoreReplayOptions{scoreOptions: opts, Run: scoreFlagReplay, Failed: scoreFlagFailed, Given: given})
+			return runScoreReplay(scoreReplayOptions{scoreOptions: opts, Run: scoreFlagReplay, Failed: scoreFlagFailed,
+				Limit: scoreFlagLimit, Given: given})
 		}
 	}
 }
@@ -92,16 +103,20 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	}
 	switch {
 	case !slices.Contains(opts.Given, "replay"):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--failed",
-			Detail: "--failed narrows a replay and is given with --replay"})
+		narrowing := "--failed"
+		if !slices.Contains(opts.Given, "failed") {
+			narrowing = "--limit"
+		}
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: narrowing,
+			Detail: narrowing + " narrows a replay and is given with --replay"})
 	case !replayRunRE.MatchString(opts.Run):
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: buildstore.ReplayKey,
 			Detail: "--replay names a run's id (" + score.RunKindReal + "-<…> or " + score.RunKindDry + "-<…>), not a path: " + opts.Run})
 	case len(others) > 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: buildstore.ReplayKey,
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: buildstore.ReplayKey,
 			Detail: "--replay takes " + replayTakes(scoreReplayFlags) + "; " + strings.Join(others, ", ") + " is a run's"})
 	case opts.Limit < 0:
-		return refused(nil, toolresult.Item{Check: checkUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: "--limit", Detail: "--limit counts items and cannot be negative"})
 	}
 	concurrency, err := askConcurrency(opts.AskConcurrency, opts.Config.Asks.Concurrency)
 	if err != nil {
@@ -121,19 +136,16 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	if outcome, f, stop := refusalOrFailure(fields, err); stop {
 		return outcome, f
 	}
-	ep, _, err := scoringRole(opts.scoreOptions, config.EnvOverrides(os.Getenv))
+	ep, err := scoringRole(opts.scoreOptions)
 	if err != nil {
 		return refusedOrFailed(fields, err)
 	}
 	reg := modelclient.New(opts.NewClient, opts.Logger, rp.ID(), concurrency)
 	defer reg.CloseAll()
-	launch, err := scoringLaunch(opts.scoreOptions, reg, ep, concurrency)
-	if outcome, f, stop := refusalOrFailure(fields, err); stop {
-		return outcome, f
-	}
+	launch := scoringLaunch(opts.scoreOptions, reg, ep, concurrency)
 	fields = append(fields, toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "dir", Value: rp.Dir()})
-	res, err := rp.Walk(ctx, launch, score.ReplayHeader{BackEnd: backEndName(ep), Provider: ep.Provider, Model: ep.Model,
-		Started: score.Stamp()})
+	res, err := rp.Walk(ctx, launch, score.ReplayHeader{BackEnd: string(config.BackEndProvider), Provider: ep.Provider, Model: ep.Model,
+		Started: score.Stamp()}, opts.Logger)
 	if err != nil {
 		return failed(fields, err)
 	}

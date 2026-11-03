@@ -1,13 +1,33 @@
 # ROADMAP – kbase
 
-Future intent, not commitment. Design truth lives in [SPEC.md](SPEC.md) and
-[ARCHITECTURE.md](ARCHITECTURE.md); where plans live is in CONVENTIONS.md, "Plan & Execute Process".
+Future intent, not commitment. Design truth lives in [SPEC](PROJECT_DOCS/SPEC/entry-point.md) and
+[ARCHITECTURE](PROJECT_DOCS/ARCHITECTURE/entry-point.md); where plans live is in
+[CONVENTIONS, "Plan & Execute Process"](PROJECT_DOCS/CONVENTIONS/plan-execute-process/index.md).
 Finished items are deleted, not archived.
 
-## Next
-- **CONVENTIONS describes a command flag annotation `kbase.required`; no code sets it.**
-- **The MCP and results fixtures carry no edges**, so the binary-level runs of `edge-census` and
-  `edges` answer empty; grouping and ordering are pinned by the `internal/query` unit tests alone.
+## Maintenance
+
+- update to go go 1.27.X (edit in `go.mod`)
+- update dependencies (`just update-dependencies`)
+- review of `PROJECT_DOCS/CONVENTIONS/house-rules/`
+  - some have rotted
+  - some were never fresh in the first place 
+  - `a-result-field-s-integer-is-int-never-int64.md`: a workaround for `result.Write`'s closed type
+    switch (`internal/result/result.go`); giving the encoder the integer cases retires it.
+  - The leaves holding the 18 bold list titles the dicer's refactor skipped as over 8 words: each
+    may bundle several rules under one heading, as the file-formats leaf does.
+- survey result keys across every command so one concept has one key everywhere, and rename the
+  stragglers
+- `update-format` converts every bare node id in prose to the naming form on every run, not only on
+  upconversion; `verify`'s `bare-id` remedy becomes `update-format`. `add-citation`, the remedy
+  today, refuses an id that occurs twice on one line.
+- `kbase://help/write` prints the batch contract twice: the `write` tool description needs it, and
+  the MCP note is the description's only text slot, which the help resource also renders.
+- `remove-node` leaves dangling a plain link into the removed node's summary entry or axiom
+  heading, and a bare id of it in leaf text; `verify` reports both only afterwards.
+- `build`, `probe` and `score` report provider faults on stderr only, never in their result.
+- `score`'s help says it "prices" faults without saying a reply is a fault list kbase converts
+  to a value through the pass's table.
 
 ## Reader fidelity
 
@@ -17,38 +37,25 @@ Finished items are deleted, not archived.
 - The `-latex_macros` reading: pandoc's LaTeX reader with macro expansion disabled (`-f
   latex-latex_macros`), which may preserve author environment names.
 
+## Exporter
+
+- see [EXPORT_LATEX_BUG](ROADMAP_PLANS/EXPORT_LATEX_BUG.md)
+
 ## Configuration
 
-- **Remove the inert `provider` key from `config.toml` at the next major.** It loads and chooses
-  nothing today, and a file-mode run reports it superseded (SPEC §9). It leaves the schema once the
-  reader-facing examples, `USER_CONVENTIONS.md` and adjagent's `references/scoring.md` have moved off
-  it; until then strict load keeps modelling the key so the file a user has stays loadable and
-  `kbase configure` can rewrite it.
-- **Remove the inert `readerConcurrency` key from `config.toml`'s `[asks]` at the next major.**
-- **Remove the environment inference mode** (`KBASE_API_BASE_URL`, `KBASE_API_KEY_FILE`,
-  `KBASE_DECISION`, `KBASE_TEXT`, `KBASE_SCORING`). Nothing outside this repository uses it; the
-  tests and integration scripts that do move to a scratch `--config-dir`, leaving file mode the one
-  configuration path.
-- **A lockstep schedule for the ask queue, beside the continuous one.** N calls launch together and
-  the next N wait for the slowest, so a local endpoint prefills a whole batch at once instead of
-  admitting calls one by one. Worth it only if measured faster on local inference; a group's first
-  ask still goes alone to warm the prefix cache.
+- A test for whether lockstep schedule for the ask queue, beside the continuous one would be more efficient
+  - N calls launch together and the next N wait for the slowest, so a local endpoint prefills a whole
+    batch at once instead of admitting calls one by one. 
+  - Worth it only if measured faster on local inference; a group's first ask still goes alone to warm
+    the prefix cache.
 
 ## Distribution
 
 - A `winget` distribution for Windows, which today has no distributed binary and builds from source.
 
-## Tooling
-
-- Revise every justfile `[doc]` string for brevity.
-- Review every script under `tools/scripts/` for concision, removing guards and checks against
-  states that cannot arise.
-- **Progress for `build --replay` and `score --replay`.** Both hold every row in memory until the
-  walk drains and write nothing before, so a long replay shows no count of items done or left.
-
 ## After kbase is proven in use
 - The README's argument-graph images are snapshots of another project's graph. They are replaced by
-  `render-claim-graph` output from kbase's own KB once a KB argues the scoring mechanism, so the
+  `refresh`'s sheets from kbase's own KB once a KB argues the scoring mechanism, so the
   pictures become kbase's own graph rather than an illustration of its capability.
 - Records-native leaves with a Go writer, replacing the pandoc writer route.
 - The next major bump of the metadata format after `3.0.0` (SPEC §10): jointly established units —

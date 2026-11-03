@@ -13,10 +13,12 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"kbase/internal/argmark"
 	"kbase/internal/asks"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
+	"kbase/internal/write"
 )
 
 // landed is one value a write seam was handed: the item's id and the value as
@@ -271,81 +273,47 @@ func TestReplySummaryIsBoundedAndPlain(t *testing.T) {
 
 // TestRunWalksTheSet: a scripted sequence of good, malformed, failed and good
 // replies is counted by outcome — a reply the parse refuses fails its attempt —
-// the two good values reach the write seam, and a limit stops the walk at the
-// item boundary with what it left counted as remaining.
+// the two good values reach the write seam, and the run, having failed items,
+// is failed.
 func TestRunWalksTheSet(t *testing.T) {
 	src, ix, set := runSet(t)
-	for _, tc := range []struct {
-		name   string
-		items  []query.Item
-		limit  int
-		answer []asked
-		want   Counts
-		landed []landed
-	}{
-		{
-			// Six of the fixture's seven items, walked four deep: the two the
-			// limit leaves are the ones counted remaining.
-			name:  "a charge, a malformed reply, a failed call and a charge",
-			items: set[:6],
-			limit: 4,
-			answer: []asked{
-				{title: "1| An Analysis", reply: "none"},
-				{title: "1| Claim A", reply: "0.5, roughly — the paragraph is thin."},
-				{title: "1| Claim B", err: errors.New("the provider closed the connection")},
-				{title: "1| Claim C", reply: "flt-overreach: 2\n"},
-			},
-			want:   Counts{Total: 6, Done: 2, Failed: 2, Remaining: 2},
-			landed: []landed{{"ana-aaaaaa", "1.0"}, {"clm-cccccc", "0.85"}},
-		},
-		{
-			name:   "a limit of one",
-			items:  set[:3],
-			limit:  1,
-			answer: []asked{{title: "1| An Analysis", reply: "none"}},
-			want:   Counts{Total: 3, Done: 1, Remaining: 2},
-			landed: []landed{{"ana-aaaaaa", "1.0"}},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			l := kept(t, t.TempDir())
-			ask, prompts := asking(t, tc.answer)
-			write, landed := writing()
-			res, err := (&Runner{Source: src, Index: ix, Items: tc.items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
-				Ledger: l, Model: "small", Limit: tc.limit}).Run(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if res.Outcome != result.Bounded {
-				t.Errorf("outcome = %q, want %q", res.Outcome, result.Bounded)
-			}
-			if res.Counts != tc.want {
-				t.Errorf("counts = %+v, want %+v", res.Counts, tc.want)
-			}
-			if len(*prompts) != len(tc.answer) {
-				t.Errorf("the run made %d calls, want %d: a limit stops the walk", len(*prompts), len(tc.answer))
-			}
-			if !slices.Equal(*landed, tc.landed) {
-				t.Errorf("the write seam was handed %v, want %v", *landed, tc.landed)
-			}
-			var written []string
-			for _, it := range res.Written {
-				written = append(written, itemID(it))
-			}
-			if want := ids(tc.landed); !slices.Equal(written, want) {
-				t.Errorf("written = %v, want %v", written, want)
-			}
-			// The walk this run covered is the cut, reported rather than left
-			// for the caller to cut again: the closing record names items of
-			// this slice.
-			wantWalked := tc.items
-			if tc.limit > 0 && tc.limit < len(wantWalked) {
-				wantWalked = wantWalked[:tc.limit]
-			}
-			if got := itemIDs(res.Walked); !slices.Equal(got, itemIDs(wantWalked)) {
-				t.Errorf("walked = %v, want %v", got, itemIDs(wantWalked))
-			}
-		})
+	items := set[:4]
+	answer := []asked{
+		{title: "1| An Analysis", reply: "none"},
+		{title: "1| Claim A", reply: "0.5, roughly — the paragraph is thin."},
+		{title: "1| Claim B", err: errors.New("the provider closed the connection")},
+		{title: "1| Claim C", reply: "flt-overreach: 2\n"},
+	}
+	wantLanded := []landed{{"ana-aaaaaa", "1.0"}, {"clm-cccccc", "0.85"}}
+	l := kept(t, t.TempDir())
+	ask, prompts := asking(t, answer)
+	write, landed := writing()
+	res, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
+		Ledger: l, Model: "small"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != result.Failed {
+		t.Errorf("outcome = %q, want %q", res.Outcome, result.Failed)
+	}
+	if want := (Counts{Total: 4, Done: 2, Failed: 2}); res.Counts != want {
+		t.Errorf("counts = %+v, want %+v", res.Counts, want)
+	}
+	if len(*prompts) != len(answer) {
+		t.Errorf("the run made %d calls, want %d", len(*prompts), len(answer))
+	}
+	if !slices.Equal(*landed, wantLanded) {
+		t.Errorf("the write seam was handed %v, want %v", *landed, wantLanded)
+	}
+	var written []string
+	for _, it := range res.Written {
+		written = append(written, itemID(it))
+	}
+	if want := ids(wantLanded); !slices.Equal(written, want) {
+		t.Errorf("written = %v, want %v", written, want)
+	}
+	if got := itemIDs(res.Walked); !slices.Equal(got, itemIDs(items)) {
+		t.Errorf("walked = %v, want %v", got, itemIDs(items))
 	}
 }
 
@@ -423,6 +391,34 @@ func TestRunRecordsAWriteRefusal(t *testing.T) {
 	}
 	if _, withValue := recs[0]["value"]; withValue {
 		t.Errorf("a refused write recorded a value: %v", recs[0])
+	}
+}
+
+// TestARefusedLandingRecordsItsMarkedDetailSpelled: a landing the KB refuses
+// with a detail naming an argument through a marker records a failed line
+// whose reply spells the argument as the command line does, and no line of the
+// ledger carries a marker's code points.
+func TestARefusedLandingRecordsItsMarkedDetailSpelled(t *testing.T) {
+	src, ix, set := runSet(t)
+	l := kept(t, t.TempDir())
+	ask, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
+	refusal := write.Result{Outcome: result.Refused, Refusals: []result.Item{{Check: result.CheckUsage, Entry: 1,
+		Detail: "the value is manually scored, which a run re-judges only where " + argmark.Flag("rescore-manual") + " says to"}}}
+	_, w := landingOn(writeError(refusal))
+	if _, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: w,
+		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recs := lines(t, filepath.Join(l.Dir(), linesFile))
+	if reply, _ := recs[0]["reply"].(string); len(recs) != 1 || !strings.Contains(reply, "--rescore-manual") {
+		t.Errorf("the ledger holds %v, want one failed line whose reply spells --rescore-manual", recs)
+	}
+	b, err := os.ReadFile(filepath.Join(l.Dir(), linesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(string(b), string([]rune{0xE000, 0xE001})) {
+		t.Errorf("a ledger line carries a marker's code point:\n%s", b)
 	}
 }
 
@@ -636,14 +632,15 @@ func TestRunContinuesARun(t *testing.T) {
 	src, ix, set := runSet(t)
 	set = set[:3]
 	l := kept(t, t.TempDir())
-	first, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
+	closed := errors.New("the provider closed the connection")
+	first, _ := asking(t, []asked{{title: "1| An Analysis", reply: "none"}, {title: "1| Claim A", err: closed}, {title: "1| Claim B", err: closed}})
 	w, _ := writing()
-	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: sequentialLaunch(first), Write: w, Ledger: l, Model: "small", Limit: 1}).Run(context.Background())
+	res, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassRigor, Launch: sequentialLaunch(first), Write: w, Ledger: l, Model: "small"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Counts != (Counts{Total: 3, Done: 1, Remaining: 2}) {
-		t.Fatalf("the first run's counts = %+v, want one done and two remaining", res.Counts)
+	if res.Counts != (Counts{Total: 3, Done: 1, Failed: 2}) {
+		t.Fatalf("the first run's counts = %+v, want one done and two failed", res.Counts)
 	}
 
 	// The second run is scripted for the two items the ledger leaves; asking the
@@ -669,11 +666,11 @@ func TestRunContinuesARun(t *testing.T) {
 }
 
 // TestRunSkipsManuallyScoredValues: over a KB marking clm-aaaaaa and the lifts
-// edge into it manually scored, a both-pass walk records each skipped — status
+// edge into it manually scored, an all-pass walk records each skipped — status
 // skipped, reason manually-scored, no value, charges, call or capture — unless
-// --rescore-manual names its pass; a skip is counted apart from done and failed
-// and outcome stays done. A continued walk over the same ledger appends no
-// second skipped line, and one whose rescore names the pass asks the item.
+// rescore-manual is given; a skip is counted apart from done and failed and
+// outcome stays done. A continued walk over the same ledger appends no second
+// skipped line, and one given rescore-manual asks the items.
 func TestRunSkipsManuallyScoredValues(t *testing.T) {
 	src := editedTestKB(t, func(g *kb.Graph) {
 		g.Claims[0].ManuallyScored = true
@@ -683,7 +680,7 @@ func TestRunSkipsManuallyScoredValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	both, err := query.ScoringSet(ix, query.PassBoth)
+	both, err := query.ScoringSet(ix, query.PassAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,20 +693,18 @@ func TestRunSkipsManuallyScoredValues(t *testing.T) {
 	}
 	node, lift := "clm-aaaaaa", kb.RelationLifts+" ana-aaaaaa → clm-aaaaaa"
 	for _, tc := range []struct {
-		rescore string
+		rescore bool
 		skipped []string
 	}{
-		{RescoreNone, []string{node, lift}},
-		{query.PassRigor, []string{lift}},
-		{query.PassBearing, []string{node}},
-		{query.PassBoth, nil},
+		{false, []string{node, lift}},
+		{true, nil},
 	} {
-		t.Run(tc.rescore, func(t *testing.T) {
+		t.Run(fmt.Sprintf("rescore %v", tc.rescore), func(t *testing.T) {
 			dir := t.TempDir()
 			l := kept(t, dir)
 			ask, prompts := asking(t, []asked{{title: "", reply: "none"}})
 			write, landed := writing()
-			runner := &Runner{Source: src, Index: ix, Items: items, Pass: query.PassBoth, Launch: sequentialLaunch(ask), Write: write,
+			runner := &Runner{Source: src, Index: ix, Items: items, Pass: query.PassAll, Launch: sequentialLaunch(ask), Write: write,
 				Skip: ManualSkip(ix, tc.rescore), Ledger: l, Model: "small"}
 			res, err := runner.Run(context.Background())
 			if err != nil {
@@ -766,9 +761,10 @@ func TestRunSkipsManuallyScoredValues(t *testing.T) {
 			if after := len(lines(t, filepath.Join(l.Dir(), linesFile))); after != before {
 				t.Errorf("a continued walk appended %d lines over items it had skipped", after-before)
 			}
-			// A walk told to re-judge both asks every skipped item.
+			// A walk told to re-judge manually scored values asks every skipped
+			// item.
 			again, prompted := asking(t, []asked{{title: "", reply: "none"}})
-			runner.Launch, runner.Skip = sequentialLaunch(again), ManualSkip(ix, query.PassBoth)
+			runner.Launch, runner.Skip = sequentialLaunch(again), ManualSkip(ix, true)
 			res, err = runner.Run(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -816,7 +812,10 @@ func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
 			byID[id], _ = rec["prompt_sha256"].(string)
 		}
 	}
-	g := graphOf(ix)
+	g, err := graphOf(src, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		id  string
 		ask func(string) (string, error)
@@ -870,7 +869,7 @@ func TestRunRecordsChargesTheirIDsPrice(t *testing.T) {
 	l := kept(t, state)
 	rigorAsk, _ := asking(t, []asked{
 		{title: "1| Claim A", reply: "flt-overreach: 2"},
-		{title: "1| Claim B", reply: "flt-underspecified: 2\nflt-underspecified: 4"},
+		{title: "1| Claim B", reply: "flt-underspecified: 1\nflt-underspecified: 2"},
 		{title: "1| Claim C", reply: "none"},
 		{title: "1| Claim D", reply: "none"},
 		{title: "1| Bearing 0.5 In Words", reply: "none"},

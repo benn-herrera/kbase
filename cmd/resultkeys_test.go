@@ -17,64 +17,71 @@ import (
 // documentedKeys is each subcommand's own result keys, in their documented
 // order: the contract a model reading a result relies on.
 var documentedKeys = map[string][]string{
-	"build":              {"state-dir", "roles", "through", "no-inference", "resumed", "restored", "stages", "resume"},
-	"status":             {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
-	"cancel":             {"state-dir", "pid", "resume"},
-	"init":               {"written", "removed"},
-	"refresh":            {"written", "removed", "warnings"},
-	"verify":             {"findings"},
-	"write-op":           {"ids", "minted", "adopted", "written", "refreshed", "removed"},
-	"resolve-demoted":    {"ids", "minted", "adopted", "written", "refreshed", "removed", "resolved"},
-	"render-citation":    {"citations"},
-	"list-query":         {"count", "offset", "truncated", "results"},
-	"mapping-query":      {"results"},
-	"render-claim-graph": {"written", "removed", "sheet", "dot"},
-	"models":             {"provider", "provider-rule", "provider-layer", "models"},
-	"configure":          {"provider", "provider-rule", "provider-layer", "models", "written"},
-	"show-config":        {"layers", "providers", "config", "environment", "selection", "mode", "roles", "diagnostics"},
-	"probe":              {"provider", "provider-rule", "provider-layer", "selection", "model", "temperature", "thinking", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
-	"export-latex":       {"written", "volumes", "report"},
-	"score":              {"state-dir", "pass", "roles", "run", "ledger", "counts", "scored", "resume"},
+	"build":               {"state-dir", "roles", "through", "no-inference", "resumed", "restored", "stages", "resume"},
+	"status":              {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
+	"cancel":              {"state-dir", "pid", "resume"},
+	"build-trail":         {"state-dir", "head", "boundaries", "started-at", "dirty"},
+	"init":                {"written", "removed"},
+	"update-format":       {"written", "removed", "unfenced", "sheet", "dot", "commits", "uncommitted", "ids", "bare-ids", "no-edge", "strengthen-by"},
+	"verify":              {"findings"},
+	"write-op":            {"dry-run", "entries", "written", "removed", "sheet", "dot", "commits", "uncommitted"},
+	"mapping-query":       {"results"},
+	"complete-query":      {"count", "results"},
+	"models":              {"provider", "provider-rule", "provider-layer", "models", "warnings"},
+	"configure-providers": {"provider", "layer", "written", "models", "next", "warnings"},
+	"configure-models":    {"models", "written", "warnings"},
+	"show-config":         {"layers", "providers", "config", "selection", "roles", "diagnostics"},
+	"probe":               {"provider", "provider-rule", "provider-layer", "selection", "model", "temperature", "thinking", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
+	"export-latex":        {"written", "volumes", "report"},
+	"score":               {"state-dir", "pass", "roles", "run", "ledger", "counts", "ask", "skip", "scored", "resume"},
+	"auth add":            {"provider"},
+	"auth remove":         {"provider"},
+	"auth list":           {"providers"},
 }
 
 // documentedSubKeys is the keys of each mapping a result nests, in order.
 var documentedSubKeys = map[string][]string{
-	"build.stages":             {"stage", "commit", "dropped", "report"},
-	"status.stages":            {"stage", "commit"},
-	"status.current":           {"stage", "units-done", "units-total"},
-	"write-op.adopted":         {"entry", "id", "differs"},
-	"resolve-demoted.resolved": {"source", "target", "action"},
-	"configure.models":         {"decision", "text", "scoring"},
-	"score.counts":             {"total", "done", "failed", "skipped", "remaining"},
-	"probe.usage":              {"reported", "prompt-tokens", "completion-tokens", "reasoning-tokens", "cached-tokens"},
-	"show-config.layers":       {"path", "source", "exists", "providersExists", "configExists"},
-	"show-config.providers":    {"name", "base-url", "api", "decisions-flavor", "key", "key-file", "layer", "usable", "fault"},
-	"show-config.config":       {"models", "sampling"},
-	"show-config.selection":    {"provider", "rule", "detail"},
-	"build.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model"},
-	"score.roles":              {"role", "back-end", "provider", "provider-rule", "provider-layer", "model"},
-	"show-config.roles":        {"role", "back-end", "provider", "provider-rule", "provider-layer", "model", "base-url", "sources", "temperature", "thinking", "detail"},
-	"migration":                {"from", "to", "note", "warnings"},
-	"build.cancelled":          {"stage", "unit"},
-	"score.cancelled":          {"item"},
-	"item":                     {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
+	"build.stages":                {"stage", "commit", "dropped", "report"},
+	"status.stages":               {"done", "not-done", "rewind"},
+	"build-trail.boundaries":      {"stage", "commit", "subject", "command"},
+	"build-trail.started-at":      {"commit", "command"},
+	"status.current":              {"stage", "units-done", "units-total"},
+	"write-op.entries":            {"entry", "operation", "outcome", "document", "line", "id", "heading", "link", "source", "target", "relation", "restored", "removed-edges"},
+	"write-op.commits":            {"commit", "label", "paths"},
+	"update-format.commits":       {"commit", "label", "paths"},
+	"update-format.ids":           {"from", "to"},
+	"update-format.bare-ids":      {"path", "line", "id"},
+	"update-format.no-edge":       {"id", "text"},
+	"update-format.strengthen-by": {"id", "text"},
+	"configure-models.models":     {"decision", "text", "scoring"},
+	"score.counts":                {"total", "done", "failed", "skipped", "remaining"},
+	"probe.usage":                 {"reported", "prompt-tokens", "completion-tokens", "reasoning-tokens", "cached-tokens"},
+	"show-config.layers":          {"path", "source", "exists", "providers-exists", "config-exists"},
+	"show-config.providers":       {"name", "base-url", "api", "decisions-flavor", "key", "key-file", "upgrade", "layer", "usable", "fault"},
+	"show-config.config":          {"models", "sampling"},
+	"show-config.selection":       {"provider", "rule", "detail"},
+	"build.roles":                 {"role", "provider", "provider-rule", "provider-layer", "model"},
+	"score.roles":                 {"role", "provider", "provider-rule", "provider-layer", "model"},
+	"show-config.roles":           {"role", "provider", "provider-rule", "provider-layer", "model", "base-url", "sources", "temperature", "thinking", "detail"},
+	"migration":                   {"from", "to", "note", "warnings"},
+	"build.cancelled":             {"stage", "unit"},
+	"score.cancelled":             {"item"},
+	"item":                        {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }
 
 // keysFor is the documented-keys entry a subcommand's result is read
 // against.
 func keysFor(verb string) string {
 	switch {
-	case verb == write.ResolveDemoted:
-		return verb
-	case slices.Contains(write.Ops(), verb):
+	case slices.Contains(write.Ops(), verb) || verb == write.Batch:
 		return "write-op"
-	case verb == "show" || verb == "stats" || verb == "edge-census":
+	case verb == "show" || verb == "stats":
 		return "mapping-query"
 	case verb == "wait":
 		// wait prints the status document for the store it waited on.
 		return "status"
-	case slices.Contains([]string{"deps", "gated-on", "cited-by", "find", "referenced-by", "strength-below", "subtree", "weak-points", "edges"}, verb):
-		return "list-query"
+	case slices.Contains([]string{"find", "citations-of", "edges", "trace"}, verb):
+		return "complete-query"
 	}
 	return verb
 }
@@ -97,6 +104,18 @@ func (d resultDoc) items(key string) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+// entryIDs is the id each of a write batch's entries reports, in entry order:
+// the node an insert entered or adopted.
+func (d resultDoc) entryIDs() []string {
+	var ids []string
+	for _, e := range d.items("entries") {
+		if id, ok := e["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func parseResult(t *testing.T, stdout string) resultDoc {
@@ -163,7 +182,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 		t.Fatalf("%s: keys %q, want outcome first", verb, keys)
 	}
 	keys = keys[1:]
-	if verb != "models" && verb != "configure" && verb != "show-config" && verb != "probe" && len(keys) > 0 && keys[0] == "kb-root" {
+	if !slices.Contains([]string{"models", "configure-providers", "configure-models", "show-config", "probe", "auth add", "auth remove", "auth list"}, verb) && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 		// A migrated KB's record is conditional: present after kb-root and
 		// nowhere else, so a document carrying one is checked without it.
@@ -220,7 +239,7 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 			}
 		}
 	}
-	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "recent-refusals", "recent-fallbacks", "findings"} {
+	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "recent-refusals", "recent-fallbacks", "findings", "warnings"} {
 		nested(key, "item")
 	}
 	nested("migration", "migration")

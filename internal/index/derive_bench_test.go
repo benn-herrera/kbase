@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,40 +10,55 @@ import (
 	"testing"
 
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 )
 
 // sheetFixtureKB is the claim-graph sheet fixture's kb-root, which carries
 // every node kind and every relation.
 var sheetFixtureKB = filepath.Join("..", "sheet", "testdata", "adjagent-sheet", "kb-root")
 
-// Fixture rows per copy: what Derive yields for the sheet fixture as committed.
+// Fixture rows per copy: what Derive yields for the sheet fixture as converted.
 const sheetFixtureNodes, sheetFixtureEdges = 14, 17
 
-// sheetFixtureReplica is the sheet fixture's files copied n times into one
-// in-memory source under an empty kb-root. Copy 0 is the fixture's bytes as
-// committed; copy k > 0 suffixes every top-level directory with k and renames
-// every id it carries within that id's grammar, its node and edge records
-// appended to the one pair of record files.
+// sheetFixtureReplica is the sheet fixture's files, converted to the current
+// format as a load converts them, copied n times into one in-memory source
+// under an empty kb-root. Copy 0 is the converted fixture; copy k > 0 suffixes
+// every top-level directory with k and renames every id it carries within
+// that id's grammar, its node and edge records appended to the one pair of
+// record files.
 func sheetFixtureReplica(b *testing.B, n int) *kb.Source {
 	b.Helper()
-	committed := map[string]string{}
-	err := filepath.WalkDir(sheetFixtureKB, func(p string, d fs.DirEntry, err error) error {
+	converted, err := kbload.Open(sheetFixtureKB)
+	if err != nil {
+		b.Fatal(err)
+	}
+	paths := map[string]bool{}
+	for _, rel := range converted.MigratedFiles() {
+		if kbRel, ok := strings.CutPrefix(rel, kb.KBDir+"/"); ok {
+			paths[kbRel] = true
+		}
+	}
+	err = filepath.WalkDir(sheetFixtureKB, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
 		rel, err := filepath.Rel(sheetFixtureKB, p)
-		if err != nil {
-			return err
-		}
-		committed[filepath.ToSlash(rel)] = string(data)
-		return nil
+		paths[filepath.ToSlash(rel)] = true
+		return err
 	})
 	if err != nil {
 		b.Fatal(err)
+	}
+	committed := map[string]string{}
+	for rel := range paths {
+		data, err := converted.ReadFile(converted.KBPath(rel))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			b.Fatal(err)
+		}
+		committed[rel] = string(data)
 	}
 	root := filepath.Join(b.TempDir(), kb.KBDir)
 	if err := os.Mkdir(root, 0o755); err != nil {
@@ -57,9 +73,10 @@ func sheetFixtureReplica(b *testing.B, n int) *kb.Source {
 		rename := strings.NewReplacer(
 			"-aaa", fmt.Sprintf("-a%02d", k),
 			"-bbb", fmt.Sprintf("-b%02d", k),
-			"wrk-smith2020", fmt.Sprintf("wrk-smith2020c%02d", k),
-			"axm-1", fmt.Sprintf("axm-1c%02d", k),
-			"axm-S1", fmt.Sprintf("axm-S1c%02d", k),
+			// The fixture's work and axioms, as the conversion mints their ids.
+			"wrk-omcjwo", fmt.Sprintf("wrk-w%05d", k),
+			"axm-kbrt32", fmt.Sprintf("axm-k%05d", k),
+			"axm-7b65tg", fmt.Sprintf("axm-s%05d", k),
 		)
 		for rel, text := range committed {
 			dir, rest, nested := strings.Cut(rel, "/")

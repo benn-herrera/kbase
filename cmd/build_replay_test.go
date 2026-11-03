@@ -16,7 +16,6 @@ import (
 	"kbase/internal/asks/call"
 	"kbase/internal/build"
 	"kbase/internal/buildstore"
-	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	"kbase/internal/model"
@@ -55,7 +54,7 @@ func replayFixtureClient() *model.ClientFuncs {
 func writeReplayTrail(t *testing.T, state string) (string, int) {
 	t.Helper()
 	trail := filepath.Join(state, buildstore.ScratchDir, buildstore.TrailsDir, replayStart)
-	caller := call.New(replayFixtureClient(), func() string { return trail }, log.Discard())
+	caller := call.New(replayFixtureClient(), "solo", func() string { return trail }, log.Discard())
 	queue := model.NewQueue(1)
 	ctx := context.Background()
 	batch := asks.NewBatch(ctx, caller.Launch(queue, "decision"))
@@ -112,7 +111,7 @@ func buildReplayWith(t *testing.T, ctx context.Context, client model.Client, wor
 	opts.Stdout, opts.Stderr, opts.Logger = &stdout, &stderr, log.Discard()
 	opts.AskConcurrency = new(1)
 	opts.NewClient = func(model.Endpoint) model.Client { return client }
-	opts.Provider = buildProvider(scoreProvider(), config.Overrides{}, &stderr)
+	opts.Provider = buildProvider(scoreProvider(), &stderr)
 	code, err := runBuildReplay(ctx, opts)
 	if err != nil {
 		t.Fatalf("runBuildReplay: %v", err)
@@ -214,7 +213,7 @@ func TestBuildReplayRefusals(t *testing.T) {
 			doc := parseResult(t, out)
 			items := doc.items(toolresult.RefusalsKey)
 			if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-				items[0]["check"] != checkUsage || items[0]["key"] != tc.key {
+				items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != tc.key {
 				t.Fatalf("%q: outcome %s, exit %d, refusals %v; want one usage refusal naming %s\n%s", tc.args, doc.Outcome, code, items, tc.key, out)
 			}
 		})

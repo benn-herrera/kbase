@@ -48,7 +48,7 @@ func exportKB() map[string]string {
 		"> **Lemma**\n>\n> **Lemma 1**. Body cites <span class=\"citation\" data-cites=\"smith2020\">(Smith)</span>.\n"
 	files["vol2/v2-noheading.md"] = "[↑ Second Volume](index.md)\n\nJust prose.\n"
 	rigor := 0.70
-	files[kb.GraphNodesFile] = string(kb.EncodeNodes(kb.Graph{Works: []kb.WorkNode{{ID: "wrk-smith2020", Title: "Smith, *A Work*", Rigor: &rigor, Rationale: "sound."}}}))
+	files[kb.GraphNodesFile] = string(kb.EncodeNodes(kb.Graph{Works: []kb.WorkNode{{ID: "wrk-s00000", Label: "smith2020", Title: "Smith, *A Work*", Rigor: &rigor, Rationale: "sound."}}}))
 	files["vol1/fig.png"] = string(fig)
 	files["vol1/nested/data.csv"] = "a,b\n"
 	files["logo.png"] = "outside every volume"

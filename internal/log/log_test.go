@@ -2,12 +2,15 @@ package log
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"kbase/internal/argmark"
 )
 
 func TestParseLevel(t *testing.T) {
@@ -117,6 +120,33 @@ func TestStructuredOutputShape(t *testing.T) {
 	for _, want := range []string{"level=INFO", `msg="stage complete"`, "stage=3", "leaves=12"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("record %q is missing %q", strings.TrimSpace(got), want)
+		}
+	}
+}
+
+// TestMarkedTextIsWrittenSpelled: a message, a string attribute and an
+// error attribute holding an argument marker are written as the command line
+// spells it, so no log line carries a marker's code points, raw or escaped.
+func TestMarkedTextIsWrittenSpelled(t *testing.T) {
+	var console bytes.Buffer
+	lg, closer, err := New(Options{Level: LevelInfo, Console: &console})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer closeOrFail(t, closer)
+
+	lg.Info("re-run with "+argmark.Flag("resume"), "remedy", "pass "+argmark.Flag("state-dir"), "error", errors.New("no "+argmark.Flag("node")))
+
+	got := console.String()
+	for _, want := range []string{"--resume", "--state-dir", "--node"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("record %q does not spell %s", strings.TrimSpace(got), want)
+		}
+	}
+	markers := []string{string(rune(0xE000)), string(rune(0xE001)), `\` + "ue000", `\` + "ue001"}
+	for _, marker := range markers {
+		if strings.Contains(got, marker) {
+			t.Errorf("record %q carries the marker code point %q", strings.TrimSpace(got), marker)
 		}
 	}
 }

@@ -11,8 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/atomicfile"
-	"kbase/internal/gitledger"
+	"kbase/internal/buildstore"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
@@ -33,8 +34,8 @@ type initOptions struct {
 }
 
 // birthSubject is the birth commit's subject: plain, never gitledger.Prefix, so
-// Trail() reads no trail and build's populated-kb-root/ refusal stands over
-// a created KB forever.
+// Trail() reads no trail: a resume finds nothing to resume, and a fresh build
+// is refused over the created KB as init is.
 const birthSubject = "kb-init: knowledge base created"
 
 // birthOwned is every path the birth commit takes, git-root relative.
@@ -59,7 +60,7 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 	// point, a child-list line among them.
 	var usage []toolresult.Item
 	if strings.ContainsAny(opts.Title, "\r\n") {
-		usage = append(usage, toolresult.Item{Check: checkUsage, Key: "--title",
+		usage = append(usage, toolresult.Item{Check: toolresult.CheckUsage, Key: argmark.Flag("title"),
 			Detail: "the title is the entry point's one heading line and cannot hold a line break"})
 	}
 	repo, err := kb.RepositoryRoot(opts.WorkDir)
@@ -70,17 +71,24 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 		return refused(nil, append(usage, toolresult.Item{Check: checkWorktree, Path: opts.WorkDir, Remedy: "git init",
 			Detail: fmt.Sprintf("%s is not inside a git worktree; `git init` there is the operator's to run", opts.WorkDir)})...)
 	}
+	commit, err := buildstore.OpenRepo(opts.WorkDir, birthOwned, opts.Logger)
+	var notOurs toolresult.Refusal
+	if errors.As(err, &notOurs) {
+		return refused(nil, append(usage, notOurs...)...)
+	}
+	if err != nil {
+		return failed(nil, err)
+	}
 	kbRoot := filepath.Join(repo, kb.KBDir)
 	if _, err := os.Lstat(kbRoot); err == nil {
-		return refused([]toolresult.Field{{Key: "kb-root", Value: kbRoot}}, append(usage, toolresult.Item{Check: checkKBRoot, Path: kbRoot,
-			Detail: fmt.Sprintf("%s already exists; creation is birth-once, and what the KB holds afterwards comes from the maintenance subcommands", kbRoot)})...)
+		return refused([]toolresult.Field{{Key: "kb-root", Value: kbRoot}}, append(usage, buildstore.KBRootExists(kbRoot))...)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return failed(nil, err)
 	}
 	if len(usage) > 0 {
 		return refused(nil, usage...)
 	}
-	release, outcome, items, err := holdKB(kbRoot, "re-run kbase init")
+	release, outcome, items, err := holdKB(kbRoot, "re-run "+argmark.Call("init", nil))
 	if err != nil {
 		return failed(nil, err)
 	}
@@ -91,8 +99,7 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 	// A concurrent writer may have created the KB during the wait for the
 	// lock: birth-once is decided under the lock.
 	if _, err := os.Lstat(kbRoot); err == nil {
-		return refused([]toolresult.Field{{Key: "kb-root", Value: kbRoot}}, toolresult.Item{Check: checkKBRoot, Path: kbRoot,
-			Detail: fmt.Sprintf("%s was created while this call waited on the write lock; creation is birth-once, and what the KB holds afterwards comes from the maintenance subcommands", kbRoot)})
+		return refused([]toolresult.Field{{Key: "kb-root", Value: kbRoot}}, buildstore.KBRootExists(kbRoot))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return failed(nil, err)
 	}
@@ -106,10 +113,6 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 		if errors.As(err, &refusal) {
 			return refused(fields, refusal...)
 		}
-		return failed(fields, err)
-	}
-	commit, err := gitledger.Open(opts.WorkDir, birthOwned, opts.Logger)
-	if err != nil {
 		return failed(fields, err)
 	}
 	if _, err := commit.Commit(birthSubject, ""); err != nil {
@@ -168,24 +171,25 @@ func initCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "create a KB empty — no LaTeX, no build",
-		Long: `init creates a knowledge base at kb-root/ beside the .git of the repository
-it is run in — the equivalent of git init for a KB: no LaTeX, no build,
-nothing distilled. It refuses outside a git worktree, remedy git init, and
-refuses any repository whose kb-root/ already exists, in any state: creation
-is birth-once, and what the KB holds afterwards comes from the maintenance
-subcommands — insert an entry, set a field, refresh, verify, a claim at a
-time. It writes entry-point.md with --title (or the repository's
+		Long: `init creates a knowledge base at kb-root/ in the git worktree root — the
+equivalent of git init for a KB: no LaTeX, no build,
+nothing distilled. It refuses outside a git worktree (check: worktree; remedy:
+git init), and refuses any repository whose kb-root/ already exists, in any
+state: creation is birth-once, and what the KB holds afterwards comes from the
+write ops (write's help lists them), from score, which lands rigor and bearing
+values, and from update-format.
+It writes entry-point.md with ` + argmark.Flag("title") + ` (or the repository's
 directory name) as its only heading and no children and no frontmatter — a
---title holding a line break is refused — writes the format stamp
+` + argmark.Flag("title") + ` holding a line break is refused — writes the format stamp
 .index/format.yaml and the record files .index/nodes.yaml and .index/edges.yaml,
 holding no record, stamps AGENTS.md,
 CONVENTIONS.md and the CLAUDE.md redirect from their templates, and
 refreshes the skeleton so the claim-graph sheet stands at birth — the
 placeholder sheet where Graphviz dot is absent.
 Finally it commits kb-root/ as the birth commit, "kb-init: knowledge base
-created" — a plain commit, never a kb-build: stage commit, so kbase build,
-which resumes from the build's stage trail, has no trail here and stays
-refused against this KB. Its result is one YAML document on stdout.`,
+created" — a plain commit, never a kb-build: stage commit, so the KB holds no
+build trail to resume, and a fresh build over it gets init's own refusal of a
+kb-root/ that exists (check: kb-root).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := invocationDir(cmd)

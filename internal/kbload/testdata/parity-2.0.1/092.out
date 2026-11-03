@@ -1,7 +1,0 @@
-outcome: "done"
-kb-root: "<kb-root>"
-count: 1
-offset: 0
-truncated: false
-results:
-    - "clm-bbb002"

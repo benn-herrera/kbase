@@ -50,10 +50,6 @@ case "${MODE}" in
         fi
         state="$(cd "${state}" && pwd -P)"
         ;;
-    *)
-        printf 'error: MODE is %s; it is staged or resume.\n' "${MODE}" >&2
-        exit 1
-        ;;
 esac
 out="$(pwd -P)/.claude-temp/live-fixture/$(date +%Y%m%dT%H%M%S)"
 mkdir -p "${out}"
@@ -65,10 +61,6 @@ function run_build() {
     label=test-integration-build-live-fixture
     [[ "${mode}" == staged ]] || label="${label}-${mode}"
     root="$(pwd -P)"
-    if [[ "${mode}" == staged && "$#" -eq 0 ]]; then
-        printf 'error: name at least one volume root, relative to %s.\n' "${dir}" >&2
-        exit 1
-    fi
     if [[ ! -e "${dir}/.git" ]]; then
         printf 'error: %s is not a git repository — stage a fixture with just prep-test-integration-fixture first.\n' "${dir}" >&2
         exit 1
@@ -170,7 +162,7 @@ function run_build() {
     ask_records="$(count "${state}/scratch/trails" '*.yaml')"
 
     if [[ "${outcome}" != done ]]; then
-        for c in no-row-dropped captures kbase-refresh kbase-verify records; do
+        for c in no-row-dropped captures kbase-update-format kbase-verify records; do
             record "${c}" skipped "the build did not finish (outcome ${outcome:-none}); this check reads a finished KB" "${ck}/kbase-build.out"
         done
     else
@@ -179,8 +171,8 @@ function run_build() {
         check captures "$(ok test "${captures}" -gt 0 -a "${letter_answers}" -gt 0 -a "${ask_records}" -gt 0)" \
             "${captures} captures, ${letter_answers} cached letter-ask answers, ${overview_answers} cached overview answers, ${ask_records} group-record files under the state store's scratch/" "${state}/scratch"
 
-        capture "${ck}/kbase-refresh" "${dir}" "${kbase}" refresh
-        check kbase-refresh "$(rc "${ck}/kbase-refresh")" "exit $(rc "${ck}/kbase-refresh")" "${ck}/kbase-refresh.out"
+        capture "${ck}/kbase-update-format" "${dir}" "${kbase}" update-format
+        check kbase-update-format "$(rc "${ck}/kbase-update-format")" "exit $(rc "${ck}/kbase-update-format")" "${ck}/kbase-update-format.out"
         capture "${ck}/kbase-verify" "${dir}" "${kbase}" verify
         check kbase-verify "$(rc "${ck}/kbase-verify")" "exit $(rc "${ck}/kbase-verify")" "${ck}/kbase-verify.out"
 

@@ -7,7 +7,9 @@
 # delivered binary answers from the KB as converted at load. Every occurrence
 # of the copy's `kb-root/` path in an answer is written as `<kb-root>`, as the
 # goldens were; a path of the copy surviving that replacement fails the run.
-# `show` and `stats` take no paging; every other query runs with `--limit 0`.
+# A case argument naming a 2.0.1 work or axiom id is given as the id the
+# conversion mints it, as internal/kbload/testdata/parity-minted-ids.tsv states
+# and TestParityFactsAreTheConvertersGolden checks.
 #
 # Inputs (environment): BIN_DIR; PARITY_OUT_DIR, the evidence directory.
 set -euo pipefail
@@ -24,6 +26,7 @@ out="${root}/${PARITY_OUT_DIR}"
 repo="${out}/repo"
 answers="${out}/answers"
 golden="${root}/internal/kbload/testdata/parity-2.0.1"
+minted="${root}/internal/kbload/testdata/parity-minted-ids.tsv"
 rm -rf "${repo}" "${answers}" "${out}/comparison.yaml" "${out}/compare.log"
 mkdir -p "${repo}/.git" "${answers}"
 cp -R "${root}/internal/formats/testdata/adjagent-sheet-2.0.1/kb-root" "${repo}/"
@@ -31,12 +34,10 @@ for f in "${golden}"/*.args; do
     stem="${answers}/$(basename "${f}" .args)"
     args=()
     while IFS= read -r line; do
-        args+=("${line}")
+        args+=("$(awk -F'\t' -v arg="${line}" '$1 == arg { print $2; found = 1 } END { if (!found) print arg }' "${minted}")")
     done < "${f}"
-    paging=(--limit 0)
-    case "${args[0]}" in show|stats) paging=() ;; esac
     rc=0
-    ( cd "${repo}" && "${kbase}" "${args[@]}" ${paging[@]+"${paging[@]}"} ) > "${stem}.raw" 2> "${stem}.log" || rc=$?
+    ( cd "${repo}" && "${kbase}" "${args[@]}" ) > "${stem}.raw" 2> "${stem}.log" || rc=$?
     printf '%s\n' "${rc}" > "${stem}.exit"
     NEEDLE="${repo}/kb-root" awk 'BEGIN { needle = ENVIRON["NEEDLE"]; n = length(needle) }
         { out = ""; s = $0
@@ -51,7 +52,7 @@ fi
 status=0
 go test -count=1 -v -run '^TestConvertedAnswersMatchTheGoldens$' ./internal/kbload -args -parity.answers="${answers}" \
     -parity.comparison="${out}/comparison.yaml" > "${out}/compare.log" 2>&1 || status=1
-OUT_DIR="${out}" RECIPE="test-integration-parity-adjagent-sheet" INVOCATION="cp -R internal/formats/testdata/adjagent-sheet-2.0.1/kb-root repo/ (with an empty .git)\nper case NNN of internal/kbload/testdata/parity-2.0.1, from repo/: ${kbase} <NNN.args> [--limit 0] > answers/NNN.out (kb-root path as <kb-root>), 2> answers/NNN.log, exit in answers/NNN.exit\ngo test -count=1 -v -run '^TestConvertedAnswersMatchTheGoldens\$' ./internal/kbload -args -parity.answers=answers -parity.comparison=comparison.yaml > compare.log" \
+OUT_DIR="${out}" RECIPE="test-integration-parity-adjagent-sheet" INVOCATION="cp -R internal/formats/testdata/adjagent-sheet-2.0.1/kb-root repo/ (with an empty .git)\nper case NNN of internal/kbload/testdata/parity-2.0.1, from repo/: ${kbase} <NNN.args, each 2.0.1 work or axiom id mapped through internal/kbload/testdata/parity-minted-ids.tsv> > answers/NNN.out (kb-root path as <kb-root>), 2> answers/NNN.log, exit in answers/NNN.exit\ngo test -count=1 -v -run '^TestConvertedAnswersMatchTheGoldens\$' ./internal/kbload -args -parity.answers=answers -parity.comparison=comparison.yaml > compare.log" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-parity-adjagent-sheet): an answer differs from its golden under the rules — see comparison.yaml and compare.log\n'

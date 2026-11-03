@@ -11,8 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/argmark"
 	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
+	"kbase/internal/log"
 	"kbase/internal/result"
 )
 
@@ -20,7 +23,7 @@ func f(v float64) *float64 { return &v }
 
 // The node records the fixtures are built of. A scored claim rests on
 // scoringAxiom at bearing 1.0, so its strength is its rigor.
-const scoringAxiom = "axm-S0"
+const scoringAxiom = "axm-s00000"
 
 func claim(id, title string) kb.ClaimNode { return kb.ClaimNode{ID: id, Title: title} }
 
@@ -28,7 +31,7 @@ func claim(id, title string) kb.ClaimNode { return kb.ClaimNode{ID: id, Title: t
 // scoringAxiom, which g gains where it lacks it.
 func scored(g kb.Graph, id string, rigor *float64) kb.Graph {
 	if !slices.ContainsFunc(g.Axioms, func(a kb.AxiomNode) bool { return a.ID == scoringAxiom }) {
-		g.Axioms = append(g.Axioms, kb.AxiomNode{ID: scoringAxiom, Title: "The scoring rule"})
+		g.Axioms = append(g.Axioms, kb.AxiomNode{ID: scoringAxiom, Label: "S0", Title: "The scoring rule"})
 	}
 	for i := range g.Claims {
 		if g.Claims[i].ID == id {
@@ -111,29 +114,274 @@ func ids(nodes []kb.NodeRow) []string {
 	return out
 }
 
-func TestFind(t *testing.T) {
-	ix := load(t, kb.Graph{Claims: []kb.ClaimNode{
-		claim("clm-cccccc", "Proposition 4.4 — KPI-Gating as Discrete Pontryagin"),
-		claim("clm-aaaaaa", "Proposition 4.3 — Institutional Misalignment"),
-		claim("clm-bbbbbb", "Theorem 4.5 — Positive Invariance of M"),
-		claim("clm-dddddd", "Lemma 1 — Straße"),
-	}})
+// everyKindIndex holds a node of every kind: clm-aaaaaa (0.9, one dependent,
+// clm-cccccc) and ana-aaaaaa (0.7) hosted in main/leaf.md; clm-bbbbbb (0.5)
+// and exp-aaaaaa (rigor 0.5) in main/two.md; clm-cccccc pending and unhosted;
+// wrk-a00000 pending; and scoringAxiom, founding the three scored claims and the
+// analysis, so with three dependents.
+func everyKindIndex(t *testing.T) *Index {
+	t.Helper()
+	g := kb.Graph{
+		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "Alpha result", Rationale: "Shown."}, claim("clm-bbbbbb", "Beta result"),
+			claim("clm-cccccc", "Gamma result")},
+		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "Alpha method", Rationale: "Built."}},
+		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "A run", Status: kb.ExperimentRun, Rigor: f(0.5)}},
+		Works:       []kb.WorkNode{{ID: "wrk-a00000", Label: "A", Title: "Alpha book", Rationale: "Cited."}},
+		Scorable:    []kb.ScorableEdge{scorable(kb.RelationSupports, "clm-aaaaaa", "clm-cccccc", 1)},
+	}
+	g = scored(scored(scored(g, "clm-aaaaaa", f(0.9)), "clm-bbbbbb", f(0.5)), "ana-aaaaaa", f(0.7))
+	two := "[↑ Up](index.md)\n\n# Two\n\nThe run. " + kb.StatementMarker("exp-aaaaaa") + "\n\nBeta. " + kb.StatementMarker("clm-bbbbbb") + "\n"
+	return loadKB(t, writeRecordKB(t, g, map[string]string{
+		"main/index.md": "[↑ Up](../entry-point.md)\n\n# Main\n\n- [Leaf](leaf.md)\n- [Two](two.md)\n",
+		"main/leaf.md":  leafDoc("Alpha. " + kb.StatementMarker("clm-aaaaaa") + "\n\nThe method. " + kb.StatementMarker("ana-aaaaaa") + "\n"),
+		"main/two.md":   two,
+	}))
+}
+
+func foundIDs(nodes []FoundNode) []string {
+	var out []string
+	for _, n := range nodes {
+		out = append(out, n.Node.ID)
+	}
+	return out
+}
+
+func sp(s string) *string { return &s }
+
+func ip(n int) *int { return &n }
+
+// TestFindFilters: each filter alone keeps the nodes it names, across every
+// kind, in id order; min 0 keeps exactly the scored nodes.
+func TestFindFilters(t *testing.T) {
+	ix := everyKindIndex(t)
+	all := []string{"ana-aaaaaa", scoringAxiom, "clm-aaaaaa", "clm-bbbbbb", "clm-cccccc", "exp-aaaaaa", "wrk-a00000"}
+	hostedInMain := []string{"ana-aaaaaa", "clm-aaaaaa", "clm-bbbbbb", "exp-aaaaaa"}
 	for _, tc := range []struct {
-		name, query string
-		want        []string
+		name string
+		sel  FindSelection
+		want []string
 	}{
-		{"by number", "4.3", []string{"clm-aaaaaa"}},
-		{"case-insensitive", "pontryagin", []string{"clm-cccccc"}},
-		{"shared substring, id order", "Proposition", []string{"clm-aaaaaa", "clm-cccccc"}},
-		{"full case folding", "STRASSE", []string{"clm-dddddd"}},
-		{"empty matches all", "", []string{"clm-aaaaaa", "clm-bbbbbb", "clm-cccccc", "clm-dddddd"}},
-		{"no match", "no-such-claim", nil},
+		{"no filter", FindSelection{}, all},
+		{"kind claim", FindSelection{Kinds: []string{kb.NodeKindClaim}}, []string{"clm-aaaaaa", "clm-bbbbbb", "clm-cccccc"}},
+		{"kind analysis", FindSelection{Kinds: []string{kb.NodeKindAnalysis}}, []string{"ana-aaaaaa"}},
+		{"kind experiment", FindSelection{Kinds: []string{kb.NodeKindExperiment}}, []string{"exp-aaaaaa"}},
+		{"kind work", FindSelection{Kinds: []string{kb.NodeKindWork}}, []string{"wrk-a00000"}},
+		{"kind axiom", FindSelection{Kinds: []string{kb.NodeKindAxiom}}, []string{scoringAxiom}},
+		{"two kinds", FindSelection{Kinds: []string{kb.NodeKindWork, kb.NodeKindAxiom}}, []string{scoringAxiom, "wrk-a00000"}},
+		{"title, case-insensitively", FindSelection{Title: "ALPHA"}, []string{"ana-aaaaaa", "clm-aaaaaa", "wrk-a00000"}},
+		{"title matching none", FindSelection{Title: "no-such-node"}, nil},
+		{"path a leaf", FindSelection{Path: sp("main/leaf.md")}, []string{"ana-aaaaaa", "clm-aaaaaa"}},
+		{"path a directory", FindSelection{Path: sp("main")}, hostedInMain},
+		{"path a directory with its slash", FindSelection{Path: sp("main/")}, hostedInMain},
+		{"path empty, kb-root", FindSelection{Path: sp("")}, hostedInMain},
+		{"path dot, kb-root", FindSelection{Path: sp(".")}, hostedInMain},
+		{"path holding no host", FindSelection{Path: sp("mai")}, nil},
+		{"min", FindSelection{Min: f(0.7)}, []string{"ana-aaaaaa", scoringAxiom, "clm-aaaaaa"}},
+		{"max", FindSelection{Max: f(0.7)}, []string{"clm-bbbbbb", "exp-aaaaaa"}},
+		{"min 0, the scored nodes", FindSelection{Min: f(0)}, []string{"ana-aaaaaa", scoringAxiom, "clm-aaaaaa", "clm-bbbbbb", "exp-aaaaaa"}},
+		{"pending", FindSelection{Pending: true}, []string{"clm-cccccc", "wrk-a00000"}},
+		{"min-dependents", FindSelection{MinDependents: 1}, []string{scoringAxiom, "clm-aaaaaa"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ids(ix.Find(tc.query)); !slices.Equal(got, tc.want) {
-				t.Errorf("Find(%q) = %v, want %v", tc.query, got, tc.want)
+			tc.sel.Order = OrderAscending
+			if got := foundIDs(ix.Find(tc.sel)); !slices.Equal(got, tc.want) {
+				t.Errorf("Find = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFindSortsAndLimits: a pending strength sorts below every number,
+// either order flips only the key, ties broken by ascending strength then
+// id, and a limit keeps the first or, negative, the last N in the sort's
+// order.
+func TestFindSortsAndLimits(t *testing.T) {
+	ix := everyKindIndex(t)
+	for _, tc := range []struct {
+		name        string
+		sort, order string
+		limit       *int
+		want        []string
+	}{
+		{"id descending", SortID, OrderDescending, nil,
+			[]string{"wrk-a00000", "exp-aaaaaa", "clm-cccccc", "clm-bbbbbb", "clm-aaaaaa", scoringAxiom, "ana-aaaaaa"}},
+		{"strength ascending, pending first", SortStrength, OrderAscending, nil,
+			[]string{"clm-cccccc", "wrk-a00000", "clm-bbbbbb", "exp-aaaaaa", "ana-aaaaaa", "clm-aaaaaa", scoringAxiom}},
+		{"strength descending, pending last", SortStrength, OrderDescending, nil,
+			[]string{scoringAxiom, "clm-aaaaaa", "ana-aaaaaa", "clm-bbbbbb", "exp-aaaaaa", "clm-cccccc", "wrk-a00000"}},
+		{"dependents descending, ties by ascending strength", SortDependents, OrderDescending, nil,
+			[]string{scoringAxiom, "clm-aaaaaa", "clm-cccccc", "wrk-a00000", "clm-bbbbbb", "exp-aaaaaa", "ana-aaaaaa"}},
+		{"the first two", SortStrength, OrderAscending, ip(2), []string{"clm-cccccc", "wrk-a00000"}},
+		{"the last two, in the sort's order", SortStrength, OrderAscending, ip(-2), []string{"clm-aaaaaa", scoringAxiom}},
+		{"a limit past the answer", SortStrength, OrderDescending, ip(-20),
+			[]string{scoringAxiom, "clm-aaaaaa", "ana-aaaaaa", "clm-bbbbbb", "exp-aaaaaa", "clm-cccccc", "wrk-a00000"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := foundIDs(ix.Find(FindSelection{Sort: sp(tc.sort), Order: tc.order, Limit: tc.limit})); !slices.Equal(got, tc.want) {
+				t.Errorf("Find = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCompareRanksPutsANullLast: a pending value sorts below every number,
+// and a null after every value whichever the direction.
+func TestCompareRanksPutsANullLast(t *testing.T) {
+	values := []rank{{null: true}, {value: 0.5}, {pending: true}, {value: 0}}
+	for _, tc := range []struct {
+		descending bool
+		want       []rank
+	}{
+		{false, []rank{{pending: true}, {value: 0}, {value: 0.5}, {null: true}}},
+		{true, []rank{{value: 0.5}, {value: 0}, {pending: true}, {null: true}}},
+	} {
+		got := slices.Clone(values)
+		slices.SortStableFunc(got, func(a, b rank) int { return compareRanks(a, b, tc.descending) })
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("descending %v: %v, want %v", tc.descending, got, tc.want)
+		}
+	}
+}
+
+// TestFindRows: a find row is its node's id, node_type, title, label (null for a
+// hosted kind), host (null where it has none), strength (*pending* where
+// pending) and dependents.
+func TestFindRows(t *testing.T) {
+	rows, usage := FindPayload(everyKindIndex(t), FindSelection{Kinds: []string{kb.NodeKindClaim, kb.NodeKindWork}, Order: OrderAscending})
+	if usage != nil {
+		t.Fatalf("usage refusals %v", usage)
+	}
+	row := func(id, kind, title string, label, host, strength any, dependents int) result.Record {
+		return result.Record{{Key: "id", Value: id}, {Key: "node_type", Value: kind}, {Key: "title", Value: result.Verbatim(title)}, {Key: "label", Value: label},
+			{Key: "host", Value: host}, {Key: "strength", Value: strength}, {Key: "dependents", Value: dependents}}
+	}
+	want := []result.Record{
+		row("clm-aaaaaa", kb.NodeKindClaim, "Alpha result", nil, "main/leaf.md", 0.9, 1),
+		row("clm-bbbbbb", kb.NodeKindClaim, "Beta result", nil, "main/two.md", 0.5, 0),
+		row("clm-cccccc", kb.NodeKindClaim, "Gamma result", nil, nil, kb.PendingLiteral, 0),
+		row("wrk-a00000", kb.NodeKindWork, "Alpha book", result.Verbatim("A"), nil, kb.PendingLiteral, 0),
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Errorf("find rows = %v, want %v", rows, want)
+	}
+}
+
+// TestFindByLabel: label keeps the works and axioms whose label contains it,
+// case-folded, and never a node of a hosted kind, which carries none.
+func TestFindByLabel(t *testing.T) {
+	ix := everyKindIndex(t)
+	for _, tc := range []struct {
+		label string
+		want  []string
+	}{
+		{"a", []string{"wrk-a00000"}},
+		{"s0", []string{scoringAxiom}},
+		{"alpha", nil},
+	} {
+		var got []string
+		for _, n := range ix.Find(FindSelection{Label: tc.label, Order: OrderAscending}) {
+			got = append(got, n.Node.ID)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("label %q: %v, want %v", tc.label, got, tc.want)
+		}
+	}
+}
+
+// TestFindRefusesItsUsage: a kind, sort or order outside its vocabulary,
+// pending beside a bound, a limit beside no sort and a limit of 0 are each
+// refused as usage, naming the flag.
+func TestFindRefusesItsUsage(t *testing.T) {
+	ix := everyKindIndex(t)
+	for _, tc := range []struct {
+		name    string
+		sel     FindSelection
+		key     string
+		allowed []string
+	}{
+		{"an unknown kind", FindSelection{Kinds: []string{"lemma"}, Order: OrderAscending}, argmark.Flag("kind"), kb.NodeKinds},
+		{"an unknown sort", FindSelection{Sort: sp("title"), Order: OrderAscending}, argmark.Flag("sort"), FindSorts},
+		{"an unknown order", FindSelection{Order: "up"}, argmark.Flag("order"), Orders},
+		{"pending beside min", FindSelection{Pending: true, Min: f(0), Order: OrderAscending}, argmark.Flag("pending"), nil},
+		{"a limit without sort", FindSelection{Limit: ip(1), Order: OrderAscending}, argmark.Flag("limit"), nil},
+		{"a limit of 0", FindSelection{Sort: sp(SortStrength), Limit: ip(0), Order: OrderAscending}, argmark.Flag("limit"), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, usage := FindPayload(ix, tc.sel)
+			if rows != nil || len(usage) != 1 || usage[0].Check != result.CheckUsage || usage[0].Key != tc.key ||
+				!slices.Equal(usage[0].Allowed, tc.allowed) || usage[0].Detail == "" {
+				t.Errorf("FindPayload = %v, %+v; want one usage item at %s allowing %v", rows, usage, tc.key, tc.allowed)
+			}
+		})
+	}
+}
+
+// TestNoNodeSendsToFind: show refuses an id no node carries with the one
+// no-node refusal, whose remedy names find, and find lists a node of a kind
+// other than claim.
+func TestNoNodeSendsToFind(t *testing.T) {
+	ix := everyKindIndex(t)
+	if _, ok := ShowPayload(ix, "axm-z99999"); ok {
+		t.Fatal("show axm-z99999 answered")
+	}
+	if item := NoNode(argmark.Positional("id"), "axm-z99999"); item.Check != kb.CheckUnknownID || !strings.HasPrefix(item.Remedy, kb.NodeLister) {
+		t.Errorf("no-node refusal %+v, want check %s and a remedy opening %q", item, kb.CheckUnknownID, kb.NodeLister)
+	}
+	rows, _ := FindPayload(ix, FindSelection{Kinds: []string{kb.NodeKindAxiom}, Order: OrderAscending})
+	if len(rows) != 1 || rows[0][0].Value != scoringAxiom {
+		t.Errorf("find --kind axiom = %v, want %s", rows, scoringAxiom)
+	}
+}
+
+// TestCitationsOf: every citation of a node, read by its link title wherever
+// the link points, ordered by path then line, its link text as written; a
+// citation inside code, one of another node and the summary pages are not
+// read; an id no node carries has no answer.
+func TestCitationsOf(t *testing.T) {
+	cite := func(text string) string { return "[" + text + `](../main/leaf.md#leaf "clm-aaaaaa")` }
+	root := writeRecordKB(t, kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A Result"), claim("clm-bbbbbb", "Another")}},
+		map[string]string{
+			"main/leaf.md": leafDoc("It holds. " + kb.StatementMarker("clm-aaaaaa") + "\n\nOther. " + kb.StatementMarker("clm-bbbbbb") + "\n"),
+			"z/note.md":    "# Note\n\nAs " + cite("the *result*") + " says.\n",
+			"b/note.md": "# Note\n\nFirst " + cite("A Result") + " and " + cite("again") + ".\n\n```\n" + cite("code") + "\n```\n\n" +
+				"Then `" + cite("inline") + "` and [another](../main/leaf.md#leaf \"clm-bbbbbb\") and " + cite("last") + ".\n",
+			kb.RegisterFile: "# KB summary\n\n" + cite("summary") + "\n",
+		})
+	rows, ok, err := CitationsOfPayload(loadKB(t, root), "clm-aaaaaa")
+	if err != nil || !ok {
+		t.Fatalf("CitationsOfPayload: %v, %t", err, ok)
+	}
+	var got []string
+	for _, r := range rows {
+		got = append(got, fmt.Sprintf("%v:%v %v", r[0].Value, r[1].Value, r[2].Value))
+	}
+	want := []string{"b/note.md:3 A Result", "b/note.md:3 again", "b/note.md:9 last", "z/note.md:3 the *result*"}
+	if !slices.Equal(got, want) {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+	if _, ok, _ := CitationsOfPayload(loadKB(t, root), "clm-zzzzzz"); ok {
+		t.Error("an id no node carries was answered")
+	}
+}
+
+// TestCitationsOfReadsALeafNamedLikeASummaryPage: a document named
+// kb-summary.md where no summary page stands is read like any other; the
+// volume's own page is not.
+func TestCitationsOfReadsALeafNamedLikeASummaryPage(t *testing.T) {
+	cite := `[A Result](../leaf.md#leaf "clm-aaaaaa")`
+	root := writeRecordKB(t, kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A Result")}},
+		map[string]string{
+			"main/leaf.md":                leafDoc("It holds. " + kb.StatementMarker("clm-aaaaaa") + "\n"),
+			"main/sub/" + kb.RegisterFile: "# Sub\n\nAs " + cite + " says.\n",
+			"main/" + kb.RegisterFile:     "# KB summary\n\n" + cite + "\n",
+		})
+	cites, err := loadKB(t, root).CitationsOf("clm-aaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Citation{{Path: "main/sub/" + kb.RegisterFile, Line: 3, Text: "A Result"}}
+	if !slices.Equal(cites, want) {
+		t.Errorf("CitationsOf = %+v, want %+v", cites, want)
 	}
 }
 
@@ -151,72 +399,9 @@ func leaf(body string) string {
 	return "[↑ Up](../index.md)\n\n# Leaf\n\n" + body + "\n"
 }
 
-// TestReferencedBy: the leaves linking to the leaf whose marker first names
-// the claim, a leaf's body link not making it an index; an index's child list
-// is not a reference.
-func TestReferencedBy(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, filepath.Join(root, kb.EntryPointFile), "---\nkb-format: \""+kb.FormatVersion+"\"\n---\n# KB\n\n- [Main](main/index.md)\n- [Other](other/index.md)\n")
-	writeFile(t, filepath.Join(root, "main/index.md"), "[↑ Up](../entry-point.md)\n\n# Main\n\n- [Origin](origin.md)\n- [Citing](citing.md)\n- [Coded](coded.md)\n")
-	writeFile(t, filepath.Join(root, "other/index.md"), "[↑ Up](../entry-point.md)\n\n# Other\n\n- [Deep](deep.md)\n")
-	writeFile(t, filepath.Join(root, "main/origin.md"), leaf("Origin claim. <!-- claim-rigor: clm-aaaaaa --> Self link [here](origin.md)."))
-	writeFile(t, filepath.Join(root, "main/citing.md"), leaf("See [the origin](origin.md#sec) for it."))
-	writeFile(t, filepath.Join(root, "other/deep.md"), leaf("Back [up](../main/origin.md)."))
-	writeFile(t, filepath.Join(root, "main/coded.md"), leaf("Only `[x](origin.md)` in code."))
-	g := kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "Origin Claim", Rigor: f(0.5)}}}
-	writeFile(t, filepath.Join(root, kb.GraphNodesFile), string(kb.EncodeNodes(g)))
-	writeFile(t, filepath.Join(root, kb.GraphEdgesFile), string(kb.EncodeEdges(g)))
-	ix, err := Load(kb.OnDisk(root))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := ix.ReferencedBy("clm-aaaaaa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"main/citing.md", "other/deep.md"}; !slices.Equal(got, want) {
-		t.Errorf("ReferencedBy = %v, want %v", got, want)
-	}
-	if got, _ := ix.ReferencedBy("clm-zzzzzz"); len(got) != 0 {
-		t.Errorf("unknown claim: %v, want none", got)
-	}
-}
-
-// TestStrengthBelowAndWeakPoints: E rests on A, so its strength is A's 0.5
-// whatever its own rigor; it falls below the threshold and, nothing resting
-// on it, is no weak point.
-func TestStrengthBelowAndWeakPoints(t *testing.T) {
-	g := kb.Graph{
-		Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C"),
-			claim("clm-dddddd", "D"), claim("clm-eeeeee", "E")},
-		References: []kb.UnscoredEdge{{Source: "clm-eeeeee", Target: "clm-aaaaaa"}},
-		Scorable: []kb.ScorableEdge{
-			scorable(kb.RelationSupports, "clm-aaaaaa", "clm-dddddd", 1),
-			scorable(kb.RelationSupports, "clm-aaaaaa", "clm-eeeeee", 1),
-			scorable(kb.RelationSupports, "clm-bbbbbb", "clm-dddddd", 1),
-			scorable(kb.RelationSupports, "clm-cccccc", "clm-dddddd", 1),
-		},
-	}
-	for id, rigor := range map[string]*float64{"clm-aaaaaa": f(0.5), "clm-bbbbbb": f(0.3), "clm-cccccc": f(0.5), "clm-dddddd": nil, "clm-eeeeee": f(0.9)} {
-		g = scored(g, id, rigor)
-	}
-	ix := load(t, g)
-	if got, want := ids(ix.StrengthBelow(0.65)), []string{"clm-bbbbbb", "clm-aaaaaa", "clm-cccccc", "clm-eeeeee"}; !slices.Equal(got, want) {
-		t.Errorf("StrengthBelow(0.65) = %v, want %v", got, want)
-	}
-	var got []string
-	for _, wp := range ix.WeakPoints(DefaultMaxStrength, DefaultMinDependents) {
-		got = append(got, wp.Claim.ID)
-	}
-	if want := []string{"clm-aaaaaa", "clm-bbbbbb", "clm-cccccc"}; !slices.Equal(got, want) {
-		t.Errorf("WeakPoints = %v, want %v (most distinct dependents, then lowest strength, then id)", got, want)
-	}
-	if wp := ix.WeakPoints(DefaultMaxStrength, 2); len(wp) != 1 || wp[0].Dependents != 2 {
-		t.Errorf("WeakPoints(min 2) = %+v, want clm-aaaaaa with 2", wp)
-	}
-}
-
-func TestDependentsOf(t *testing.T) {
+// TestDependentCounts: a node's dependents are the distinct targets of its
+// outgoing scoring edges; a references or demoted edge makes neither end one.
+func TestDependentCounts(t *testing.T) {
 	demoted := func(source, target string) kb.DemotedEdge {
 		return kb.DemotedEdge{Source: source, Target: target, ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Pending: true}}
 	}
@@ -236,201 +421,10 @@ func TestDependentsOf(t *testing.T) {
 			scorable(kb.RelationRefutes, "clm-aaaaaa", "clm-hhhhhh", 1),
 		},
 	})
-	for _, tc := range []struct {
-		id   string
-		want []string
-	}{
-		{"clm-aaaaaa", []string{"clm-dddddd", "clm-eeeeee", "clm-hhhhhh"}},
-		{"exp-aaaaaa", []string{"clm-aaaaaa"}},
-		{"ana-aaaaaa", []string{"clm-aaaaaa"}},
-		{"clm-bbbbbb", []string{}},
-		{"clm-cccccc", []string{}},
-		{"clm-ffffff", []string{}},
-		{"clm-gggggg", []string{}},
-	} {
-		if got := ix.DependentsOf(tc.id); !slices.Equal(got, tc.want) {
-			t.Errorf("DependentsOf(%q) = %v, want %v", tc.id, got, tc.want)
-		}
-	}
-}
-
-// depsRows is id's deps rows as "relation direction target=bearing".
-func depsRows(ix *Index, id string) []string {
-	var out []string
-	for _, rec := range DepsPayload(ix, id, false).([]result.Record) {
-		out = append(out, fmt.Sprint(rec[0].Value, " ", rec[1].Value, " ", rec[2].Value, "=", rec[3].Value))
-	}
-	return out
-}
-
-// TestDepsRows: an analysis supplies no premise, so it is a supports edge's
-// target alone.
-func TestDepsRows(t *testing.T) {
-	founds := func(source string, bearing kb.Bearing) kb.BearingEdge {
-		return kb.BearingEdge{Source: source, Target: "clm-aaaaaa", Bearing: bearing}
-	}
-	ix := load(t, kb.Graph{
-		Claims:   []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C")},
-		Analyses: []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "S", Rigor: f(0.8)}},
-		Axioms:   []kb.AxiomNode{{ID: "axm-S1", Title: "The design rule"}, {ID: "axm-S2", Title: "The other rule"}},
-		Works:    []kb.WorkNode{{ID: "wrk-B", Title: "B"}, {ID: "wrk-C", Title: "C"}, {ID: "wrk-Z", Title: "Z"}},
-		Founds: []kb.BearingEdge{founds("wrk-Z", kb.Bearing{Pending: true}), founds("wrk-B", kb.Bearing{Value: 0.5}),
-			founds("wrk-C", kb.Bearing{}), founds("axm-S1", kb.Bearing{Value: 1}), founds("axm-S2", kb.Bearing{Pending: true})},
-		Scorable: []kb.ScorableEdge{
-			scorable(kb.RelationSupports, "clm-aaaaaa", "ana-aaaaaa", 0.6),
-			scorable(kb.RelationLifts, "ana-aaaaaa", "clm-cccccc", 0.8),
-		},
-		References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb"}},
-	})
-	for _, tc := range []struct {
-		id   string
-		want []string
-	}{
-		{"clm-aaaaaa", []string{
-			"supports out ana-aaaaaa=0.6",
-			"founds in axm-S1=1.0",
-			"founds in axm-S2=*pending*",
-			"founds in wrk-B=0.5",
-			"founds in wrk-C=0.0",
-			"founds in wrk-Z=*pending*",
-			"references out clm-bbbbbb=<nil>",
-		}},
-		{"ana-aaaaaa", []string{"supports in clm-aaaaaa=0.6", "lifts out clm-cccccc=0.8"}},
-	} {
-		if got := depsRows(ix, tc.id); !slices.Equal(got, tc.want) {
-			t.Errorf("deps %s = %v, want %v", tc.id, got, tc.want)
-		}
-	}
-}
-
-// TestDepsRowsForARefutingClaimAndALiftedAnalysis: a claim's refutation reaches
-// deps out of the refuter, and an experiment's lift or refutation reaches deps
-// into the analysis it lands on.
-func TestDepsRowsForARefutingClaimAndALiftedAnalysis(t *testing.T) {
-	ix := load(t, kb.Graph{
-		Claims:      []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B")},
-		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "S", Rigor: f(0.8)}, {ID: "ana-bbbbbb", Title: "T", Rigor: f(0.8)}},
-		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "X", Status: kb.ExperimentRun}},
-		Scorable: []kb.ScorableEdge{
-			scorable(kb.RelationRefutes, "clm-aaaaaa", "clm-bbbbbb", 1),
-			scorable(kb.RelationLifts, "exp-aaaaaa", "ana-aaaaaa", 0.9),
-			scorable(kb.RelationRefutes, "exp-aaaaaa", "ana-bbbbbb", 0.25),
-		},
-	})
-	for _, tc := range []struct {
-		id   string
-		want []string
-	}{
-		{"clm-aaaaaa", []string{"refutes out clm-bbbbbb=1.0"}},
-		{"clm-bbbbbb", []string{"refutes in clm-aaaaaa=1.0"}},
-		{"ana-aaaaaa", []string{"lifts in exp-aaaaaa=0.9"}},
-		{"ana-bbbbbb", []string{"refutes in exp-aaaaaa=0.25"}},
-	} {
-		if got := depsRows(ix, tc.id); !slices.Equal(got, tc.want) {
-			t.Errorf("deps %s = %v, want %v", tc.id, got, tc.want)
-		}
-	}
-	if got, want := ix.DependentsOf("clm-aaaaaa"), []string{"clm-bbbbbb"}; !slices.Equal(got, want) {
-		t.Errorf("DependentsOf(clm-aaaaaa) = %v, want %v", got, want)
-	}
-	if got, want := ix.DependentsOf("exp-aaaaaa"), []string{"ana-aaaaaa", "ana-bbbbbb"}; !slices.Equal(got, want) {
-		t.Errorf("DependentsOf(exp-aaaaaa) = %v, want %v", got, want)
-	}
-}
-
-// TestDepsOrderIgnoresFileOrder: the same edge records, the edge file holding
-// them in either order, answer the same rows.
-func TestDepsOrderIgnoresFileOrder(t *testing.T) {
-	edges := []kb.ScorableEdge{
-		scorable(kb.RelationSupports, "clm-bbbbbb", "clm-aaaaaa", 0.7),
-		scorable(kb.RelationSupports, "clm-cccccc", "clm-aaaaaa", 0.7),
-		scorable(kb.RelationSupports, "clm-aaaaaa", "clm-dddddd", 0.7),
-	}
-	edges[0].Context, edges[1].Context = "first use", "second use"
-	g := kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C"), claim("clm-dddddd", "D")}}
-	edgeFile := func(order []kb.ScorableEdge) string {
-		var b strings.Builder
-		for _, e := range order {
-			b.Write(kb.EncodeEdges(kb.Graph{Scorable: []kb.ScorableEdge{e}}))
-		}
-		return b.String()
-	}
-	backward := slices.Clone(edges)
-	slices.Reverse(backward)
-	inOrder := loadKB(t, writeRecordKB(t, g, map[string]string{kb.GraphEdgesFile: edgeFile(edges)}))
-	reversed := loadKB(t, writeRecordKB(t, g, map[string]string{kb.GraphEdgesFile: edgeFile(backward)}))
-	if got, want := DepsPayload(reversed, "clm-aaaaaa", false), DepsPayload(inOrder, "clm-aaaaaa", false); !reflect.DeepEqual(got, want) {
-		t.Errorf("deps over the reversed edge file = %v, want %v", got, want)
-	}
-}
-
-func TestDepsContext(t *testing.T) {
-	withContext := scorable(kb.RelationSupports, "clm-bbbbbb", "clm-aaaaaa", 0.7)
-	withContext.Context = "used in step 2"
-	ix := load(t, kb.Graph{
-		Claims:   []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C")},
-		Scorable: []kb.ScorableEdge{withContext, scorable(kb.RelationSupports, "clm-cccccc", "clm-aaaaaa", 0.8)},
-	})
-	want := []result.Record{
-		{{Key: "relation", Value: kb.RelationSupports}, {Key: "direction", Value: "in"}, {Key: "target", Value: "clm-bbbbbb"}, {Key: "bearing", Value: "0.7"},
-			{Key: manuallyScoredKey, Value: false}, {Key: "context", Value: "used in step 2"}},
-		{{Key: "relation", Value: kb.RelationSupports}, {Key: "direction", Value: "in"}, {Key: "target", Value: "clm-cccccc"}, {Key: "bearing", Value: "0.8"},
-			{Key: manuallyScoredKey, Value: false}, {Key: "context", Value: nil}},
-	}
-	if got := DepsPayload(ix, "clm-aaaaaa", false); !reflect.DeepEqual(got, want) {
-		t.Errorf("deps = %v, want %v", got, want)
-	}
-}
-
-// TestShowStrengthenBy: an item's mentioned ids are the claims its text names.
-func TestShowStrengthenBy(t *testing.T) {
-	a, b := claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B")
-	a.StrengthenBy = []string{"Prove clm-bbbbbb first, after wrk-A.", "Bound the remainder."}
-	b.StrengthenBy = []string{"Other claim's item."}
-	ix := load(t, kb.Graph{Claims: []kb.ClaimNode{a, b}, Works: []kb.WorkNode{{ID: "wrk-A", Title: "W", Rigor: f(0.5)}}})
-	rec, _ := ShowPayload(ix, "clm-aaaaaa")
-	items, at := fieldAt(rec, "strengthen_by")
-	if _, count := fieldAt(rec, "strengthen_by_count"); at != count+1 {
-		t.Errorf("strengthen_by at %d, want right after strengthen_by_count at %d", at, count)
-	}
-	want := []result.Record{
-		{{Key: "item_idx", Value: 0}, {Key: "text", Value: "Prove clm-bbbbbb first, after wrk-A."}, {Key: "mentioned_ids", Value: []string{"clm-bbbbbb"}}},
-		{{Key: "item_idx", Value: 1}, {Key: "text", Value: "Bound the remainder."}, {Key: "mentioned_ids", Value: []string{}}},
-	}
-	if !reflect.DeepEqual(items, want) {
-		t.Errorf("show strengthen_by = %v, want %v", items, want)
-	}
-	work, _ := ShowPayload(ix, "wrk-A")
-	if _, at := fieldAt(work, "strengthen_by"); at != -1 {
-		t.Errorf("work record carries strengthen_by: %v", work)
-	}
-	for _, c := range StrengthBelowPayload(load(t, scored(kb.Graph{Claims: []kb.ClaimNode{a}}, a.ID, f(0.1))), 1) {
-		if _, at := fieldAt(c, "strengthen_by"); at != -1 {
-			t.Errorf("strength-below record carries strengthen_by: %v", c)
-		}
-	}
-}
-
-func TestSubtreeClaims(t *testing.T) {
-	ix := loadKB(t, writeRecordKB(t, kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B")}}, map[string]string{
-		kb.EntryPointFile: "---\nkb-format: \"" + kb.FormatVersion + "\"\n---\n# KB\n\n- [Top](top.md)\n- [Vol](vol/index.md)\n",
-		"top.md":          "[↑ Up](entry-point.md)\n\n# Top\n\nA. " + kb.StatementMarker("clm-aaaaaa") + "\n",
-		"vol/index.md":    "[↑ Up](../entry-point.md)\n\n# Vol\n\n- [Leaf](leaf.md)\n",
-		"vol/leaf.md":     "[↑ Up](index.md)\n\n# Leaf\n\nB. " + kb.StatementMarker("clm-bbbbbb") + "\n",
-	}))
-	for _, tc := range []struct {
-		path string
-		want []string
-	}{
-		{"", []string{"clm-aaaaaa", "clm-bbbbbb"}},
-		{".", []string{"clm-aaaaaa", "clm-bbbbbb"}},
-		{"vol/index.md", []string{"clm-bbbbbb"}},
-		{"vol", []string{"clm-bbbbbb"}},
-		{"vol//", []string{"clm-bbbbbb"}},
-		{"nowhere", []string{}},
-	} {
-		if got := ix.SubtreeClaims(tc.path); !slices.Equal(got, tc.want) {
-			t.Errorf("SubtreeClaims(%q) = %v, want %v", tc.path, got, tc.want)
+	for id, want := range map[string]int{"clm-aaaaaa": 3, "exp-aaaaaa": 1, "ana-aaaaaa": 1,
+		"clm-bbbbbb": 0, "clm-cccccc": 0, "clm-ffffff": 0, "clm-gggggg": 0} {
+		if got := ix.dependentCounts()[id]; got != want {
+			t.Errorf("dependents of %s = %d, want %d", id, got, want)
 		}
 	}
 }
@@ -446,20 +440,20 @@ func TestNodeFieldsTotalOverKinds(t *testing.T) {
 	}
 }
 
-// TestAnalysisBandAndRecord: an analysis's build band is derived from its
+// TestAnalysisBandAndRecord: an analysis's strength band is derived from its
 // strength as the index loads, and show's record carries its kind, rigor and
 // strength.
 func TestAnalysisBandAndRecord(t *testing.T) {
 	ix := load(t, scored(kb.Graph{Analyses: []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "S"}}}, "ana-aaaaaa", f(0.7)))
 	n, ok := ix.Node("ana-aaaaaa")
-	if !ok || n.BuildBand != "ok-with-caveats" {
-		t.Errorf("analysis node = %+v, %v; want build_band ok-with-caveats", n, ok)
+	if !ok || n.StrengthBand != "ok-with-caveats" {
+		t.Errorf("analysis node = %+v, %v; want strength_band ok-with-caveats", n, ok)
 	}
 	rec, ok := ShowPayload(ix, "ana-aaaaaa")
 	if !ok {
 		t.Fatal("show ana-aaaaaa: no record")
 	}
-	want := map[string]any{"node_type": kb.NodeKindAnalysis, "id": "ana-aaaaaa", "rigor": 0.7, "strength": 0.7, "build_band": "ok-with-caveats"}
+	want := map[string]any{"node_type": kb.NodeKindAnalysis, "id": "ana-aaaaaa", "rigor": 0.7, "strength": 0.7, "strength_band": "ok-with-caveats"}
 	got := map[string]any{}
 	for _, f := range rec {
 		got[f.Key] = f.Value
@@ -497,23 +491,38 @@ func TestShowDisplaysAStrength(t *testing.T) {
 	}
 }
 
-// TestShowAnAxiomCarriesItsRigor: an axiom's record carries its rigor, the
-// row's 1.0 by rule, and nothing named strength, and a work's record is
-// unchanged.
-func TestShowAnAxiomCarriesItsRigor(t *testing.T) {
-	ix := load(t, kb.Graph{Axioms: []kb.AxiomNode{{ID: "axm-S1", Title: "The design rule"}},
-		Works: []kb.WorkNode{{ID: "wrk-A", Title: "W", Rigor: f(0.5)}}})
-	idFields := func(kind, id, title, path, anchor string) result.Record {
-		return result.Record{{Key: "node_type", Value: kind}, {Key: "id", Value: id}, {Key: "title", Value: title},
-			{Key: "canonical_path", Value: path}, {Key: "canonical_anchor", Value: anchor}}
+// TestShowEveryKind: each kind's record is its identity — host, host_anchor
+// and summary, each null where the node has none — then its kind's own
+// fields, an axiom's rigor its 1.0 by rule, a pending rigor or strength
+// *pending*.
+func TestShowEveryKind(t *testing.T) {
+	ix := everyKindIndex(t)
+	idFields := func(kind, id, title string, host, hostAnchor, summary any) result.Record {
+		return result.Record{{Key: "node_type", Value: kind}, {Key: "id", Value: id}, {Key: "title", Value: result.Verbatim(title)},
+			{Key: "host", Value: host}, {Key: "host_anchor", Value: hostAnchor}, {Key: "summary", Value: summary}}
 	}
+	page := "main/" + kb.RegisterFile + "#"
 	for _, tc := range []struct {
 		id   string
 		want result.Record
 	}{
-		{"axm-S1", append(idFields(kb.NodeKindAxiom, "axm-S1", "The design rule", "axioms.md", "axiom-s1-the-design-rule"),
-			result.Field{Key: "rigor", Value: kb.AxiomRigor})},
-		{"wrk-A", append(idFields(kb.NodeKindWork, "wrk-A", "W", kb.RegisterFile, "w"), result.Field{Key: "rigor", Value: 0.5})},
+		{"clm-aaaaaa", append(idFields(kb.NodeKindClaim, "clm-aaaaaa", "Alpha result", "main/leaf.md", "leaf", page+"alpha-result"),
+			result.Record{{Key: "rigor", Value: 0.9}, {Key: manuallyScoredKey, Value: false}, {Key: "strength", Value: 0.9},
+				{Key: "build_status", Value: "ok to build on"}, {Key: "strength_band", Value: "ok-to-build"}, {Key: "rationale", Value: result.Verbatim("Shown.")},
+				{Key: "premise_count", Value: 1}}...)},
+		{"clm-cccccc", append(idFields(kb.NodeKindClaim, "clm-cccccc", "Gamma result", nil, nil, nil),
+			result.Record{{Key: "rigor", Value: kb.PendingLiteral}, {Key: manuallyScoredKey, Value: false}, {Key: "strength", Value: kb.PendingLiteral},
+				{Key: "build_status", Value: nil}, {Key: "strength_band", Value: kb.UnknownBandSlug}, {Key: "rationale", Value: result.Verbatim("")},
+				{Key: "premise_count", Value: 1}}...)},
+		{"ana-aaaaaa", append(idFields(kb.NodeKindAnalysis, "ana-aaaaaa", "Alpha method", "main/leaf.md", "leaf", page+"alpha-method"),
+			result.Record{{Key: "rigor", Value: 0.7}, {Key: manuallyScoredKey, Value: false}, {Key: "strength", Value: 0.7},
+				{Key: "strength_band", Value: "ok-with-caveats"}, {Key: "rationale", Value: result.Verbatim("Built.")}}...)},
+		{"exp-aaaaaa", append(idFields(kb.NodeKindExperiment, "exp-aaaaaa", "A run", "main/two.md", "two", page+"a-run"),
+			result.Record{{Key: "status", Value: kb.ExperimentRun}, {Key: "rigor", Value: 0.5}, {Key: manuallyScoredKey, Value: false}}...)},
+		{"wrk-a00000", append(idFields(kb.NodeKindWork, "wrk-a00000", "Alpha book", nil, nil, kb.RegisterFile+"#alpha-book"),
+			result.Record{{Key: "label", Value: result.Verbatim("A")}, {Key: "rigor", Value: kb.PendingLiteral}, {Key: "rationale", Value: result.Verbatim("Cited.")}}...)},
+		{scoringAxiom, append(idFields(kb.NodeKindAxiom, scoringAxiom, "The scoring rule", nil, nil, nil),
+			result.Field{Key: "label", Value: result.Verbatim("S0")}, result.Field{Key: "rigor", Value: kb.AxiomRigor})},
 	} {
 		got, ok := ShowPayload(ix, tc.id)
 		if !ok {
@@ -525,46 +534,69 @@ func TestShowAnAxiomCarriesItsRigor(t *testing.T) {
 	}
 }
 
-// TestAnUnhostedNodeHasNoCanonicalPathOrAnchor: every surface carrying a node
-// record — show and strength-below — writes an unhosted node's canonical path
-// and anchor as null, and a hosted node's as its row holds them.
-func TestAnUnhostedNodeHasNoCanonicalPathOrAnchor(t *testing.T) {
+// TestAnUnhostedNodeHasNoHostOrSummary: show writes an unhosted node's host,
+// host anchor and summary as null, and a hosted node's as its host leaf, the section it is
+// stated in and its summary-page entry.
+func TestAnUnhostedNodeHasNoHostOrSummary(t *testing.T) {
 	g := kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B")},
 		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "S"}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "X", Status: kb.ExperimentRun}}}
 	ix := load(t, scored(scored(scored(g, "clm-aaaaaa", f(0.3)), "clm-bbbbbb", f(0.3)), "ana-aaaaaa", f(0.7)),
 		"clm-aaaaaa", "ana-aaaaaa", "exp-aaaaaa")
-	canonical := func(rec result.Record) [2]any {
-		var out [2]any
+	placed := func(rec result.Record) [3]any {
+		var out [3]any
 		for _, field := range rec {
 			switch field.Key {
-			case "canonical_path":
+			case "host":
 				out[0] = field.Value
-			case "canonical_anchor":
+			case "host_anchor":
 				out[1] = field.Value
+			case "summary":
+				out[2] = field.Value
 			}
 		}
 		return out
 	}
-	hosted := [2]any{"main/claim-rigor.md", "b"}
+	hosted := [3]any{"main/leaf.md", "leaf", "main/" + kb.RegisterFile + "#b"}
 	for _, tc := range []struct {
 		id   string
-		want [2]any
-	}{{"clm-aaaaaa", [2]any{}}, {"clm-bbbbbb", hosted}, {"ana-aaaaaa", [2]any{}}, {"exp-aaaaaa", [2]any{}}} {
+		want [3]any
+	}{{"clm-aaaaaa", [3]any{}}, {"clm-bbbbbb", hosted}, {"ana-aaaaaa", [3]any{}}, {"exp-aaaaaa", [3]any{}}} {
 		rec, ok := ShowPayload(ix, tc.id)
 		if !ok {
 			t.Fatalf("show %s: no record", tc.id)
 		}
-		if got := canonical(rec); got != tc.want {
-			t.Errorf("show %s canonical path and anchor = %#v, want %#v", tc.id, got, tc.want)
+		if got := placed(rec); got != tc.want {
+			t.Errorf("show %s host, host anchor and summary = %#v, want %#v", tc.id, got, tc.want)
 		}
 	}
-	got := map[string][2]any{}
-	for _, rec := range StrengthBelowPayload(ix, 0.5) {
-		got[rec[1].Value.(string)] = canonical(rec)
+}
+
+// TestStatsSubtreeAggregatesPerVolume: stats' subtree_aggregates holds one
+// record per volume, its claims and its experiments stated in a leaf under it.
+func TestStatsSubtreeAggregatesPerVolume(t *testing.T) {
+	got, _ := fieldAt(StatsPayload(everyKindIndex(t)), "subtree_aggregates")
+	want := result.Record{{Key: "main", Value: result.Record{{Key: "claims", Value: 2}, {Key: "experiments", Value: 1}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("stats subtree_aggregates = %v, want %v", got, want)
 	}
-	if want := map[string][2]any{"clm-aaaaaa": {}, "clm-bbbbbb": hosted}; !maps.Equal(got, want) {
-		t.Errorf("strength-below canonical paths and anchors = %#v, want %#v", got, want)
+}
+
+// TestStatsRanksTheScoredClaims: stats' weakest is the scored claims, weakest
+// first, a pending claim and every other kind left out, and stats carries no
+// citation count.
+func TestStatsRanksTheScoredClaims(t *testing.T) {
+	stats := StatsPayload(everyKindIndex(t))
+	if _, at := fieldAt(stats, "citation_edges"); at != -1 {
+		t.Errorf("stats carries citation_edges: %v", stats)
+	}
+	weakest, _ := fieldAt(stats, "weakest")
+	var got []string
+	for _, rec := range weakest.([]result.Record) {
+		got = append(got, rec[0].Value.(string))
+	}
+	if want := []string{"clm-bbbbbb", "clm-aaaaaa"}; !slices.Equal(got, want) {
+		t.Errorf("stats weakest = %v, want %v", got, want)
 	}
 }
 
@@ -572,8 +604,8 @@ func TestStatsCensusPartitionsClaims(t *testing.T) {
 	g := kb.Graph{Claims: []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B")},
 		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "S"}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "X", Status: kb.ExperimentRun}},
-		Works:       []kb.WorkNode{{ID: "wrk-A", Title: "W"}},
-		Axioms:      []kb.AxiomNode{{ID: "axm-S1", Title: "T"}}}
+		Works:       []kb.WorkNode{{ID: "wrk-a00000", Label: "A", Title: "W"}},
+		Axioms:      []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "T"}}}
 	ix := load(t, g)
 	census := StatsPayload(ix)[:len(kb.NodeKinds)]
 	total := 0
@@ -607,13 +639,17 @@ func TestStatsCountsDemotedEdges(t *testing.T) {
 	if counts["edges"] != 4 || counts["demoted_edges"] != 2 {
 		t.Errorf("edges %v, demoted_edges %v; want 4 and 2", counts["edges"], counts["demoted_edges"])
 	}
+	demotedCensus, _ := fieldAt(counts["relations"].(result.Record), kb.RelationDemoted)
+	if want := (result.Record{{Key: "edges", Value: 2}, {Key: "walked", Value: false}}); !reflect.DeepEqual(demotedCensus, want) {
+		t.Errorf("stats' relations demoted = %v, want %v", demotedCensus, want)
+	}
 }
 
-// edgeCensusIndex holds both bearing classes on supports — a number, one whose
+// relationsIndex holds both bearing classes on supports — a number, one whose
 // text sorts after another's (1e-05 after 0.5), and pending — one row each on
 // founds, lifts and references, and none on refutes or demoted. One supports
 // row carries a context.
-func edgeCensusIndex(t *testing.T) *Index {
+func relationsIndex(t *testing.T) *Index {
 	t.Helper()
 	withContext := scorable(kb.RelationSupports, "clm-bbbbbb", "clm-aaaaaa", 0.5)
 	withContext.Context = "step 2"
@@ -622,7 +658,7 @@ func edgeCensusIndex(t *testing.T) *Index {
 	return load(t, kb.Graph{
 		Claims:   []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C"), claim("clm-dddddd", "D")},
 		Analyses: []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "S", Rigor: f(0.8)}},
-		Works:    []kb.WorkNode{{ID: "wrk-B", Title: "B"}},
+		Works:    []kb.WorkNode{{ID: "wrk-b00000", Label: "B", Title: "B"}},
 		Scorable: []kb.ScorableEdge{
 			scorable(kb.RelationSupports, "clm-cccccc", "clm-bbbbbb", 0.5),
 			withContext,
@@ -630,20 +666,9 @@ func edgeCensusIndex(t *testing.T) *Index {
 			scorable(kb.RelationLifts, "ana-aaaaaa", "clm-aaaaaa", 0.8),
 			pending,
 		},
-		Founds:     []kb.BearingEdge{{Source: "wrk-B", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.5}}},
+		Founds:     []kb.BearingEdge{{Source: "wrk-b00000", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.5}}},
 		References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb"}},
 	})
-}
-
-// manualCounts is a bearings record whose rows carry their manual and model
-// counts, four values per row.
-func manualCounts(rows ...any) []result.Record {
-	out := []result.Record{}
-	for i := 0; i < len(rows); i += 4 {
-		out = append(out, result.Record{{Key: "bearing", Value: rows[i]}, {Key: "edges", Value: rows[i+1]},
-			{Key: "manual", Value: rows[i+2]}, {Key: "model", Value: rows[i+3]}})
-	}
-	return out
 }
 
 func bearingCounts(pairs ...any) []result.Record {
@@ -654,27 +679,34 @@ func bearingCounts(pairs ...any) []result.Record {
 	return out
 }
 
-func TestEdgeCensus(t *testing.T) {
-	got := EdgeCensusPayload(edgeCensusIndex(t))
+// TestStatsRelations: stats' relations stands after bearing_model and before
+// strength_bands, one record per relation in kb.Relations order, its bearings
+// numeric, then pending.
+func TestStatsRelations(t *testing.T) {
+	stats := StatsPayload(relationsIndex(t))
+	got, at := fieldAt(stats, "relations")
+	if _, model := fieldAt(stats, "bearing_model"); at != model+1 || stats[at+1].Key != "strength_bands" {
+		t.Errorf("relations at %d, want right after bearing_model at %d and before strength_bands", at, model)
+	}
 	want := result.Record{
 		{Key: kb.RelationSupports, Value: result.Record{{Key: "edges", Value: 4}, {Key: "walked", Value: true},
-			{Key: "bearings", Value: manualCounts("1e-05", 1, 0, 1, "0.5", 2, 0, 2, kb.PendingLiteral, 1, 0, 1)}}},
+			{Key: "bearings", Value: bearingCounts("1e-05", 1, "0.5", 2, kb.PendingLiteral, 1)}}},
 		{Key: kb.RelationFounds, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: false},
 			{Key: "bearings", Value: bearingCounts("0.5", 1)}}},
 		{Key: kb.RelationLifts, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: true},
-			{Key: "bearings", Value: manualCounts("0.8", 1, 0, 1)}}},
+			{Key: "bearings", Value: bearingCounts("0.8", 1)}}},
 		{Key: kb.RelationRefutes, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: true},
 			{Key: "bearings", Value: []result.Record{}}}},
 		{Key: kb.RelationReferences, Value: result.Record{{Key: "edges", Value: 1}, {Key: "walked", Value: false}}},
 		{Key: kb.RelationDemoted, Value: result.Record{{Key: "edges", Value: 0}, {Key: "walked", Value: false}}},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("edge-census = %v, want %v", got, want)
+		t.Errorf("stats' relations = %v, want %v", got, want)
 	}
 }
 
 // edgeRows is an edges answer as "source relation target=bearing context
-// walked" lines.
+// replaced_relation" lines, checking each row's keys.
 func edgeRows(t *testing.T, records []result.Record) []string {
 	t.Helper()
 	var out []string
@@ -683,38 +715,110 @@ func edgeRows(t *testing.T, records []result.Record) []string {
 		for _, f := range r {
 			keys = append(keys, f.Key)
 		}
-		if want := []string{"source", "relation", "target", "bearing", manuallyScoredKey, "context", "walked"}; !slices.Equal(keys, want) {
+		if want := []string{"source", "target", "relation", "bearing", "context", manuallyScoredKey, "replaced_relation"}; !slices.Equal(keys, want) {
 			t.Fatalf("edges record keys %q, want %q", keys, want)
 		}
-		out = append(out, fmt.Sprintf("%v %v %v=%v %v %v", r[0].Value, r[1].Value, r[2].Value, r[3].Value, r[5].Value, r[6].Value))
+		out = append(out, fmt.Sprintf("%v %v %v=%v %v %v", r[0].Value, r[2].Value, r[1].Value, r[3].Value, r[4].Value, r[6].Value))
 	}
 	return out
 }
 
 func TestEdges(t *testing.T) {
-	ix := edgeCensusIndex(t)
+	ix := relationsIndex(t)
 	every := []string{
-		"clm-bbbbbb supports clm-aaaaaa=0.5 step 2 true",
-		"clm-cccccc supports clm-aaaaaa=1e-05 <nil> true",
-		"clm-cccccc supports clm-bbbbbb=0.5 <nil> true",
-		"clm-dddddd supports clm-aaaaaa=*pending* <nil> true",
-		"wrk-B founds clm-aaaaaa=0.5 <nil> false",
-		"ana-aaaaaa lifts clm-aaaaaa=0.8 <nil> true",
-		"clm-aaaaaa references clm-bbbbbb=<nil> <nil> false",
+		"clm-bbbbbb supports clm-aaaaaa=0.5 step 2 <nil>",
+		"clm-cccccc supports clm-aaaaaa=1e-05 <nil> <nil>",
+		"clm-cccccc supports clm-bbbbbb=0.5 <nil> <nil>",
+		"clm-dddddd supports clm-aaaaaa=*pending* <nil> <nil>",
+		"wrk-b00000 founds clm-aaaaaa=0.5 <nil> <nil>",
+		"ana-aaaaaa lifts clm-aaaaaa=0.8 <nil> <nil>",
+		"clm-aaaaaa references clm-bbbbbb=<nil> <nil> <nil>",
 	}
+	node := "clm-bbbbbb"
 	for _, tc := range []struct {
-		name      string
-		relations []string
-		want      []string
+		name string
+		sel  EdgesSelection
+		want []string
 	}{
-		{"every relation", nil, every},
-		{"founds", []string{kb.RelationFounds}, every[4:5]},
-		{"two relations", []string{kb.RelationReferences, kb.RelationLifts}, every[5:]},
-		{"a relation with no rows", []string{kb.RelationRefutes}, nil},
+		{"every relation", EdgesSelection{}, every},
+		{"founds", EdgesSelection{Relations: []string{kb.RelationFounds}}, every[4:5]},
+		{"two relations", EdgesSelection{Relations: []string{kb.RelationReferences, kb.RelationLifts}}, every[5:]},
+		{"a relation with no rows", EdgesSelection{Relations: []string{kb.RelationRefutes}}, nil},
+		{"a node, both ways by default", EdgesSelection{ID: &node}, []string{every[0], every[2], every[6]}},
+		{"a node, in", EdgesSelection{ID: &node, Direction: DirectionIn}, []string{every[2], every[6]}},
+		{"a node, out", EdgesSelection{ID: &node, Direction: DirectionOut}, every[0:1]},
+		{"a node, both, of a relation", EdgesSelection{ID: &node, Direction: DirectionBoth, Relations: []string{kb.RelationReferences}}, every[6:]},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := edgeRows(t, EdgesPayload(ix, tc.relations)); !slices.Equal(got, tc.want) {
-				t.Errorf("edges %v = %q, want %q", tc.relations, got, tc.want)
+			rows, usage := EdgesPayload(ix, tc.sel)
+			if usage != nil {
+				t.Fatalf("refused: %v", usage)
+			}
+			if got := edgeRows(t, rows); !slices.Equal(got, tc.want) {
+				t.Errorf("edges %+v = %q, want %q", tc.sel, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEdgesNameTheReplacedRelation: a demoted row names the relation its
+// record replaced, two records joining one pair each their own, ordered by
+// it; every other row's replaced_relation is null. A demoted row carries the
+// bearing and the mark its record keeps of the replaced edge.
+func TestEdgesNameTheReplacedRelation(t *testing.T) {
+	demoted := func(source, relation string) kb.DemotedEdge {
+		return kb.DemotedEdge{Source: source, Target: "clm-aaaaaa", ReplacedRelation: relation, Bearing: kb.Bearing{Pending: true}}
+	}
+	scoredCut := demoted("clm-bbbbbb", kb.RelationRefutes)
+	scoredCut.Bearing, scoredCut.ManuallyScored = kb.Bearing{Value: 0.3}, true
+	ix := load(t, kb.Graph{
+		Claims:   []kb.ClaimNode{claim("clm-aaaaaa", "A"), claim("clm-bbbbbb", "B"), claim("clm-cccccc", "C")},
+		Scorable: []kb.ScorableEdge{scorable(kb.RelationSupports, "clm-cccccc", "clm-aaaaaa", 1)},
+		Demoted:  []kb.DemotedEdge{scoredCut, demoted("clm-cccccc", kb.RelationSupports), demoted("clm-bbbbbb", kb.RelationSupports)},
+	})
+	rows, usage := EdgesPayload(ix, EdgesSelection{})
+	if usage != nil {
+		t.Fatalf("refused: %v", usage)
+	}
+	want := []string{
+		"clm-cccccc supports clm-aaaaaa=1.0 <nil> <nil>",
+		"clm-bbbbbb demoted clm-aaaaaa=*pending* <nil> supports",
+		"clm-bbbbbb demoted clm-aaaaaa=0.3 <nil> refutes",
+		"clm-cccccc demoted clm-aaaaaa=*pending* <nil> supports",
+	}
+	if got := edgeRows(t, rows); !slices.Equal(got, want) {
+		t.Errorf("edges = %q, want %q", got, want)
+	}
+	var marks []any
+	for _, r := range rows {
+		marks = append(marks, r[5].Value)
+	}
+	if want := []any{false, false, true, false}; !slices.Equal(marks, want) {
+		t.Errorf("manually_scored = %v, want %v", marks, want)
+	}
+}
+
+func TestEdgesRefusesItsUsage(t *testing.T) {
+	ix := relationsIndex(t)
+	node, missing := "clm-aaaaaa", "clm-ffffff"
+	for _, tc := range []struct {
+		name string
+		sel  EdgesSelection
+		want []string
+	}{
+		{"an unknown relation, once", EdgesSelection{Relations: []string{"nope", "nope"}}, []string{"usage --relation"}},
+		{"an unknown direction", EdgesSelection{ID: &node, Direction: "sideways"}, []string{"usage --direction"}},
+		{"a direction without a node", EdgesSelection{Direction: DirectionBoth}, []string{"usage --direction"}},
+		{"an id no node carries", EdgesSelection{ID: &missing}, []string{kb.CheckUnknownID + " --id"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, usage := EdgesPayload(ix, tc.sel)
+			var got []string
+			for _, item := range usage {
+				got = append(got, item.Check+" "+argmark.Spelling{}.Spell(item.Key))
+			}
+			if rows != nil || !slices.Equal(got, tc.want) {
+				t.Errorf("refusals %q (rows %v), want %q", got, rows, tc.want)
 			}
 		})
 	}
@@ -723,16 +827,30 @@ func TestEdges(t *testing.T) {
 // sheetFixture is the 3.0.0 KB the sheet goldens are drawn from.
 var sheetFixture = filepath.Join("..", "sheet", "testdata", "adjagent-sheet", "kb-root")
 
-// editedSheetKB is a copy of the sheet fixture whose records edit has changed,
-// written through kb's record encoders.
-func editedSheetKB(t *testing.T, edit func(*kb.Graph)) *kb.Source {
+// convertedSheetKB is a copy of the sheet fixture converted to the current
+// format by update-format's save.
+func convertedSheetKB(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "kb-root")
 	if err := os.CopyFS(root, os.DirFS(sheetFixture)); err != nil {
 		t.Fatal(err)
 	}
-	src := kb.OnDisk(root)
-	g, err := kb.LoadAuthoredGraph(src)
+	src, err := kbload.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := index.UpdateFormat(src, nil, nil, log.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// editedSheetKB is a converted copy of the sheet fixture whose records edit
+// has changed, written through kb's record encoders.
+func editedSheetKB(t *testing.T, edit func(*kb.Graph)) *kb.Source {
+	t.Helper()
+	src := kb.OnDisk(convertedSheetKB(t))
+	g, err := kb.LoadGraph(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,12 +860,12 @@ func editedSheetKB(t *testing.T, edit func(*kb.Graph)) *kb.Source {
 			t.Fatal(err)
 		}
 	}
-	return kb.OnDisk(root)
+	return src
 }
 
 // TestLoadAnswersFromTheRecords: Load holds every node the KB's records hold.
 func TestLoadAnswersFromTheRecords(t *testing.T) {
-	src := kb.OnDisk(sheetFixture)
+	src := kb.OnDisk(convertedSheetKB(t))
 	g, err := kb.LoadGraph(src)
 	if err != nil {
 		t.Fatal(err)
@@ -765,11 +883,15 @@ func TestLoadAnswersFromTheRecords(t *testing.T) {
 // TestLoadAnswersAConvertedKB: a KB converted at load and not yet saved
 // answers, holding the nodes it holds read as current.
 func TestLoadAnswersAConvertedKB(t *testing.T) {
-	current, err := Load(kb.OnDisk(sheetFixture))
+	current, err := Load(kb.OnDisk(convertedSheetKB(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	converted, err := Load(kb.MigratedSource(sheetFixture, "2.0.1", nil, nil))
+	src, err := kbload.Open(sheetFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, err := Load(src)
 	if err != nil {
 		t.Fatalf("Load of a converted, unsaved KB: %v", err)
 	}
@@ -778,10 +900,10 @@ func TestLoadAnswersAConvertedKB(t *testing.T) {
 	}
 }
 
-// TestLoadRefusesADegradedKB: a KB whose load is degraded — here a premise
-// cycle the walk cuts — is refused, one check: degraded item per fault, each
-// with remedy kbase refresh.
-func TestLoadRefusesADegradedKB(t *testing.T) {
+// TestLoadRefusesALoadError: a KB whose load fails — here on a premise cycle
+// — is refused, one check: metadata item per fault naming the edge file, each
+// with the remedy in git.
+func TestLoadRefusesALoadError(t *testing.T) {
 	src := editedSheetKB(t, func(g *kb.Graph) {
 		g.Scorable = append(g.Scorable, kb.ScorableEdge{Relation: kb.RelationSupports, Source: "clm-aaa003", Target: "clm-aaa002",
 			Bearing: kb.Bearing{Value: 1}})
@@ -792,8 +914,8 @@ func TestLoadRefusesADegradedKB(t *testing.T) {
 		t.Fatalf("Load over a cycle = %v, want a refusal", err)
 	}
 	for _, item := range r {
-		if item.Check != kb.CheckDegraded || item.Remedy != index.RefreshRemedy || item.Path != kb.GraphEdgesFile || item.Detail == "" {
-			t.Errorf("refusal item %+v, want check %s, path %s, remedy %s and a detail", item, kb.CheckDegraded, kb.GraphEdgesFile, index.RefreshRemedy)
+		if item.Check != kb.CheckMetadata || item.Remedy != kb.ConsistentRecordsRemedy || item.Path != kb.GraphEdgesFile || item.Detail == "" {
+			t.Errorf("refusal item %+v, want check %s, path %s, remedy %q and a detail", item, kb.CheckMetadata, kb.GraphEdgesFile, kb.ConsistentRecordsRemedy)
 		}
 	}
 }
@@ -848,8 +970,9 @@ func TestShowCarriesManuallyScored(t *testing.T) {
 		{"clm-aaa002", false},
 		{"ana-aaa007", false},
 		{"exp-aaa008", true},
-		{"wrk-smith2020", nil},
-		{"axm-S1", nil},
+		// The conversion's minted ids for the 3.0.0 wrk-smith2020 and axm-S1.
+		{"wrk-omcjwo", nil},
+		{"axm-7b65tg", nil},
 	} {
 		rec, ok := ShowPayload(ix, tc.id)
 		if !ok {
@@ -866,39 +989,26 @@ func TestShowCarriesManuallyScored(t *testing.T) {
 	}
 }
 
-// TestDepsAndEdgesCarryManuallyScored: an edge record carries its record's
-// manually-scored value after its bearing, null on a relation whose records
-// carry none, and two demoted rows showing one pair carry their two records'
-// values.
-func TestDepsAndEdgesCarryManuallyScored(t *testing.T) {
+// TestEdgesCarryManuallyScored: an edge record carries its record's
+// manually-scored value after its context, null on a relation whose records
+// carry none.
+func TestEdgesCarryManuallyScored(t *testing.T) {
 	ix := manualSheetKB(t)
-	var deps []string
-	for _, rec := range DepsPayload(ix, "clm-aaa004", false).([]result.Record) {
-		if rec[4].Key != manuallyScoredKey {
-			t.Fatalf("deps record %v: field 5 is %s, want %s", rec, rec[4].Key, manuallyScoredKey)
-		}
-		deps = append(deps, fmt.Sprint(rec[0].Value, " ", rec[1].Value, " ", rec[2].Value, " ", rec[4].Value))
-	}
-	if want := []string{
-		"lifts in ana-aaa007 false",
-		"references out clm-bbb003 <nil>",
-		"demoted out clm-aaa001 false",
-		"demoted out clm-aaa001 true",
-		"demoted out clm-bbb001 false",
-	}; !slices.Equal(deps, want) {
-		t.Errorf("deps clm-aaa004 = %q, want %q", deps, want)
-	}
 	manual := map[string]any{}
-	for _, rec := range EdgesPayload(ix, []string{kb.RelationSupports, kb.RelationFounds}) {
-		if rec[4].Key != manuallyScoredKey {
-			t.Fatalf("edges record %v: field 5 is %s, want %s", rec, rec[4].Key, manuallyScoredKey)
+	rows, usage := EdgesPayload(ix, EdgesSelection{Relations: []string{kb.RelationSupports, kb.RelationFounds}})
+	if usage != nil {
+		t.Fatalf("refused: %v", usage)
+	}
+	for _, rec := range rows {
+		if rec[5].Key != manuallyScoredKey {
+			t.Fatalf("edges record %v: field 6 is %s, want %s", rec, rec[5].Key, manuallyScoredKey)
 		}
-		manual[fmt.Sprint(rec[0].Value, " ", rec[1].Value, " ", rec[2].Value)] = rec[4].Value
+		manual[fmt.Sprint(rec[0].Value, " ", rec[2].Value, " ", rec[1].Value)] = rec[5].Value
 	}
 	for name, want := range map[string]any{
 		"clm-aaa001 supports clm-aaa003": true,
 		"clm-aaa001 supports clm-bbb001": false,
-		"axm-S1 founds clm-aaa001":       nil,
+		"axm-7b65tg founds clm-aaa001":   nil, // the conversion's minted id for the 3.0.0 axm-S1
 	} {
 		if got, ok := manual[name]; !ok || got != want {
 			t.Errorf("edges %s: manually_scored %v (present %v), want %v", name, got, ok, want)
@@ -918,27 +1028,5 @@ func TestStatsCountsManualAndModelScores(t *testing.T) {
 	}
 	if want := []string{"rigor_manual=2", "rigor_model=9", "bearing_manual=2", "bearing_model=8"}; !slices.Equal(got, want) {
 		t.Errorf("stats after subtree_aggregates = %q, want %q", got, want)
-	}
-}
-
-// TestEdgeCensusCountsManualAndModelBearings: a bearings record on supports,
-// lifts and refutes counts its manual and model rows after edges; founds'
-// carries no such count.
-func TestEdgeCensusCountsManualAndModelBearings(t *testing.T) {
-	census := EdgeCensusPayload(manualSheetKB(t))
-	bearings := func(relation string) []result.Record {
-		rec, _ := fieldAt(census, relation)
-		b, _ := fieldAt(rec.(result.Record), "bearings")
-		return b.([]result.Record)
-	}
-	for relation, want := range map[string][]result.Record{
-		kb.RelationSupports: manualCounts("1.0", 4, 1, 3),
-		kb.RelationLifts:    manualCounts("0.5", 1, 0, 1, "0.8", 1, 0, 1),
-		kb.RelationRefutes:  manualCounts("0.5", 1, 0, 1),
-		kb.RelationFounds:   bearingCounts("0.5", 1, "0.75", 1, "0.8", 1, "1.0", 3),
-	} {
-		if got := bearings(relation); !reflect.DeepEqual(got, want) {
-			t.Errorf("edge-census %s bearings = %v, want %v", relation, got, want)
-		}
 	}
 }

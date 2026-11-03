@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
+	"maps"
+	"path"
 	"path/filepath"
+	"slices"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/build"
 	"kbase/internal/export"
 	"kbase/internal/kb"
@@ -73,8 +76,13 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 		return refused(fields, refusals...)
 	}
 	fields = withMigration(fields, src, "export-latex", opts.Stderr)
-	if outcome, out, stop := refuseDegraded(fields, src); stop {
+	if outcome, out, stop := refuseLoadError(fields, src); stop {
 		return outcome, out
+	}
+	if items, err := notVolumes(src, opts.Volumes); err != nil {
+		return failed(fields, err)
+	} else if len(items) > 0 {
+		return refused(fields, items...)
 	}
 	// RunDefaults preflights too, but only after the export has written: the
 	// separate preflight puts a pandoc refusal before any write.
@@ -92,13 +100,14 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 	case errors.As(err, &unknown):
 		items := make([]toolresult.Item, len(unknown.Names))
 		for i, name := range unknown.Names {
-			items[i] = toolresult.Item{Check: checkUsage, Key: "--volume",
-				Detail: fmt.Sprintf("--volume %s names no volume of the entry point's list", name)}
+			items[i] = toolresult.Item{Check: toolresult.CheckUsage, Key: argmark.Flag("volume"),
+				Detail: argmark.FlagValue("volume", name) + " is a volume the entry point does not list",
+				Remedy: "list it there or drop this " + argmark.Flag("volume")}
 		}
 		return refused(fields, items...)
 	case errors.As(err, &foreign):
 		return refused(fields, toolresult.Item{Check: checkExportDir, Path: foreign.Dir,
-			Remedy: "empty the directory or name another --out", Detail: foreign.Error()})
+			Remedy: "empty the directory or name another " + argmark.Flag("out"), Detail: foreign.Error()})
 	case err != nil:
 		return pandocRefusedOrFailed(fields, err)
 	}
@@ -110,6 +119,26 @@ func exportLatex(ctx context.Context, opts exportLatexOptions) (string, []toolre
 		return toolresult.Done, fields
 	}
 	return toolresult.Unchanged, fields
+}
+
+// notVolumes is a usage item per name that is not a volume of the KB src
+// reads — a top-level directory of kb-root/ holding an index.md — allowing
+// every volume.
+func notVolumes(src *kb.Source, names []string) ([]toolresult.Item, error) {
+	docs, err := kb.Documents(src)
+	if err != nil {
+		return nil, err
+	}
+	volumes := kb.Volumes(docs)
+	var items []toolresult.Item
+	for _, name := range names {
+		if !volumes[path.Clean(name)] {
+			items = append(items, toolresult.Item{Check: toolresult.CheckUsage, Key: argmark.Flag("volume"),
+				Allowed: slices.Sorted(maps.Keys(volumes)),
+				Detail:  argmark.FlagValue("volume", name) + " is not a volume: a volume is a top-level directory of kb-root/ holding an index.md"})
+		}
+	}
+	return items, nil
 }
 
 // pandocRefusedOrFailed is a missing or out-of-range pandoc refused, as the
@@ -128,21 +157,22 @@ func exportLatexCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export-latex",
 		Short: "write a LaTeX project from the KB through pandoc",
-		Long: `export-latex writes a LaTeX project from the KB's current state into --out
+		Long: `export-latex writes a LaTeX project from the KB's current state into ` + argmark.Flag("out") + `
 (default: latex-export/ beside kb-root/), converting it in one pandoc run. The
-KB is the kb-root/ beside the repository's .git; no git is run, no lock is
-taken, and nothing under kb-root/ is written. Each --volume names a volume directory to export, in the
-entry point's order; one naming no volume of the entry point's list is
-refused. kbase owns --out's gen-tex/ alone and regenerates it on every export:
+KB is the kb-root/ in the git worktree root; no git is run, no lock is
+taken, and nothing under kb-root/ is written. Each ` + argmark.Flag("volume") + ` names a volume to export:
+a top-level directory of kb-root/ holding an index.md. Volumes export in the
+entry point's order; one that is not a volume, or that the entry point does
+not list, is refused. kbase owns ` + argmark.Flag("out") + `'s gen-tex/ alone and regenerates it on every export:
 main.tex, the defaults file pandoc ran (re-runnable as pandoc -d defaults.yaml
 from gen-tex/), the Markdown stream, the filter, the template, the tables, the
 copied assets and the report, gen-tex/kbase-export-report.yaml, every form the
-export degraded and why. A gen-tex/ holding files and no export manifest is
-refused, nothing written. Where --out holds no preamble.tex, a commented
+export simplified and why. A gen-tex/ holding files and no export manifest is
+refused, nothing written. Where ` + argmark.Flag("out") + ` holds no preamble.tex, a commented
 starter is written for the packages and macros the sources used; one that
 stands is never read, written or removed. Compiling main.tex is the author's
 step. A re-issue over an unchanged KB writes nothing and reports unchanged. ` +
-			degradedRefusedHelp + ` Its result is one YAML document on stdout.`,
+			loadErrorRefusedHelp,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			wd, err := invocationDir(cmd)
@@ -161,6 +191,6 @@ step. A re-issue over an unchanged KB writes nothing and reports unchanged. ` +
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "", "the out directory (default: latex-export/ beside kb-root/)")
-	cmd.Flags().StringArrayVar(&volumes, "volume", nil, "a volume directory under kb-root/ to export; repeatable (default: every volume)")
+	cmd.Flags().StringArrayVar(&volumes, "volume", nil, "a volume to export, a top-level directory of kb-root/ holding an index.md (default: every volume)")
 	return cmd
 }

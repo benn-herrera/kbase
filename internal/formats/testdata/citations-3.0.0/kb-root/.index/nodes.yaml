@@ -1,0 +1,39 @@
+- id: "ana-aaaaaa"
+  title: "Its Proof"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+- id: "ana-bbbbbb"
+  title: "A — Pair"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+- id: "axm-S3"
+  title: "A labelling convention"
+- id: "clm-aaaaaa"
+  title: "Main Result"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-bbbbbb"
+  title: "A — Pair"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+  strengthen-by: []
+- id: "clm-cccccc"
+  title: "An Unhosted Claim"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  no-edge: ""
+  strengthen-by: []
+- id: "wrk-smith2020"
+  title: "Smith 2020"
+  rigor: 0.9
+  rationale: ""

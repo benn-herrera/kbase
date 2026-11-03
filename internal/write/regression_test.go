@@ -1,14 +1,16 @@
 package write
 
 import (
+	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/kb"
+	"kbase/internal/kbload"
 	"kbase/internal/result"
 )
 
@@ -18,6 +20,9 @@ import (
 
 const regressionClaims = 23
 
+// regressionFormat is the format the corpus's records are held in.
+const regressionFormat = "3.0.0"
+
 type recorded struct {
 	nodeID, title, rationale string
 	rigor                    *float64
@@ -25,10 +30,21 @@ type recorded struct {
 }
 
 // loadRecorded reads the population out of the corpus's records, in record
-// order.
+// order: a copy of its 3.0.0 records, stamped so, converted at load.
 func loadRecorded(t *testing.T) []recorded {
 	t.Helper()
-	g, err := kb.LoadAuthoredGraph(kb.OnDisk(filepath.Join(requireReferenceFixture(t, "writeapi-regression"), kb.KBDir)))
+	root := filepath.Join(t.TempDir(), kb.KBDir)
+	if err := os.CopyFS(root, os.DirFS(filepath.Join(requireReferenceFixture(t, "writeapi-regression"), kb.KBDir))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, kb.FormatFile), kb.EncodeFormatStamp(regressionFormat), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := kbload.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := kb.LoadGraph(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,62 +85,53 @@ func recordedEdges(recs []recorded) map[[2]string]bool {
 	return out
 }
 
-// TestRegressionReplayOps drives the corpus's values through the insert op
-// into the records, minting fresh ids, in dependency order; the graph must
-// come back isomorphic under the renaming.
+// TestRegressionReplayOps drives the corpus's values through add-claim into
+// the records, minting fresh ids, and its premises through add-edge in a
+// second batch; the graph must come back isomorphic under the renaming.
 func TestRegressionReplayOps(t *testing.T) {
 	recs := loadRecorded(t)
 	if len(recs) != regressionClaims {
 		t.Fatalf("recovered %d claims, want %d", len(recs), regressionClaims)
 	}
 	root := recordKB(t, kb.Graph{})
-	minted := map[string]string{}
-	remaining := slices.Clone(recs)
-	for len(remaining) > 0 {
-		var ready, rest []recorded
-		for _, r := range remaining {
-			blocked := false
-			for _, d := range r.premises {
-				blocked = blocked || slices.ContainsFunc(remaining, func(o recorded) bool { return o.nodeID == d })
-			}
-			if blocked {
-				rest = append(rest, r)
-			} else {
-				ready = append(ready, r)
-			}
-		}
-		if len(ready) == 0 {
-			t.Fatal("the recorded premise graph has a cycle")
-		}
-		var values []map[string]any
-		for _, r := range ready {
-			// The corpus predates the rule that 1.00 is an axiom's alone: the one
-			// entry recording it is replayed at the rigor tables' maximum, the most
-			// the insert op takes.
-			rigor := min(*r.rigor, kb.RigorMaximum)
-			v := map[string]any{"title": r.title, "rigor": rigor, "rationale": r.rationale}
-			var deps []map[string]any
-			for _, d := range r.premises {
-				deps = append(deps, map[string]any{"id": minted[d], "bearing": 1.0})
-			}
-			if len(deps) > 0 {
-				v[kb.ListRestsOn] = deps
-			}
-			values = append(values, v)
-		}
+	leaf := "# Replay\n"
+	for i := range recs {
+		leaf += fmt.Sprintf("\nResult %d holds.\n", i)
+	}
+	writeFile(t, filepath.Join(root, kb.EntryPointFile), "# KB\n\n- [Replay](replay.md)\n")
+	writeFile(t, filepath.Join(root, "replay.md"), leaf)
+	replay := func(op string, values []map[string]any) Result {
+		t.Helper()
 		data, err := yaml.Marshal(map[string]any{entryKey: values})
 		if err != nil {
 			t.Fatal(err)
 		}
-		res := Run("insert-claim-entry", Options{KBRoot: root, Values: data, NoRefresh: true})
+		res := Run(op, Options{KBRoot: root, Values: data})
 		if res.Outcome != result.Done {
-			t.Fatalf("insert-claim-entry: %+v", res)
+			t.Fatalf("%s: %+v", op, res)
 		}
-		for i, r := range ready {
-			minted[r.nodeID] = res.IDs[i]
-		}
-		remaining = rest
+		return res
 	}
+	var adds []map[string]any
+	for i, r := range recs {
+		// The corpus predates the rule that 1.00 is an axiom's alone: the one
+		// entry recording it is replayed at the rigor tables' maximum, the most
+		// add-claim takes.
+		rigor := min(*r.rigor, kb.RigorMaximum)
+		adds = append(adds, map[string]any{"title": r.title, "rigor": rigor, "rationale": r.rationale,
+			"document": "replay.md", "line": 3 + 2*i, "snippet": fmt.Sprintf("Result %d holds", i)})
+	}
+	minted := map[string]string{}
+	for i, id := range replay(AddClaim, adds).IDs() {
+		minted[recs[i].nodeID] = id
+	}
+	var edges []map[string]any
+	for _, r := range recs {
+		for _, d := range r.premises {
+			edges = append(edges, map[string]any{"source": minted[d], "target": minted[r.nodeID], "relation": kb.RelationSupports, "bearing": 1.0})
+		}
+	}
+	replay(AddEdge, edges)
 	if len(minted) != len(recs) {
 		t.Fatalf("minted %d ids, want %d", len(minted), len(recs))
 	}

@@ -2,7 +2,7 @@ package query
 
 import (
 	"cmp"
-	"path/filepath"
+	"path"
 	"slices"
 	"strings"
 
@@ -11,17 +11,16 @@ import (
 	"kbase/internal/kb"
 )
 
-// WeakPoint is a scored claim below the weak-points bar with the count of its
-// dependents (DependentsOf).
-type WeakPoint struct {
-	Claim      kb.NodeRow
-	Dependents int
-}
-
-// Defaults of the weak-points query.
+// The bar and the dependents floor of stats' highest-leverage weak points.
 const (
 	DefaultMaxStrength   = 0.65
 	DefaultMinDependents = 1
+)
+
+// Two of find's sort keys.
+const (
+	SortStrength   = "strength"
+	SortDependents = "dependents"
 )
 
 // claims is the claim nodes, sorted by id.
@@ -35,162 +34,209 @@ func (ix *Index) claims() []kb.NodeRow {
 	return out
 }
 
-// sortedSet is set's members, sorted.
-func sortedSet(set map[string]bool) []string {
-	out := []string{}
-	for k := range set {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// DependentsOf is the distinct nodes id's strength enters, sorted: the targets
-// of id's outgoing scoring edges — the nodes that rest on a claim or analysis,
-// and the claim or analysis a lift raises or a refutation caps. A references or
-// demoted edge makes neither end a dependent.
-func (ix *Index) DependentsOf(id string) []string {
-	set := map[string]bool{}
+// dependentCounts is, for every id, the count of the distinct nodes its
+// strength enters: the targets of its outgoing scoring edges — the nodes that
+// rest on a claim or analysis, and the claim or analysis a lift raises or a
+// refutation caps. A references or demoted edge makes neither end a dependent.
+func (ix *Index) dependentCounts() map[string]int {
+	type pair struct{ source, target string }
+	seen := map[pair]bool{}
+	counts := map[string]int{}
 	for _, e := range ix.edges {
-		if e.Source == id && kb.Scoring(e.Relation) {
-			set[e.Target] = true
+		if p := (pair{e.Source, e.Target}); kb.Scoring(e.Relation) && !seen[p] {
+			seen[p] = true
+			counts[e.Source]++
 		}
 	}
-	return sortedSet(set)
+	return counts
 }
 
-// GatedOn is the claims whose strengthen-by items mention id, sorted.
-func (ix *Index) GatedOn(id string) []string {
-	set := map[string]bool{}
-	for _, item := range ix.strengthenBy {
-		if slices.Contains(item.MentionedIDs, id) {
-			set[item.ClaimID] = true
-		}
-	}
-	return sortedSet(set)
+// Citation is one citation of a node in prose: the kb-root-relative path of
+// the citing document, its 1-based line, and the link text as written.
+type Citation struct {
+	Path string
+	Line int
+	Text string
 }
 
-// CitedBy is the citations of id, sorted by leaf path.
-func (ix *Index) CitedBy(id string) []kb.CiteRow {
-	var out []kb.CiteRow
-	for _, c := range ix.cites {
-		if c.ClaimID == id {
-			out = append(out, c)
-		}
+// CitationsOf is every citation of id, read by the id in its link title,
+// outside code in every document but the summary pages, which the derivation
+// renders; ordered by path, then line.
+func (ix *Index) CitationsOf(id string) ([]Citation, error) {
+	docs, err := kb.CitingDocuments(ix.src)
+	if err != nil {
+		return nil, err
 	}
-	slices.SortStableFunc(out, func(a, b kb.CiteRow) int { return strings.Compare(a.LeafPath, b.LeafPath) })
-	return out
-}
-
-// Find is the claims whose title or canonical anchor contains query, compared
-// case-folded; an empty query matches every claim.
-func (ix *Index) Find(query string) []kb.NodeRow {
-	fold := cases.Fold()
-	needle := fold.String(query)
-	var out []kb.NodeRow
-	for _, c := range ix.claims() {
-		if strings.Contains(fold.String(c.Title), needle) || strings.Contains(fold.String(c.CanonicalAnchor), needle) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// ReferencedBy is every leaf, other than the one first citing id, whose body
-// (code, maths and fences blanked) holds an inline link resolving to that
-// leaf: kb-root-relative paths, sorted. A document is a leaf by its kind as
-// the load derives it; one that cannot be read as text is passed over.
-func (ix *Index) ReferencedBy(id string) ([]string, error) {
-	cites := ix.CitedBy(id)
-	if len(cites) == 0 {
-		return []string{}, nil
-	}
-	origin := kb.ResolvePath(ix.src.KBPath(cites[0].LeafPath))
-	set := map[string]bool{}
-	for rel, kind := range ix.documentKinds {
-		file := ix.src.KBPath(rel)
-		if kind != kb.DocumentLeaf || kb.ResolvePath(file) == origin {
-			continue
-		}
-		text, err := ix.src.ReadText(file)
+	var out []Citation
+	for _, rel := range docs {
+		text, err := ix.src.ReadText(ix.src.KBPath(rel))
 		if err != nil {
+			return nil, err
+		}
+		lines := kb.SplitLines(text)
+		for _, c := range kb.TextCitations(text) {
+			if c.Title == id {
+				out = append(out, Citation{Path: rel, Line: c.Line + 1, Text: lines[c.Line][c.Start+1 : c.Start+1+len(c.Text)]})
+			}
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Citation) int { return cmp.Or(strings.Compare(a.Path, b.Path), cmp.Compare(a.Line, b.Line)) })
+	return out, nil
+}
+
+// SortID is find's default sort key.
+const SortID = "id"
+
+// FindSorts is the keys find sorts by.
+var FindSorts = []string{SortID, SortStrength, SortDependents}
+
+// The directions a sort takes.
+const (
+	OrderAscending  = "ascending"
+	OrderDescending = "descending"
+)
+
+// Orders is the directions a sort takes.
+var Orders = []string{OrderAscending, OrderDescending}
+
+// FindSelection is find's question. Every filter set narrows it: Kinds to
+// the nodes of those kinds, Title to those whose title contains it
+// case-folded, Label likewise to the works and axioms whose label does, Path
+// to those hosted under it (kb-root for "" or "."), Min and
+// Max to the scored nodes at or above Min and strictly below Max, Pending to
+// the nodes with no strength, MinDependents to those with at least that many
+// dependents. Sort is nil where none is given, ordering by id; Order is one of
+// Orders; Limit is nil where none is given.
+type FindSelection struct {
+	Kinds         []string
+	Title         string
+	Label         string
+	Path          *string
+	Min, Max      *float64
+	Pending       bool
+	MinDependents int
+	Sort          *string
+	Order         string
+	Limit         *int
+}
+
+// FoundNode is one node find answers: its row, its host leaf ("" where it has
+// none), its strength (nil where pending) and its dependents' count.
+type FoundNode struct {
+	Node       kb.NodeRow
+	Host       string
+	Strength   *float64
+	Dependents int
+}
+
+// nodeStrength is a node's strength by its kind: the derived value of a claim
+// or an analysis, the rigor of every other kind; nil where pending.
+func nodeStrength(n kb.NodeRow) *float64 {
+	if n.NodeType == kb.NodeKindClaim || n.NodeType == kb.NodeKindAnalysis {
+		return n.Strength
+	}
+	return n.Rigor
+}
+
+// hostedUnder is whether a node hosted at host ("" for none) lies under the
+// kb-root-relative dir: a directory holding it, or the leaf itself; "" and
+// "." name kb-root.
+func hostedUnder(host, dir string) bool {
+	dir = path.Clean(dir)
+	return host != "" && (dir == "." || host == dir || strings.HasPrefix(host, dir+"/"))
+}
+
+// Find is the nodes sel selects, in its sort's order, cut to its limit. It
+// assumes sel's vocabulary values are valid (FindUsage).
+func (ix *Index) Find(sel FindSelection) []FoundNode {
+	fold := cases.Fold()
+	needle, label := fold.String(sel.Title), fold.String(sel.Label)
+	dependents := ix.dependentCounts()
+	var out []FoundNode
+	for _, n := range ix.nodes {
+		found := FoundNode{Node: n, Host: ix.hosts[n.ID], Strength: nodeStrength(n), Dependents: dependents[n.ID]}
+		s := found.Strength
+		switch {
+		case len(sel.Kinds) > 0 && !slices.Contains(sel.Kinds, n.NodeType),
+			!strings.Contains(fold.String(n.Title), needle),
+			!strings.Contains(fold.String(n.Label), label),
+			sel.Path != nil && !hostedUnder(found.Host, *sel.Path),
+			sel.Pending && s != nil,
+			(sel.Min != nil || sel.Max != nil) && s == nil,
+			sel.Min != nil && *s < *sel.Min,
+			sel.Max != nil && *s >= *sel.Max,
+			found.Dependents < sel.MinDependents:
 			continue
 		}
-		for _, match := range kb.LinkRE.FindAllStringSubmatch(kb.StripCode(text), -1) {
-			target := kb.StripTarget(match[1])
-			if target == "" {
-				continue
-			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(file), target)
-			}
-			if kb.ResolvePath(target) == origin {
-				set[rel] = true
-				break
-			}
+		out = append(out, found)
+	}
+	key := SortID
+	if sel.Sort != nil {
+		key = *sel.Sort
+	}
+	descending := sel.Order == OrderDescending
+	slices.SortStableFunc(out, func(a, b FoundNode) int {
+		byStrength := compareRanks(strengthRank(a.Strength), strengthRank(b.Strength), false)
+		byID := strings.Compare(a.Node.ID, b.Node.ID)
+		switch key {
+		case SortStrength:
+			return cmp.Or(compareRanks(strengthRank(a.Strength), strengthRank(b.Strength), descending), byID)
+		case SortDependents:
+			return cmp.Or(compareRanks(rank{value: float64(a.Dependents)}, rank{value: float64(b.Dependents)}, descending), byStrength, byID)
 		}
-	}
-	return sortedSet(set), nil
-}
-
-// SubtreeClaims is the claims under an index node: "" or "." names the first
-// entry point, anything else a node path or, failing that, the directory of
-// one. Where a path repeats, its last aggregate answers.
-func (ix *Index) SubtreeClaims(nodePath string) []string {
-	if nodePath == "" || nodePath == "." {
-		for _, a := range ix.aggregates {
-			if a.NodeKind == kb.DocumentEntryPoint {
-				return append([]string{}, a.SubtreeClaims...)
-			}
+		if descending {
+			return -byID
 		}
-		return []string{}
-	}
-	byPath := map[string]kb.AggregateRow{}
-	for _, a := range ix.aggregates {
-		byPath[a.NodePath] = a
-	}
-	a, ok := byPath[nodePath]
-	if !ok {
-		a, ok = byPath[strings.TrimRight(nodePath, "/")+"/"+kb.IndexFile]
-	}
-	if !ok {
-		return []string{}
-	}
-	return append([]string{}, a.SubtreeClaims...)
-}
-
-// StrengthBelow is the scored claims whose strength is under threshold,
-// ascending by strength, then id.
-func (ix *Index) StrengthBelow(threshold float64) []kb.NodeRow {
-	var out []kb.NodeRow
-	for _, c := range ix.claims() {
-		if c.Strength != nil && *c.Strength < threshold {
-			out = append(out, c)
-		}
-	}
-	slices.SortStableFunc(out, func(a, b kb.NodeRow) int {
-		return cmp.Or(cmp.Compare(*a.Strength, *b.Strength), strings.Compare(a.ID, b.ID))
+		return byID
 	})
+	if sel.Limit != nil {
+		out = limited(out, *sel.Limit)
+	}
 	return out
 }
 
-// WeakPoints is the scored claims under maxStrength with at least minDependents
-// dependents: most dependents first, then lowest strength, then id.
-func (ix *Index) WeakPoints(maxStrength float64, minDependents int) []WeakPoint {
-	var out []WeakPoint
-	for _, c := range ix.claims() {
-		if c.Strength == nil || *c.Strength >= maxStrength {
-			continue
-		}
-		if n := len(ix.DependentsOf(c.ID)); n >= minDependents {
-			out = append(out, WeakPoint{Claim: c, Dependents: n})
-		}
+// rank is one row's value of a sort key: a number, pending, or null where the
+// key does not apply to the row.
+type rank struct {
+	value         float64
+	pending, null bool
+}
+
+// strengthRank is a strength as a sort reads it, nil being pending.
+func strengthRank(v *float64) rank {
+	if v == nil {
+		return rank{pending: true}
 	}
-	slices.SortStableFunc(out, func(a, b WeakPoint) int {
-		return cmp.Or(cmp.Compare(b.Dependents, a.Dependents), cmp.Compare(*a.Claim.Strength, *b.Claim.Strength),
-			strings.Compare(a.Claim.ID, b.Claim.ID))
-	})
-	return out
+	return rank{value: *v}
+}
+
+// compareRanks orders a and b ascending, a pending value below every number,
+// or descending where descending; a null follows every other value in either
+// direction.
+func compareRanks(a, b rank, descending bool) int {
+	if a.null || b.null {
+		return cmp.Compare(boolRank(a.null), boolRank(b.null))
+	}
+	c := cmp.Or(cmp.Compare(boolRank(!a.pending), boolRank(!b.pending)), cmp.Compare(a.value, b.value))
+	if descending {
+		return -c
+	}
+	return c
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// limited is the first n of s, or for a negative n the last -n, in s's order.
+func limited[T any](s []T, n int) []T {
+	if n < 0 {
+		return s[max(len(s)+n, 0):]
+	}
+	return s[:min(n, len(s))]
 }
 
 // Node is the node carrying id, of any kind, or false. Where ids repeat, the

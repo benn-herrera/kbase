@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -33,51 +35,92 @@ func graphSource(t *testing.T, nodes, edges *string) *Source {
 
 func ptr[T any](v T) *T { return &v }
 
+// withEnds is g with a node record, titled by its id, for each claim,
+// experiment and work an edge of g names that no record of g carries.
+func withEnds(g Graph) Graph {
+	held := map[string]bool{}
+	for _, n := range g.Claims {
+		held[n.ID] = true
+	}
+	for _, n := range g.Experiments {
+		held[n.ID] = true
+	}
+	for _, n := range g.Works {
+		held[n.ID] = true
+	}
+	for _, e := range g.Edges() {
+		for _, id := range []string{e.Source, e.Target} {
+			if held[id] {
+				continue
+			}
+			held[id] = true
+			switch kind, _ := NodeIDKind(id); kind {
+			case NodeKindClaim:
+				g.Claims = append(g.Claims, ClaimNode{ID: id, Title: id})
+			case NodeKindExperiment:
+				g.Experiments = append(g.Experiments, ExperimentNode{ID: id, Title: id, Status: ExperimentPlanned})
+			case NodeKindWork:
+				g.Works = append(g.Works, WorkNode{ID: id, Label: strings.TrimPrefix(id, WorkPrefix+"-"), Title: id})
+			}
+		}
+	}
+	slices.SortFunc(g.Claims, func(a, b ClaimNode) int { return strings.Compare(a.ID, b.ID) })
+	return g
+}
+
 const noRecords = "[]\n"
+
+// unjudged is a scored record's judged-hash line where its value was never
+// judged.
+const unjudged = "  judged-hash: \"" + "0000000000000000000000000000000000000000000000000000000000000000" + "\"\n"
 
 // TestGraphRoundTrip: each record type encodes to its design bytes, and those
 // bytes load back as the record.
 func TestGraphRoundTrip(t *testing.T) {
+	var judged JudgedHash
+	judged[0], judged[31] = 0xab, 0x01
 	cases := []struct {
 		name         string
 		g            Graph
 		nodes, edges string
 	}{
 		{"claim", Graph{Claims: []ClaimNode{{ID: "clm-aaa001", Title: "Theorem 1", Rigor: ptr(0.9), Rationale: "Fixture.",
-			StrengthenBy: []string{"State the noise distributions."}}}},
+			JudgedHash: judged}}},
 			"- id: \"clm-aaa001\"\n  title: \"Theorem 1\"\n  rigor: 0.9\n  manually-scored: false\n  rationale: \"Fixture.\"\n" +
-				"  no-edge: \"\"\n  strengthen-by:\n    - \"State the noise distributions.\"\n", noRecords},
-		{"claim, nothing to strengthen and pending", Graph{Claims: []ClaimNode{{ID: "clm-aaa002", Title: "Lemma 2", NoEdge: "Stands alone."}}},
+				"  judged-hash: \"ab" + strings.Repeat("0", 60) + "01\"\n", noRecords},
+		{"claim, unjudged and pending", Graph{Claims: []ClaimNode{{ID: "clm-aaa002", Title: "Lemma 2"}}},
 			"- id: \"clm-aaa002\"\n  title: \"Lemma 2\"\n  rigor: \"*pending*\"\n  manually-scored: false\n  rationale: \"\"\n" +
-				"  no-edge: \"Stands alone.\"\n  strengthen-by: []\n", noRecords},
+				unjudged, noRecords},
 		{"analysis", Graph{Analyses: []AnalysisNode{{ID: "ana-aaa007", Title: "Sensitivity of the flow bound", Rigor: ptr(0.7),
 			ManuallyScored: true, Rationale: "Fixture."}}},
 			"- id: \"ana-aaa007\"\n  title: \"Sensitivity of the flow bound\"\n  rigor: 0.7\n  manually-scored: true\n" +
-				"  rationale: \"Fixture.\"\n  no-edge: \"\"\n", noRecords},
-		{"experiment", Graph{Experiments: []ExperimentNode{{ID: "exp-aaa008", Title: "Flow measurement", Status: "run"}}},
-			"- id: \"exp-aaa008\"\n  title: \"Flow measurement\"\n  status: \"run\"\n  rigor: \"*pending*\"\n  manually-scored: false\n", noRecords},
-		{"work", Graph{Works: []WorkNode{{ID: "wrk-smith2020", Title: "Smith, A. 2020. *Markets*. Fixture Press.", Rigor: ptr(0.9),
+				"  rationale: \"Fixture.\"\n" + unjudged, noRecords},
+		{"experiment", Graph{Experiments: []ExperimentNode{{ID: "exp-aaa008", Title: "Flow measurement", Status: ExperimentPlanned}}},
+			"- id: \"exp-aaa008\"\n  title: \"Flow measurement\"\n  status: \"planned\"\n  rigor: \"*pending*\"\n  manually-scored: false\n" +
+				unjudged, noRecords},
+		{"work", Graph{Works: []WorkNode{{ID: "wrk-s00000", Label: "smith2020", Title: "Smith, A. 2020. *Markets*. Fixture Press.", Rigor: ptr(0.9),
 			Rationale: "Fixture Press."}}},
-			"- id: \"wrk-smith2020\"\n  title: \"Smith, A. 2020. *Markets*. Fixture Press.\"\n  rigor: 0.9\n  rationale: \"Fixture Press.\"\n", noRecords},
-		{"axiom", Graph{Axioms: []AxiomNode{{ID: "axm-S1", Title: "Agents act on what they observe"}}},
-			"- id: \"axm-S1\"\n  title: \"Agents act on what they observe\"\n", noRecords},
+			"- id: \"wrk-s00000\"\n  label: \"smith2020\"\n  title: \"Smith, A. 2020. *Markets*. Fixture Press.\"\n  rigor: 0.9\n  rationale: \"Fixture Press.\"\n", noRecords},
+		{"axiom", Graph{Axioms: []AxiomNode{{ID: "axm-s10000", Label: `$\mathcal{S}_1$: first`, Title: "Agents act on what they observe"}}},
+			"- id: \"axm-s10000\"\n  label: \"$\\\\mathcal{S}_1$: first\"\n  title: \"Agents act on what they observe\"\n", noRecords},
 		{"unscored edge", Graph{References: []UnscoredEdge{{Source: "clm-aaa004", Target: "clm-bbb003"}}}, noRecords,
 			"- relation: \"references\"\n  source: \"clm-aaa004\"\n  target: \"clm-bbb003\"\n  context: \"\"\n"},
 		{"demoted edge", Graph{Demoted: []DemotedEdge{{Source: "clm-aaa004", Target: "clm-bbb001", Context: "the circle's other half",
 			ReplacedRelation: RelationSupports, Bearing: Bearing{Pending: true}}}}, noRecords,
 			"- relation: \"demoted\"\n  source: \"clm-aaa004\"\n  target: \"clm-bbb001\"\n  context: \"the circle's other half\"\n" +
 				"  replaced-relation: \"supports\"\n  bearing: \"*pending*\"\n  manually-scored: false\n"},
-		{"bearing edge", Graph{Founds: []BearingEdge{{Source: "wrk-smith2020", Target: "clm-bbb002", Bearing: Bearing{Value: 0.75}}}}, noRecords,
-			"- relation: \"founds\"\n  source: \"wrk-smith2020\"\n  target: \"clm-bbb002\"\n  context: \"\"\n  bearing: 0.75\n"},
+		{"bearing edge", Graph{Founds: []BearingEdge{{Source: "wrk-s00000", Target: "clm-bbb002", Bearing: Bearing{Value: 0.75}}}}, noRecords,
+			"- relation: \"founds\"\n  source: \"wrk-s00000\"\n  target: \"clm-bbb002\"\n  context: \"\"\n  bearing: 0.75\n"},
 		{"scorable edge", Graph{Scorable: []ScorableEdge{{Relation: RelationSupports, Source: "clm-aaa002", Target: "clm-aaa001",
 			Context: "first use; second use", Bearing: Bearing{Value: 1}}}}, noRecords,
 			"- relation: \"supports\"\n  source: \"clm-aaa002\"\n  target: \"clm-aaa001\"\n  context: \"first use; second use\"\n" +
-				"  bearing: 1.0\n  manually-scored: false\n"},
+				"  bearing: 1.0\n  manually-scored: false\n" + unjudged},
 		{"scorable edge judged zero, manually", Graph{Scorable: []ScorableEdge{{Relation: RelationLifts, Source: "exp-aaa008",
-			Target: "clm-aaa003", Bearing: Bearing{Value: 0}, ManuallyScored: true}}}, noRecords,
-			"- relation: \"lifts\"\n  source: \"exp-aaa008\"\n  target: \"clm-aaa003\"\n  context: \"\"\n  bearing: 0.0\n  manually-scored: true\n"},
-		{"escaped strings", Graph{Axioms: []AxiomNode{{ID: "axm-S2", Title: "a \"quote\", a \\ and\ta tab" + string(rune(0x2028)) + "\u0085\u0007"}}},
-			"- id: \"axm-S2\"\n  title: \"a \\\"quote\\\", a \\\\ and\ta tab\\u2028\\u0085\\u0007\"\n", noRecords},
+			Target: "clm-aaa003", Bearing: Bearing{Value: 0}, ManuallyScored: true, JudgedHash: judged}}}, noRecords,
+			"- relation: \"lifts\"\n  source: \"exp-aaa008\"\n  target: \"clm-aaa003\"\n  context: \"\"\n  bearing: 0.0\n  manually-scored: true\n" +
+				"  judged-hash: \"ab" + strings.Repeat("0", 60) + "01\"\n"},
+		{"escaped strings", Graph{Axioms: []AxiomNode{{ID: "axm-s20000", Label: "S2", Title: "a \"quote\", a \\ and\ta tab" + string(rune(0x2028)) + "\u0085\u0007"}}},
+			"- id: \"axm-s20000\"\n  label: \"S2\"\n  title: \"a \\\"quote\\\", a \\\\ and\ta tab\\u2028\\u0085\\u0007\"\n", noRecords},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -87,9 +130,12 @@ func TestGraphRoundTrip(t *testing.T) {
 			if got := string(EncodeEdges(c.g)); got != c.edges {
 				t.Errorf("EncodeEdges =\n%s\nwant\n%s", got, c.edges)
 			}
-			got, err := loadGraphFiles(t, &c.nodes, &c.edges)
-			if err != nil || !reflect.DeepEqual(got, c.g) {
-				t.Errorf("LoadGraph = %+v, %v; want %+v", got, err, c.g)
+			// An edge loads beside the node records of its ends.
+			want := withEnds(c.g)
+			nodes := string(EncodeNodes(want))
+			got, err := loadGraphFiles(t, &nodes, &c.edges)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Errorf("LoadGraph = %+v, %v; want %+v", got, err, want)
 			}
 		})
 	}
@@ -102,7 +148,7 @@ func TestGraphEncodeOrder(t *testing.T) {
 	g := Graph{
 		Claims:   []ClaimNode{{ID: "clm-bbbbbb", Title: "B"}},
 		Analyses: []AnalysisNode{{ID: "ana-aaaaaa", Title: "A"}},
-		Axioms:   []AxiomNode{{ID: "axm-S1", Title: "S"}},
+		Axioms:   []AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "S"}},
 		Demoted: []DemotedEdge{
 			{Source: "ana-aaaaaa", Target: "clm-bbbbbb", ReplacedRelation: RelationRefutes},
 			{Source: "ana-aaaaaa", Target: "clm-bbbbbb", ReplacedRelation: RelationLifts},
@@ -115,18 +161,18 @@ func TestGraphEncodeOrder(t *testing.T) {
 		},
 	}
 	nodes, edges := string(EncodeNodes(g)), string(EncodeEdges(g))
-	wantNodes := "- id: \"ana-aaaaaa\"\n  title: \"A\"\n  rigor: \"*pending*\"\n  manually-scored: false\n  rationale: \"\"\n  no-edge: \"\"\n" +
-		"- id: \"axm-S1\"\n  title: \"S\"\n" +
-		"- id: \"clm-bbbbbb\"\n  title: \"B\"\n  rigor: \"*pending*\"\n  manually-scored: false\n  rationale: \"\"\n  no-edge: \"\"\n  strengthen-by: []\n"
+	wantNodes := "- id: \"ana-aaaaaa\"\n  title: \"A\"\n  rigor: \"*pending*\"\n  manually-scored: false\n  rationale: \"\"\n" + unjudged +
+		"- id: \"axm-s10000\"\n  label: \"S1\"\n  title: \"S\"\n" +
+		"- id: \"clm-bbbbbb\"\n  title: \"B\"\n  rigor: \"*pending*\"\n  manually-scored: false\n  rationale: \"\"\n" + unjudged
 	if nodes != wantNodes {
 		t.Errorf("EncodeNodes =\n%s\nwant\n%s", nodes, wantNodes)
 	}
 	want := "- relation: \"supports\"\n  source: \"clm-bbbbbb\"\n  target: \"clm-dddddd\"\n" +
-		"  context: \"\"\n  bearing: 0.0\n  manually-scored: false\n" +
+		"  context: \"\"\n  bearing: 0.0\n  manually-scored: false\n" + unjudged +
 		"- relation: \"supports\"\n  source: \"clm-cccccc\"\n  target: \"clm-bbbbbb\"\n" +
-		"  context: \"\"\n  bearing: 0.0\n  manually-scored: false\n" +
+		"  context: \"\"\n  bearing: 0.0\n  manually-scored: false\n" + unjudged +
 		"- relation: \"refutes\"\n  source: \"ana-aaaaaa\"\n  target: \"clm-bbbbbb\"\n" +
-		"  context: \"\"\n  bearing: 0.0\n  manually-scored: false\n" +
+		"  context: \"\"\n  bearing: 0.0\n  manually-scored: false\n" + unjudged +
 		"- relation: \"references\"\n  source: \"clm-bbbbbb\"\n  target: \"ana-aaaaaa\"\n  context: \"\"\n" +
 		"- relation: \"demoted\"\n  source: \"ana-aaaaaa\"\n  target: \"clm-bbbbbb\"\n  context: \"\"\n" +
 		"  replaced-relation: \"lifts\"\n  bearing: 0.0\n  manually-scored: false\n" +
@@ -137,33 +183,26 @@ func TestGraphEncodeOrder(t *testing.T) {
 	}
 }
 
-// TestGraphRigorAboveTheMaximum: a rigor above the maximum, on every kind that
-// carries one, reads as the maximum and is no refusal; the authored load reads
-// it as the file holds it.
-func TestGraphRigorAboveTheMaximum(t *testing.T) {
+// TestGraphRefusesARigorAboveTheMaximum: a rigor above the maximum, on every
+// kind that carries one, refuses the load with one metadata fault per record,
+// naming the node records and the field.
+func TestGraphRefusesARigorAboveTheMaximum(t *testing.T) {
 	g := Graph{
 		Claims:      []ClaimNode{{ID: "clm-aaaaaa", Title: "C", Rigor: ptr(1.2)}},
 		Analyses:    []AnalysisNode{{ID: "ana-aaaaaa", Title: "A", Rigor: ptr(1.2)}},
 		Experiments: []ExperimentNode{{ID: "exp-aaaaaa", Title: "E", Status: "run", Rigor: ptr(1.2)}},
-		Works:       []WorkNode{{ID: "wrk-k", Title: "W", Rigor: ptr(1.2)}},
+		Works:       []WorkNode{{ID: "wrk-k00000", Label: "k", Title: "W", Rigor: ptr(1.2)}},
 	}
 	nodes, edges := string(EncodeNodes(g)), noRecords
-	rigors := func(g Graph) []*float64 {
-		return []*float64{g.Claims[0].Rigor, g.Analyses[0].Rigor, g.Experiments[0].Rigor, g.Works[0].Rigor}
+	_, err := LoadGraph(graphSource(t, &nodes, &edges))
+	var le *GraphLoadError
+	if !errors.As(err, &le) || len(le.Faults) != 4 {
+		t.Fatalf("LoadGraph error = %v, want four faults", err)
 	}
-	for _, c := range []struct {
-		name string
-		load func(*Source) (Graph, error)
-		want float64
-	}{{"LoadGraph", LoadGraph, RigorMaximum}, {"LoadAuthoredGraph", LoadAuthoredGraph, 1.2}} {
-		got, err := c.load(graphSource(t, &nodes, &edges))
-		if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		for i, r := range rigors(got) {
-			if r == nil || *r != c.want {
-				t.Errorf("%s: rigor %d = %v, want %v", c.name, i, r, c.want)
-			}
+	for i, id := range []string{"clm-aaaaaa", "ana-aaaaaa", "exp-aaaaaa", "wrk-k00000"} {
+		f := le.Faults[i]
+		if f.Check != CheckMetadata || f.Path != GraphNodesFile || f.Key != RigorKey || !strings.Contains(f.Detail, id) {
+			t.Errorf("fault %d = %+v, want a %s fault on %s's %s naming %s", i, f, CheckMetadata, GraphNodesFile, RigorKey, id)
 		}
 	}
 }
@@ -172,7 +211,7 @@ func TestGraphRigorAboveTheMaximum(t *testing.T) {
 // field and line.
 func TestGraphRefusals(t *testing.T) {
 	claim := func(field string) string {
-		return "- id: \"clm-aaaaaa\"\n  title: \"T\"\n  rigor: 0.5\n  manually-scored: false\n  rationale: \"\"\n  no-edge: \"\"\n  strengthen-by: []\n" + field
+		return "- id: \"clm-aaaaaa\"\n  title: \"T\"\n  rigor: 0.5\n  manually-scored: false\n  rationale: \"\"\n" + unjudged + field
 	}
 	edge := func(relation, source, target, rest string) string {
 		return "- relation: \"" + relation + "\"\n  source: \"" + source + "\"\n  target: \"" + target + "\"\n  context: \"\"\n" + rest
@@ -183,27 +222,33 @@ func TestGraphRefusals(t *testing.T) {
 		nodes, edges *string
 		want         GraphFault
 	}{
-		{"parse failure", ptr("- id: \"axm-S1\"\n\ttitle: \"T\"\n"), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 2}},
-		{"a key twice", ptr(claim("  title: \"U\"\n")), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 8, Key: "title"}},
-		{"unknown field", ptr(claim("  kind: \"claim\"\n")), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 8, Key: "kind",
-			Allowed: "id, title, rigor, manually-scored, rationale, no-edge, strengthen-by"}},
-		{"missing field", ptr("- id: \"axm-S1\"\n"), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 1, Key: "title"}},
-		{"wrong type: a quoted number", ptr("- id: \"wrk-k\"\n  title: \"W\"\n  rigor: \"0.7\"\n  rationale: \"\"\n"), &none,
-			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 3, Key: "rigor"}},
-		{"domain: a bearing above 1", &none, ptr(edge(RelationFounds, "wrk-k", "clm-aaaaaa", "  bearing: 1.5\n")),
-			GraphFault{Check: CheckMetadata, Path: GraphEdgesFile, Line: 5, Key: "bearing", Allowed: "a number in [0, 1], or \"*pending*\""}},
-		{"domain: a status", ptr("- id: \"exp-aaaaaa\"\n  title: \"E\"\n  status: \"done\"\n  rigor: 0.5\n  manually-scored: false\n"), &none,
-			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 3, Key: "status", Allowed: "run, pending"}},
+		{"parse failure", ptr("- id: \"axm-s10000\"\n\ttitle: \"T\"\n"), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 2}},
+		{"a key twice", ptr(claim("  title: \"U\"\n")), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 7, Key: "title"}},
+		{"unknown field", ptr(claim("  kind: \"claim\"\n")), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 7, Key: "kind",
+			Allowed: []string{"id", "title", "rigor", "manually-scored", "rationale", "judged-hash"}}},
+		{"missing field", ptr("- id: \"axm-s10000\"\n  label: \"S1\"\n"), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 1, Key: "title"}},
+		{"wrong type: a quoted number", ptr("- id: \"wrk-k00000\"\n  label: \"k\"\n  title: \"W\"\n  rigor: \"0.7\"\n  rationale: \"\"\n"), &none,
+			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 4, Key: "rigor"}},
+		{"domain: a work's label is a citation key", ptr("- id: \"wrk-k00000\"\n  label: \"Smith 2020.\"\n  title: \"W\"\n  rigor: 0.7\n  rationale: \"\"\n"), &none,
+			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 2, Key: "label"}},
+		{"an empty label", ptr("- id: \"axm-s10000\"\n  label: \"\"\n  title: \"S\"\n"), &none,
+			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 2, Key: "label"}},
+		{"id grammar: a 3.0.0 work id", ptr("- id: \"wrk-Smith2020\"\n  label: \"Smith2020\"\n  title: \"W\"\n  rigor: 0.7\n  rationale: \"\"\n"), &none,
+			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 1, Key: "id"}},
+		{"domain: a bearing above 1", &none, ptr(edge(RelationFounds, "wrk-k00000", "clm-aaaaaa", "  bearing: 1.5\n")),
+			GraphFault{Check: CheckMetadata, Path: GraphEdgesFile, Line: 5, Key: "bearing"}},
+		{"domain: a status", ptr("- id: \"exp-aaaaaa\"\n  title: \"E\"\n  status: \"pending\"\n  rigor: 0.5\n  manually-scored: false\n" + unjudged), &none,
+			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 3, Key: "status", Allowed: []string{"run", "planned"}}},
 		{"id grammar", ptr("- id: \"clm-abc\"\n  title: \"T\"\n"), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 1, Key: "id"}},
-		{"duplicate id", ptr(claim("") + claim("")), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 8, Key: "id"}},
-		{"illegal pairing", &none, ptr(edge(RelationSupports, "wrk-k", "clm-aaaaaa", "  bearing: 0.5\n  manually-scored: false\n")),
+		{"duplicate id", ptr(claim("") + claim("")), &none, GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 7, Key: "id"}},
+		{"illegal pairing", &none, ptr(edge(RelationSupports, "wrk-k00000", "clm-aaaaaa", "  bearing: 0.5\n  manually-scored: false\n"+unjudged)),
 			GraphFault{Check: CheckMetadata, Path: GraphEdgesFile, Line: 1, Key: "relation"}},
 		{"illegal demoted pairing", &none, ptr(edge(RelationDemoted, "clm-aaaaaa", "clm-bbbbbb",
 			"  replaced-relation: \"lifts\"\n  bearing: 0.5\n  manually-scored: false\n")),
 			GraphFault{Check: CheckMetadata, Path: GraphEdgesFile, Line: 1, Key: "relation"}},
 		{"absent file", &none, nil, GraphFault{Check: CheckIndex, Path: GraphEdgesFile, Remedy: RestoreFromGitRemedy}},
-		{"a string holding a line break", ptr("- id: \"axm-S1\"\n  title: \"one\\ntwo\"\n"), &none,
-			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 2, Key: "title"}},
+		{"a string holding a line break", ptr("- id: \"axm-s10000\"\n  label: \"S1\"\n  title: \"one\\ntwo\"\n"), &none,
+			GraphFault{Check: CheckMetadata, Path: GraphNodesFile, Line: 3, Key: "title"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -217,7 +262,7 @@ func TestGraphRefusals(t *testing.T) {
 				t.Errorf("fault %+v carries no detail", got)
 			}
 			got.Detail = ""
-			if got != c.want {
+			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("fault = %+v, want %+v", got, c.want)
 			}
 		})
@@ -227,7 +272,7 @@ func TestGraphRefusals(t *testing.T) {
 // TestGraphRefusalListsEveryFault: one load names every fault across both
 // files, not the first alone.
 func TestGraphRefusalListsEveryFault(t *testing.T) {
-	nodes := "- id: \"clm-abc\"\n  title: \"T\"\n- id: \"axm-S1\"\n  title: \"\"\n"
+	nodes := "- id: \"clm-abc\"\n  title: \"T\"\n- id: \"axm-s10000\"\n  label: \"S1\"\n  title: \"\"\n"
 	edges := "- relation: \"cites\"\n  source: \"clm-aaaaaa\"\n  target: \"clm-bbbbbb\"\n  context: \"\"\n"
 	_, err := loadGraphFiles(t, &nodes, &edges)
 	var le *GraphLoadError

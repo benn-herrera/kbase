@@ -59,18 +59,30 @@ func verify(opts maintenanceOptions) (string, []toolresult.Field) {
 
 func verifyCommand() *cobra.Command {
 	return maintenanceCommand("verify",
-		"check the KB's links, records, statement markers and register pages; writes nothing",
-		`verify checks the KB's freshness and links at kb-root/ beside the
-repository's .git: the dead-link and unknown-id gate over kb-root/, then the
-metadata gate — a frontmatter block on any document but the entry point, a
-claim, analysis or experiment carrying other than one statement marker, an
-axiom record and axioms.md's headings that disagree, each fault of a degraded
-load (`+degradedFaults+`), and each register page that does not stand as
-refresh renders it. The citation grammar is checked by the build, not here. It
-writes nothing. Faults are outcome refused, each one an item under refusals;
-one a refresh clears names "`+index.RefreshRemedy+`" as its remedy; a KB in an
-older metadata format is a fault a refresh clears by rewriting the KB in the
-current one. Every demoted edge — one moved out of the scoring edges to break a
-cycle, by the build or by refresh's repair — is listed under findings, which
-are not faults. Its result is one YAML document on stdout.`, runVerify)
+		"check the KB's links, records, statement markers and summary pages; writes nothing",
+		`verify checks the KB at kb-root/ in the git worktree root and writes
+nothing. Each fault is an item under "refusals", outcome refused:
+- any link under kb-root/, citations included, whose target names no file, or
+  whose fragment names no heading or element id of the document it reaches,
+  or no entry of a summary page (check: dead-link);
+- an id in a citation's link title, or a node id in prose, that no node
+  carries (check: unknown-id);
+- a node id standing bare in prose, outside code, markers and citation link
+  titles (check: bare-id; remedy: add-citation with the id as "snippet");
+- a frontmatter block on any document (check: frontmatter);
+- a KB in an older format (check: index-freshness; remedy:
+  `+index.UpdateFormatRemedy+`);
+- a claim, analysis or experiment carrying no statement marker or more than
+  one (check: statement-marker);
+- an axiom record without exactly one heading in axioms.md carrying its
+  marker, a marked heading whose marker names no axiom record, or one whose
+  text is not its record's label and title (check: axiom-heading);
+- a summary page that does not stand as the derivation renders it (check:
+  register-freshness; remedy: `+index.EmptyBatchRemedy+`, or
+  `+index.UpdateFormatRemedy+` over a KB in an older format).
+Any other fault is put right by a prose edit or git work, as its detail
+guides. `+loadErrorRefusedHelp+` Every demoted record — an edge the build
+moved out of the scoring edges to break a cycle — is listed under "findings"
+(check: demoted), which are not faults. Its result: "findings", then
+"refusals" where refused.`, runVerify)
 }

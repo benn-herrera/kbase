@@ -28,10 +28,10 @@ func TestFormatStamp(t *testing.T) {
 	}
 }
 
-// TestFormatVersion: kbase reads and writes 3.0.0, the major whose nodes and
-// edges are records.
+// TestFormatVersion: kbase reads and writes 4.0.0, the major whose scored
+// records carry their judged hash.
 func TestFormatVersion(t *testing.T) {
-	if FormatVersion != "3.0.0" {
-		t.Errorf("FormatVersion = %q, want 3.0.0", FormatVersion)
+	if FormatVersion != "4.0.0" {
+		t.Errorf("FormatVersion = %q, want 4.0.0", FormatVersion)
 	}
 }

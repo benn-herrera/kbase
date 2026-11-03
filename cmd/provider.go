@@ -4,16 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
+	"kbase/internal/auth"
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/kb"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // defaultListTimeout bounds one request when --timeout is not given: one
@@ -32,18 +36,18 @@ type providerOptions struct {
 	Layers []config.Layer
 
 	// RepoRoot is the repository root this invocation resolved, "" outside a
-	// worktree. configure's --project is its one consumer: the layer it names
-	// is chosen whether or not it is in the read stack above.
+	// worktree. A configure command's --local is its one consumer: the layer
+	// it names is chosen whether or not it is in the read stack above.
 	RepoRoot string
 
-	// WriteDir is the configuration directory this invocation writes into —
-	// the layer config.WriteTarget names, and configure's --project may
-	// replace. A refusal naming a pool entry the pool lacks points at that
-	// layer's providers.toml, the file the entry belongs in.
+	// WriteDir is the configuration directory written into where no location
+	// flag names one — the layer config.WriteTarget names. A refusal naming a
+	// pool entry the pool lacks points at that layer's providers.toml, the
+	// file the entry belongs in.
 	WriteDir string
 
 	// Providers and Faults are the loaded pool and the entries that dropped
-	// out of it.
+	// out of it, or warn — the credentials store's faults among them.
 	Providers config.Providers
 	Faults    []config.ProviderFault
 
@@ -69,61 +73,51 @@ type providerOptions struct {
 }
 
 // inputs is what a resolution decision reads: the loaded configuration this
-// invocation works from, and the environment's strings.
-func (o providerOptions) inputs(env config.Overrides) config.Inputs {
-	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir, Env: env}
+// invocation works from.
+func (o providerOptions) inputs() config.Inputs {
+	return config.Inputs{Cfg: o.Config, Providers: o.Providers, Faults: o.Faults, WriteDir: o.WriteDir}
 }
 
-// warnFaults says what the pool's faults were, one line each. A provider
-// dropped from the pool is a warning, not a failure: the one being asked for
-// may well have loaded. Fault reasons carry path and IO detail only, never key
-// material.
-func warnFaults(stderr io.Writer, faults []config.ProviderFault) {
+// warnFaults says what the pool's faults were, one line each on stderr, and
+// returns them as warning items, one per fault, each naming the file it is
+// against. A provider dropped from the pool is a warning, not a failure: the
+// one being asked for may well have loaded. Fault reasons carry path and IO
+// detail only, never key material.
+func warnFaults(stderr io.Writer, faults []config.ProviderFault) []toolresult.Item {
+	items := []toolresult.Item{}
 	for _, f := range faults {
-		if f.Warning {
+		var subject string
+		switch {
+		case f.Source == config.SourceStoreDir:
+			// The credentials store's own fault: it names no provider.
+			subject = "credentials store"
+		case f.Warning:
 			// The provider SURVIVED this one: it is in the pool and
 			// selectable, so saying "unavailable" would send the user
 			// looking for an endpoint that is not missing.
-			fmt.Fprintf(stderr, "provider %q: %s\n", f.Name, f.Reason)
-			continue
+			subject = fmt.Sprintf("provider %q", f.Name)
+		default:
+			subject = fmt.Sprintf("provider %q unavailable", f.Name)
 		}
-		fmt.Fprintf(stderr, "provider %q unavailable: %s\n", f.Name, f.Reason)
+		fmt.Fprintf(stderr, "%s: %s\n", subject, f.LocatedReason())
+		items = append(items, toolresult.Item{Path: f.Path, Detail: subject + ": " + f.Reason})
 	}
+	return items
 }
 
-// supersededProvider is the one line a file-mode invocation writes where
-// config.toml still states the provider key: it loads, and nothing resolves
-// from it — a role names its own entry in its own reference — so the key is
-// reported superseded rather than silently obeyed. A verb that resolves
-// nothing, and an environment-mode invocation, read no file value and say
-// nothing.
-func supersededProvider(stderr io.Writer, cfg config.Config) {
-	if cfg.Provider == "" {
-		return
+// warningsField is a result's warnings: the items given, an empty list where
+// there are none.
+func warningsField(items []toolresult.Item) toolresult.Field {
+	if items == nil {
+		items = []toolresult.Item{}
 	}
-	fmt.Fprintln(stderr, "config.toml states the superseded provider key; kbase does not use it — run kbase configure to rewrite the file")
-}
-
-// supersededReaderConcurrency is the one line a file-mode build or score
-// writes where config.toml still states [asks] readerConcurrency: the key
-// loads, and asks.concurrency bounds the calls in its place, so it is reported
-// superseded rather than silently ignored.
-func supersededReaderConcurrency(stderr io.Writer, cfg config.Config) {
-	if cfg.Asks.ReaderConcurrency == nil {
-		return
-	}
-	fmt.Fprintln(stderr, "config.toml states the superseded [asks] readerConcurrency key; kbase does not use it — set asks.concurrency instead")
+	return toolresult.Field{Key: "warnings", Value: items}
 }
 
 // warnCleartextKey writes config.CleartextWarning's line for ep, judged on the
-// key reg dials ep with, and reports whether it wrote one. A key reg cannot
-// read says nothing here: the dial refuses it.
-func warnCleartextKey(stderr io.Writer, reg *modelclient.Registry, ep config.Endpoint) bool {
-	key, err := reg.Key(ep)
-	if err != nil {
-		return false
-	}
-	line := config.CleartextWarning(ep.BaseURL, key)
+// key ep is dialled with, and reports whether it wrote one.
+func warnCleartextKey(stderr io.Writer, ep config.Endpoint) bool {
+	line := config.CleartextWarning(ep.BaseURL, ep.APIKey)
 	if line == "" {
 		return false
 	}
@@ -148,27 +142,12 @@ func providerFields(name, rule, layer string) []toolresult.Field {
 }
 
 // roleRecord is one role's record in a result document, in §7.1's key order:
-// the role, what answered it, where that endpoint came from, and the model
-// this invocation asked for. The pool entry's name, rule and layer stand
-// together or not at all — an environment endpoint has none of them — and
-// back-end is what tells the cases apart, so a reader never infers the source
-// from an absence.
+// the role, the pool entry that answered it with the rule that named the entry
+// and the layer that supplied it, and the model this invocation asked for.
 func roleRecord(ep config.Endpoint) toolresult.Record {
-	record := toolresult.Record{
-		{Key: "role", Value: string(ep.Role)},
-		{Key: "back-end", Value: backEndName(ep)},
-	}
+	record := toolresult.Record{{Key: "role", Value: string(ep.Role)}}
 	record = append(record, providerFields(ep.Provider, ep.Rule, ep.Layer)...)
 	return append(record, toolresult.Field{Key: "model", Value: stringOrNull(ep.Model)})
-}
-
-// backEndName is what answered ep, as a record states it: the environment the
-// endpoint came from, or a pool entry's provider.
-func backEndName(ep config.Endpoint) string {
-	if ep.Mode == config.ModeEnvironment {
-		return string(config.ModeEnvironment)
-	}
-	return string(config.BackEndProvider)
 }
 
 // rolesField is the roles record: one record per role, in role order.
@@ -202,6 +181,23 @@ func refusedOrFailed(fields []toolresult.Field, err error) (string, []toolresult
 // every verb, and the only part that touches the process's home directory and
 // the filesystem above workDir.
 func loadVerbContext(workDir string) (providerOptions, error) {
+	resolved, err := resolveVerbLayers(workDir)
+	if err != nil {
+		return providerOptions{}, err
+	}
+	opts, err := loadConfigContext(resolved.Layers)
+	if err != nil {
+		return providerOptions{}, err
+	}
+	opts.RepoRoot, opts.WriteDir = resolved.RepoRoot, resolved.WriteDir
+	return opts, nil
+}
+
+// resolveVerbLayers is loadVerbContext without the load: the layers this
+// invocation reads from workDir, the repository root and the write target,
+// with stderr. The configure commands, which load only the stack they write
+// into, start from it.
+func resolveVerbLayers(workDir string) (providerOptions, error) {
 	repoRoot, err := kb.RepositoryRoot(workDir)
 	if err != nil {
 		return providerOptions{}, err
@@ -210,19 +206,18 @@ func loadVerbContext(workDir string) (providerOptions, error) {
 	if err != nil {
 		return providerOptions{}, err
 	}
-	opts, err := loadConfigContext(layers)
+	return providerOptions{Layers: layers, RepoRoot: repoRoot, WriteDir: config.WriteTarget(layers), Stderr: os.Stderr}, nil
+}
+
+// loadConfigContext reads the credentials store and loads every configuration
+// file of every layer over it into the shared options a verb works from.
+func loadConfigContext(layers []config.Layer) (providerOptions, error) {
+	dir, err := authStoreDir()
 	if err != nil {
 		return providerOptions{}, err
 	}
-	opts.RepoRoot = repoRoot
-	opts.WriteDir = config.WriteTarget(layers, "")
-	return opts, nil
-}
-
-// loadConfigContext loads every configuration file of every layer into the
-// shared options a verb works from.
-func loadConfigContext(layers []config.Layer) (providerOptions, error) {
-	loaded, err := config.Load(layers)
+	stored := readStoredKeys(dir)
+	loaded, err := config.Load(layers, stored)
 	if err != nil {
 		return providerOptions{}, err
 	}
@@ -235,9 +230,49 @@ func loadConfigContext(layers []config.Layer) (providerOptions, error) {
 	}, nil
 }
 
+// readStoredKeys reads every key file in the credentials store at dir: each key
+// that opens, by the name its file is stored under, and a fault for each file
+// that does not. A store directory that does not stand holds no key; one that
+// stands and does not list holds none either, and is a nameless fault against
+// the directory, its reason the OS error's text without the path.
+func readStoredKeys(dir string) config.StoredKeys {
+	store := auth.NewStore(dir)
+	names, err := store.List()
+	if err != nil {
+		reason := err.Error()
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			reason = pathErr.Err.Error()
+		}
+		return config.StoredKeys{Faults: []config.StoreFault{{Path: dir, Reason: reason}}}
+	}
+	stored := config.StoredKeys{Keys: make(map[string]secret.Key, len(names))}
+	for _, name := range names {
+		key, err := store.Read(name)
+		if err != nil {
+			stored.Faults = append(stored.Faults, storeFault(dir, name, err))
+			continue
+		}
+		stored.Keys[name] = key
+	}
+	return stored
+}
+
+// storeFault is the fault of the key file stored under name, from the store's
+// error: a *auth.FileError's path and what went wrong with the file, apart; any
+// other error, which no one file caused, against the store's directory dir.
+func storeFault(dir, name string, err error) config.StoreFault {
+	var fileErr *auth.FileError
+	if !errors.As(err, &fileErr) {
+		return config.StoreFault{Name: name, Path: dir, Reason: err.Error()}
+	}
+	return config.StoreFault{Name: name, Path: fileErr.Path, Reason: fileErr.Err.Error(),
+		DoesNotOpen: errors.Is(fileErr.Err, auth.ErrTruncated) || errors.Is(fileErr.Err, auth.ErrDoesNotOpen)}
+}
+
 // registerProviderFlags declares the --provider and --timeout flags a verb
-// that selects a pool entry to dial carries. action completes "pool entry ...
-// to <action>" in the --provider help text ("query", "configure", "report").
+// that selects a pool entry to dial carries. action completes "the provider
+// to <action>" in the --provider help text ("query", "report").
 func registerProviderFlags(cmd *cobra.Command, provider *string, timeout *time.Duration, action string) {
 	registerProviderFlag(cmd, provider, action)
 	registerTimeoutFlag(cmd, timeout, sharedTimeoutUsage)
@@ -247,7 +282,7 @@ func registerProviderFlags(cmd *cobra.Command, provider *string, timeout *time.D
 // selects a pool entry without making a request.
 func registerProviderFlag(cmd *cobra.Command, provider *string, action string) {
 	cmd.Flags().StringVar(provider, "provider", "",
-		"pool entry from "+config.ProvidersFileName+" to "+action+" (default: the pool's only entry)")
+		"the provider to "+action+", named in any case (default: the only provider)")
 }
 
 // sharedTimeoutUsage is what --timeout bounds: one request, never a run.
@@ -257,4 +292,72 @@ const sharedTimeoutUsage = "deadline for one model request"
 // a catalogue request's.
 func registerTimeoutFlag(cmd *cobra.Command, timeout *time.Duration, usage string) {
 	cmd.Flags().DurationVar(timeout, "timeout", defaultListTimeout, usage)
+}
+
+// configureLocation is the directory a configure command writes into and the
+// layer that names it: --global's ~/.config/kbase, --local's
+// <repository>/.kbase, else WriteDir — the directory --config-dir or
+// KBASE_CONFIG_DIR names, else the global one. The two flags together, either
+// beside --config-dir, and --local outside a git worktree are refused.
+func configureLocation(opts providerOptions, global, local bool, workDir string) (dir, layer string, items []toolresult.Item, err error) {
+	top := opts.Layers[0].Source
+	switch {
+	case global && local:
+		return "", "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: argmark.Flag("local"),
+			Detail: fmt.Sprintf("%s and %s name different configuration directories; pass one or the other", argmark.Flag("global"), argmark.Flag("local"))}}, nil
+	case (global || local) && top == config.LayerSourceExplicit:
+		flag := argmark.Flag("global")
+		if local {
+			flag = argmark.Flag("local")
+		}
+		return "", "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: flag,
+			Detail: flag + " and --config-dir name different configuration directories; pass one or the other"}}, nil
+	case local && opts.RepoRoot == "":
+		return "", "", []toolresult.Item{{Check: checkWorktree, Path: workDir, Remedy: "git init",
+			Detail: fmt.Sprintf("%s is not inside a git worktree, which %s writes into; `git init` there is the operator's to run", workDir, argmark.Flag("local"))}}, nil
+	case local:
+		return config.RepositoryDir(opts.RepoRoot), config.LayerSourceRepository, nil, nil
+	case global:
+		dir, err := config.GlobalDir()
+		return dir, config.LayerSourceGlobal, nil, err
+	case top == config.LayerSourceExplicit || top == config.LayerSourceEnvironment:
+		return opts.WriteDir, top, nil, nil
+	}
+	return opts.WriteDir, config.LayerSourceGlobal, nil, nil
+}
+
+// locationFlag is the location flag a configure call carried, by its name:
+// "local", "global", or "" for neither.
+func locationFlag(global, local bool) string {
+	switch {
+	case local:
+		return "local"
+	case global:
+		return "global"
+	}
+	return ""
+}
+
+// loadWrittenStack loads, over the credentials store, the configuration a
+// configure command writes into: the layer at dir, which source names, and
+// the layers beneath it (config.WrittenStack). Its WriteDir is dir.
+func loadWrittenStack(dir, source string) (providerOptions, error) {
+	layers, err := config.WrittenStack(config.Layer{Path: dir, Source: source})
+	if err != nil {
+		return providerOptions{}, err
+	}
+	opts, err := loadConfigContext(layers)
+	if err != nil {
+		return providerOptions{}, err
+	}
+	opts.WriteDir = dir
+	return opts, nil
+}
+
+// registerLocationFlags declares a configure command's --global and --local.
+func registerLocationFlags(cmd *cobra.Command, global, local *bool) {
+	cmd.Flags().BoolVar(global, "global", false,
+		"write into the global configuration directory, ~/.config/kbase, the default where --config-dir and KBASE_CONFIG_DIR name none")
+	cmd.Flags().BoolVar(local, "local", false,
+		"write into the repository's configuration directory, <repository>/"+config.RepositoryDirName+" (refused outside a git worktree)")
 }

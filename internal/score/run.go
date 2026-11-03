@@ -44,6 +44,19 @@ type Reply struct {
 	Truncated bool
 }
 
+// RemedyError is an Ask's failure that names the command letting the call
+// through, which the failed attempt's line records, with the note that goes
+// with it where there is one. Its text is the call's error.
+type RemedyError struct {
+	Err    error
+	Remedy string
+	Note   string
+}
+
+func (e RemedyError) Error() string { return e.Err.Error() }
+
+func (e RemedyError) Unwrap() error { return e.Err }
+
 // errTruncatedReply fails an item whose reply reached the completion cap. The
 // lines it did not reach are lost, and where the cut falls between lines the
 // rest would parse as a clean under-charge: an incomplete answer is never a
@@ -51,9 +64,12 @@ type Reply struct {
 var errTruncatedReply = errors.New("the reply reached the completion cap before it finished, so its charge list is incomplete")
 
 // Landing is one value a landing writes: the value replaces the item's own.
+// Judged is the judged hash, as hex, of the item's text as its call was
+// composed: the value lands only where the KB's text still hashes to it.
 type Landing struct {
-	Item  query.Item
-	Value kb.Bearing
+	Item   query.Item
+	Value  kb.Bearing
+	Judged string
 }
 
 // Write lands an ask batch's values in one landing, and returns one error per
@@ -68,20 +84,11 @@ type Write func(values []Landing) []error
 // nothing on it, and a resume leaves its landed value unrepriced.
 type Skip func(it query.Item) bool
 
-// RescoreNone is the --rescore-manual value that re-judges no manually-scored
-// value; each other value names the pass whose values it re-judges.
-const RescoreNone = "none"
-
-// RescoreManual is every --rescore-manual value, in the order a refusal lists
-// them.
-var RescoreManual = []string{RescoreNone, query.PassRigor, query.PassBearing, query.PassBoth}
-
 // ManualSkip is the items a run over ix skips: each whose record carries the
-// manually-scored mark, unless rescore names the item's pass or both.
-func ManualSkip(ix *query.Index, rescore string) Skip {
-	return func(it query.Item) bool {
-		return ix.ManuallyScored(it) && rescore != query.PassBoth && rescore != passOf(it)
-	}
+// manually-scored mark, unless rescore — rescore-manual — says to re-judge
+// them.
+func ManualSkip(ix *query.Index, rescore bool) Skip {
+	return func(it query.Item) bool { return !rescore && ix.ManuallyScored(it) }
 }
 
 // Counts is a run's items by the status the ledger last records for each, so a
@@ -91,22 +98,20 @@ type Counts struct {
 	Done    int
 	Failed  int
 	Skipped int
-	// Remaining is what the ledger records no attempt for: the items a limit
-	// left, or the run never reached.
+	// Remaining is what the ledger records no attempt for: the items the run
+	// never reached.
 	Remaining int
 }
 
 // Result is what a run reports of itself: how it stopped — one of result.Done,
-// result.Bounded, result.Cancelled and result.Failed — its items by status, and
-// the items whose value landed, in the order it landed.
+// result.Cancelled and result.Failed — its items by status, and the items
+// whose value landed, in the order it landed.
 type Result struct {
 	Outcome string
 	Counts  Counts
 	Written []query.Item
-	// Walked is the slice of the set this invocation covered: the items before
-	// the walk, cut at the runner's Limit — the same cut the walk made, so the
-	// caller's closing record names items from this slice rather than cutting
-	// the set a second time. A dry run walks none, and reports none.
+	// Walked is the set this invocation walked, which the caller's closing
+	// record names items from.
 	Walked []query.Item
 }
 
@@ -118,7 +123,7 @@ type Runner struct {
 	Source *kb.Source
 	Index  *query.Index
 	Items  []query.Item
-	// Pass names the set the run walks: one pass, or query.PassBoth for the
+	// Pass names the set the run walks: one pass, or query.PassAll for the
 	// node set and then the edge set. It decides what an item's call asks and
 	// what its charges are priced under, and a rigor item decides which of that
 	// pass's two classes it takes: no item is asked or priced as another class's
@@ -133,13 +138,10 @@ type Runner struct {
 	Ledger *Ledger
 	// Model is what the ledger records of each attempt's call.
 	Model string
-	// Limit bounds the items walked; 0 walks every one.
-	Limit int
-	// DryRun asks nothing, lands nothing and records nothing: the run reports
-	// the set it would have walked. The caller branches on a dry run before the
-	// walk; this is what the runner does when it is told.
-	DryRun bool
-	Log    log.Logger
+	Log   log.Logger
+	// graph is the index as the passages read it, where the caller built it
+	// already; nil builds it from Source and Index.
+	graph *graph
 }
 
 // Run walks the set once, as one ask batch. Its launch loop decides each item's
@@ -148,7 +150,7 @@ type Runner struct {
 // records against that text, prices them into its own result cell, and writes
 // its result file once its call is done. A result file that cannot be written
 // is the run's failure, and stops the launches and the calls still out. When
-// the walk has drained — done, bounded, cancelled or failed — the ledger's flush
+// the walk has drained — done, cancelled or failed — the ledger's flush
 // lands the cells' values, then appends their captures and their lines, in walk
 // order, and removes the result files; no common file is written before then. A
 // reply the parse cannot read, a refused text and a failed call or landing are
@@ -162,9 +164,6 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	if lg == nil {
 		lg = log.Discard()
 	}
-	if r.DryRun {
-		return Result{Outcome: result.Done, Counts: Counts{Total: len(r.Items), Remaining: len(r.Items)}}, nil
-	}
 	// The pass is read once, before the walk: it is every item of the run's
 	// classes, and an item only selects among them.
 	facts, err := passFactsOf(r.Pass)
@@ -173,12 +172,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	}
 	// The graph is built once, before the walk: every item's passages read the
 	// index the runner already holds, and no item reads an index file.
-	g := graphOf(r.Index)
-	items := r.Items
-	bounded := r.Limit > 0 && r.Limit < len(items)
-	if bounded {
-		items = items[:r.Limit]
+	if r.graph == nil {
+		g, err := graphOf(r.Source, r.Index)
+		if err != nil {
+			return Result{Outcome: result.Failed}, err
+		}
+		r.graph = &g
 	}
+	g := *r.graph
+	items := r.Items
 	res := Result{Outcome: result.Done, Walked: items}
 	// Each item's place in the walk is its result cell, so the walk's end
 	// records in walk order whatever order the answers came in.
@@ -204,6 +206,15 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 		if walk.Err() != nil {
 			stopped = true
 			break
+		}
+		// An item a resume walks whose node or edge was removed since the run
+		// enumerated it is recorded skipped, once: nothing is asked of it.
+		if !inKB(r.Index, it) {
+			if status != StatusSkipped {
+				rec := r.Ledger.line(it, Entry{Status: StatusSkipped, Reply: errItemGone.Error()})
+				cells[i] = resultCell{item: it, line: &rec}
+			}
+			continue
 		}
 		if r.Skip != nil && r.Skip(it) {
 			if status == StatusSkipped {
@@ -262,15 +273,10 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			lg.Warn("score: item not written", "item", label(c.item), "status", c.line.Status, "reason", ReplySummary(c.line.Reply))
 		}
 	}
-	// An interruption outranks a bound and a failure: it says the run stopped
-	// short, which is what the caller resumes from.
-	if res.Outcome != result.Cancelled {
-		switch {
-		case bounded:
-			res.Outcome = result.Bounded
-		case res.Counts.Failed > 0:
-			res.Outcome = result.Failed
-		}
+	// An interruption outranks a failure: it says the run stopped short, which
+	// is what the caller resumes from.
+	if res.Outcome != result.Cancelled && res.Counts.Failed > 0 {
+		res.Outcome = result.Failed
 	}
 	return res, nil
 }
@@ -278,9 +284,10 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 // prepare is what the launch loop composes of one item before it launches it:
 // the item's class — the instruction its one call carries and the table its
 // reply is priced under, derived once — and the closed text and prompt the call
-// is sent with, as the entry its line starts from and the call. Where the class
-// cannot be derived or the guard refuses the text, the entry is failed with the
-// reason and there is no call.
+// is sent with, as the entry its line starts from and the call, the entry
+// recording the judged hash of the item's text as g holds it. Where the class
+// or the hash cannot be derived or the guard refuses the text, the entry is
+// failed with the reason and there is no call.
 func (r *Runner) prepare(it query.Item, facts passFacts, g graph) (Entry, *call) {
 	e := Entry{Model: r.Model, Before: priorOf(r.Index, g, it)}
 	refused := func(err error) (Entry, *call) {
@@ -292,6 +299,11 @@ func (r *Runner) prepare(it query.Item, facts passFacts, g graph) (Entry, *call)
 	if err != nil {
 		return refused(err)
 	}
+	judged, err := judgedHash(g, it)
+	if err != nil {
+		return refused(err)
+	}
+	e.Judged = judged.String()
 	prompt, digest, closed, err := r.compose(it, cl, g)
 	if err != nil {
 		return refused(err)
@@ -344,6 +356,10 @@ func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, i
 			return Answer{}, false, true
 		}
 		e.Status, e.Reply = StatusFailed, err.Error()
+		var remedied RemedyError
+		if errors.As(err, &remedied) {
+			e.Remedy, e.Note = remedied.Remedy, remedied.Note
+		}
 		return Answer{}, false, false
 	}
 	c.reply = reply.Text
@@ -392,19 +408,36 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 func (cl class) render(closed closedText) (string, error) { return cl.ask(closed.numbered()) }
 
 // graphOf is the loaded index as the run's passages read it: every node by id,
-// each hosted node's host, and every lifts edge.
-func graphOf(ix *query.Index) graph {
+// each hosted node's host, and each hosted node's statement, read through
+// kb.Statement from its host leaf in src, each leaf read once, and the line it
+// opens on.
+func graphOf(src *kb.Source, ix *query.Index) (graph, error) {
 	nodes := ix.Nodes()
-	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), hosts: ix.Hosts(), lifts: map[liftPair]bool{}}
+	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), hosts: ix.Hosts(), statements: map[string]string{}, lines: map[string]int{}}
 	for _, n := range nodes {
 		g.nodes[n.ID] = n
 	}
+	lifts := map[[2]string]bool{}
 	for _, e := range ix.Edges() {
 		if e.Relation == kb.RelationLifts {
-			g.lifts[liftPair{analysis: e.Source, claim: e.Target}] = true
+			lifts[[2]string{e.Source, e.Target}] = true
 		}
 	}
-	return g
+	lifted := func(analysis, claim string) bool { return lifts[[2]string{analysis, claim}] }
+	texts := map[string]string{}
+	for id, host := range g.hosts {
+		text, read := texts[host]
+		if !read {
+			var err error
+			if text, err = src.ReadText(src.KBPath(host)); err != nil {
+				return graph{}, err
+			}
+			texts[host] = text
+		}
+		g.statements[id] = kb.Statement(text, id, lifted)
+		g.lines[id] = statementLine(text, id, g.statements[id])
+	}
+	return g, nil
 }
 
 // priorOf is the value the item carried in the index this run read, before the

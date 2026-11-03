@@ -242,7 +242,7 @@ func blankBytes(s string) string {
 // mentions is every hand-written mention in text, anchors and citations
 // blanked first and a mention its next words hand to a citation skipped.
 func (v vocabulary) mentions(page string) []mention {
-	text := citationSpanRE.ReplaceAllStringFunc(anchorRenderingRE.ReplaceAllStringFunc(page, blankBytes), blankBytes)
+	text := kb.CitationSpanRE.ReplaceAllStringFunc(anchorRenderingRE.ReplaceAllStringFunc(page, blankBytes), blankBytes)
 	var out []mention
 	for i := 0; i < len(text); {
 		_, size := utf8.DecodeRuneInString(text[i:])

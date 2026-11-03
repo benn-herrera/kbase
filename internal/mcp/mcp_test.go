@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -38,20 +39,29 @@ func TestDeclaredPositionals(t *testing.T) {
 }
 
 // TestCommandSchema: the positionals are required string properties, a
-// variadic one an array and an optional variadic one not required; every local flag of a carried type is an optional
-// property described by its usage; an excluded flag and a persistent one are
-// no property; and a flag no tool argument carries, or one named as a
-// positional, is an error.
+// variadic one an array and an optional variadic one not required, each
+// described as its command declares; every local flag of a carried type is a
+// property, optional unless RequireFlag declares it, described by its usage,
+// then the default --help prints
+// where it prints one, and for a duration that it is a Go duration; an
+// excluded flag and a persistent one are no property; and a flag no tool
+// argument carries, or one named as a positional, is an error.
 func TestCommandSchema(t *testing.T) {
-	cmd := &cobra.Command{Use: "verb <paper> [<roots>...]"}
+	cmd := DescribePositional(&cobra.Command{Use: "verb <paper> [<roots>...]"}, "paper", "paper description")
 	cmd.Flags().Bool("dry", false, "dry usage")
 	cmd.Flags().String("name", "", "name usage")
+	cmd.Flags().String("order", "up", "order usage")
+	cmd.Flags().String("label", "two words", "label usage")
 	cmd.Flags().Int("limit", 0, "limit usage")
+	cmd.Flags().Int("size", 50, "size usage")
 	cmd.Flags().Float64("ratio", 0, "ratio usage")
 	cmd.Flags().StringArray("tag", nil, "tag usage")
 	cmd.Flags().Duration("timeout", time.Second, "timeout usage")
+	cmd.Flags().Duration("wait", 0, "wait usage")
 	cmd.Flags().String("dev", "", "dev usage")
 	ExcludeFlag(cmd.Flags().Lookup("dev"))
+	cmd.Flags().String("must", "", "must usage")
+	RequireFlag(cmd.Flags().Lookup("must"))
 	cmd.PersistentFlags().String("global", "", "global usage")
 
 	positionals, schema, err := CommandSchema(cmd)
@@ -64,16 +74,21 @@ func TestCommandSchema(t *testing.T) {
 	strs := &protocol.Property{Type: "string"}
 	want := protocol.Schema{
 		Properties: map[string]protocol.Property{
-			"paper":   {Type: "string"},
+			"paper":   {Type: "string", Description: "paper description"},
 			"roots":   {Type: "array", Items: strs},
 			"dry":     {Type: "boolean", Description: "dry usage"},
 			"name":    {Type: "string", Description: "name usage"},
+			"order":   {Type: "string", Description: "order usage (default: up)"},
+			"label":   {Type: "string", Description: `label usage (default: "two words")`},
 			"limit":   {Type: "integer", Description: "limit usage"},
+			"size":    {Type: "integer", Description: "size usage (default: 50)"},
 			"ratio":   {Type: "number", Description: "ratio usage"},
 			"tag":     {Type: "array", Items: strs, Description: "tag usage"},
-			"timeout": {Type: "string", Description: "timeout usage"},
+			"timeout": {Type: "string", Description: "timeout usage (a Go duration; default: 1s)"},
+			"wait":    {Type: "string", Description: "wait usage (a Go duration)"},
+			"must":    {Type: "string", Description: "must usage"},
 		},
-		Required: []string{"paper"},
+		Required: []string{"paper", "must"},
 	}
 	if !reflect.DeepEqual(schema, want) {
 		t.Errorf("schema %+v\nwant %+v", schema, want)
@@ -90,6 +105,32 @@ func TestCommandSchema(t *testing.T) {
 			c := &cobra.Command{Use: "verb <paper>"}
 			tc.build(c)
 			if _, _, err := CommandSchema(c); err == nil {
+				t.Error("no error")
+			}
+		})
+	}
+}
+
+// TestToolsRequireFamiliesAndMembersToMatch: the tool table and the help
+// resources must agree on which families exist, so a member naming a family
+// no Family names, and a Family no bound command names, are each an error.
+func TestToolsRequireFamiliesAndMembersToMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		member   string
+		families []Family
+	}{
+		{"a member whose family is absent", "absent", nil},
+		{"a family with no member", "", []Family{{Name: "lonely"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &cobra.Command{Use: "root"}
+			cmd := Bind(&cobra.Command{Use: "verb", RunE: func(*cobra.Command, []string) error { return nil }})
+			if tc.member != "" {
+				InFamily(cmd, tc.member)
+			}
+			root.AddCommand(cmd)
+			if _, err := Tools(root, Located{}, io.Discard, Calls{Families: tc.families}); err == nil {
 				t.Error("no error")
 			}
 		})
@@ -123,7 +164,7 @@ func TestCommandLine(t *testing.T) {
 			nil, []FlagArgument{{"off", "false"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			argv, flags := CommandLine(positionals, tc.args)
+			argv, flags := CommandLine(positionals, nil, tc.args)
 			if !reflect.DeepEqual(argv, tc.wantArgv) {
 				t.Errorf("argv %q, want %q", argv, tc.wantArgv)
 			}

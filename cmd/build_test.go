@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/log"
 	"kbase/internal/model"
@@ -45,9 +46,6 @@ func buildRoles(t *testing.T) (doc resultDoc, dialled []model.Endpoint) {
 	t.Helper()
 	repo, state := buildRepo(t)
 	cfgDir := t.TempDir()
-	for _, name := range []string{config.EnvAPIBaseURL, config.EnvDecision, config.EnvText, config.EnvScoring, config.EnvAPIKeyFile} {
-		t.Setenv(name, "")
-	}
 	writeValues(t, cfgDir, config.ProvidersFileName, `[lab]
 baseUrl = "http://lab.example/v1"
 
@@ -74,7 +72,7 @@ decisionsFlavor = "decisions"
 	opts.Stderr = &stderr
 	if _, err := runBuild(context.Background(), buildOptions{
 		VolumeRoots: []string{"paper.tex"}, Through: "claims-discovered", StateDir: state, WorkDir: repo,
-		ConfigDir: cfgDir, NewClient: newClient, Provider: buildProvider(opts, config.EnvOverrides(os.Getenv), &stderr),
+		ConfigDir: cfgDir, NewClient: newClient, Provider: buildProvider(opts, &stderr),
 		Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
 	}); err != nil {
 		t.Fatalf("build: %v\n%s", err, stderr.String())
@@ -111,7 +109,7 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 		if got == nil {
 			t.Fatalf("no %s record in %v", want.role, roles)
 		}
-		for key, value := range map[string]any{"back-end": "provider", "provider": want.provider,
+		for key, value := range map[string]any{"provider": want.provider,
 			"provider-rule": "config", "provider-layer": "explicit", "model": want.model} {
 			if got[key] != value {
 				t.Errorf("%s's %s = %v, want %v", want.role, key, got[key], value)
@@ -134,6 +132,59 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 	}
 }
 
+// TestBuildDialsOneEntryBothRolesNameOnce: two roles referencing one OpenAI
+// pool entry are one endpoint, dialled once with the key its apiKeyFile holds; each role's
+// record names that entry; and a key bound for a non-loopback http:// endpoint
+// is one line on the verb's stderr, naming no key.
+func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
+	cfgDir := t.TempDir()
+	writeValues(t, cfgDir, "key.txt", "secret-key\n")
+	if err := os.Chmod(filepath.Join(cfgDir, "key.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The entry speaks OpenAI chat, the decision surface's protocol, so both
+	// roles reach one endpoint; an entry speaking Messages is two.
+	writeValues(t, cfgDir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://reaper.local:4000/v1\"\napiKeyFile = \"key.txt\"\napi = \"openai\"\n")
+	writeValues(t, cfgDir, config.ConfigFileName, "[models]\ndecision = \"lab/Some-Decision\"\ntext = \"lab/Some-Text\"\n")
+	saved := flagConfigDir
+	t.Cleanup(func() { flagConfigDir = saved })
+	flagConfigDir = cfgDir
+
+	providers, err := loadVerbContext(t.TempDir())
+	if err != nil {
+		t.Fatalf("loading the staged configuration: %v", err)
+	}
+	var stderr bytes.Buffer
+	var dialled []model.Endpoint
+	providers.NewClient = func(e model.Endpoint) model.Client {
+		dialled = append(dialled, e)
+		return modeltest.NewScriptedMock(nil, nil).Client()
+	}
+	p, err := buildProvider(providers, &stderr)(modelclient.New(providers.NewClient, nil, "", 0))
+	if err != nil {
+		t.Fatalf("provider = %v", err)
+	}
+	if p.Multichoice != "Some-Decision" || p.Overview != "Some-Text" {
+		t.Errorf("provider = %+v, want each role's own model", p)
+	}
+	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey.Reveal() != "secret-key" {
+		t.Errorf("endpoints dialled = %+v, want the one entry, once, with its key file read", len(dialled))
+	}
+	if len(p.Roles) != 2 {
+		t.Fatalf("roles = %v, want one per role the build asks", p.Roles)
+	}
+	for i, id := range []string{"Some-Decision", "Some-Text"} {
+		for key, want := range map[string]any{"provider": "lab", "provider-rule": config.RuleConfig, "model": id} {
+			if got := roleField(p.Roles[i], key); got != want {
+				t.Errorf("roles[%d] %s = %v, want %v", i, key, got, want)
+			}
+		}
+	}
+	if lines := strings.Split(strings.TrimSpace(stderr.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "cleartext") || strings.Contains(stderr.String(), "secret-key") {
+		t.Errorf("stderr (%d bytes), want one cleartext line naming no key", stderr.Len())
+	}
+}
+
 // TestBuildRefusesTheRoleWhoseProviderThePoolLacks: a role whose reference
 // names an entry the pool does not hold refuses by that role's key and that
 // provider's name — never as "the provider" — before any stage is walked.
@@ -151,7 +202,7 @@ func TestBuildRefusesTheRoleWhoseProviderThePoolLacks(t *testing.T) {
 			Config:    config.Config{Models: models},
 			Stderr:    &stderr,
 		}
-		_, err := buildProvider(providers, config.Overrides{}, &stderr)(modelclient.New(nil, nil, "", 0))
+		_, err := buildProvider(providers, &stderr)(modelclient.New(nil, nil, "", 0))
 		var refusal toolresult.Refusal
 		if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Key != "models."+string(role) ||
 			refusal[0].Check != config.CheckProvider || !strings.Contains(refusal[0].Detail, `provider "absent"`) {
@@ -160,9 +211,36 @@ func TestBuildRefusesTheRoleWhoseProviderThePoolLacks(t *testing.T) {
 	}
 }
 
+// TestRefusedNamesShowConfigOnAConfigurationRefusal: a configuration or
+// provider refusal leaves a verb with show-config in its remedy, after the
+// clearing text config gave it where it gave one; an item of another check
+// keeps its remedy as given.
+func TestRefusedNamesShowConfigOnAConfigurationRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		item toolresult.Item
+		want string
+	}{
+		{"a provider item with a remedy", toolresult.Item{Check: config.CheckProvider, Remedy: "kbase auth add lab"},
+			config.ShowConfigRemedy("kbase auth add lab")},
+		{"a provider item with none", toolresult.Item{Check: config.CheckProvider}, config.ShowConfigRemedy("")},
+		{"a usage item", toolresult.Item{Check: toolresult.CheckUsage, Remedy: "kbase auth list"}, "kbase auth list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, fields := refused(nil, tc.item)
+			items := fields[len(fields)-1].Value.([]toolresult.Item)
+			if len(items) != 1 || items[0].Remedy != tc.want {
+				t.Errorf("refused remedies %v, want one item whose remedy is %q", items, tc.want)
+			}
+		})
+	}
+}
+
 // TestBuildResumeNamesTheConfigDirAbsolute: a relative --config-dir is the
-// directory where the flag was typed, so a build refused after recording a
-// boundary hands out a resume naming it absolute.
+// directory where the flag was typed, so the resume a build records names it
+// absolute. The build is refused inside document-graph before it writes
+// kb-root/, so its result hands out no resume; the run's record still holds
+// the command every surface renders.
 func TestBuildResumeNamesTheConfigDirAbsolute(t *testing.T) {
 	repo, state := buildRepoWith(t, "\\documentclass{article}\n\\title{A Paper}\n\\begin{document}\n\\maketitle\n"+
 		"\\section{Results}\n\\input{missing.tex}\nSome prose.\n\\end{document}\n")
@@ -172,9 +250,16 @@ func TestBuildResumeNamesTheConfigDirAbsolute(t *testing.T) {
 	}
 	out, _ := kbase(t, repo, "build", "paper.tex", "--config-dir", "cfg", "--no-inference", "--state-dir", state)
 	doc := checkDocument(t, "build", out)
-	resume, _ := doc.Values["resume"].(string)
-	if doc.Outcome != toolresult.Refused || !strings.HasPrefix(resume, "kbase build --resume ") {
-		t.Fatalf("build = %s, resume %q; want refused inside a stage with a resume\n%s", doc.Outcome, resume, out)
+	if _, handed := doc.Values["resume"]; doc.Outcome != toolresult.Refused || handed {
+		t.Fatalf("build = %s, resume %v; want refused inside a stage with no resume, kb-root/ never written\n%s", doc.Outcome, doc.Values["resume"], out)
+	}
+	events, err := buildstore.ReadProgress(state)
+	if err != nil || len(events) == 0 || events[0].Event != buildstore.EventRun {
+		t.Fatalf("the progress record: %v, %v", events, err)
+	}
+	resume := strings.Join(events[0].Resume, " ")
+	if !strings.HasPrefix(resume, "kbase build --resume") {
+		t.Fatalf("the recorded resume = %q, want kbase build --resume", resume)
 	}
 	_, named, found := strings.Cut(resume, "--config-dir ")
 	named, _, _ = strings.Cut(named, " ")
@@ -203,7 +288,7 @@ func TestBuildDocumentOmitsRolesWithoutInference(t *testing.T) {
 	opts.Stderr = &stderr
 	if _, err := runBuild(context.Background(), buildOptions{
 		VolumeRoots: []string{"paper.tex"}, Through: "spine-seed", StateDir: state, WorkDir: repo,
-		NoInference: true, ConfigDir: cfgDir, Provider: buildProvider(opts, config.EnvOverrides(os.Getenv), &stderr),
+		NoInference: true, ConfigDir: cfgDir, Provider: buildProvider(opts, &stderr),
 		Stdout: &stdout, Stderr: &stderr, Logger: log.Discard(),
 	}); err != nil {
 		t.Fatal(err)

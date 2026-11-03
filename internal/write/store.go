@@ -13,19 +13,6 @@ import (
 	"kbase/internal/kb"
 )
 
-// status is what a batch of edits did.
-type status int
-
-const (
-	statusWritten status = iota
-	statusUnchanged
-	statusRetry
-)
-
-// reasonContended is why a write that found its file changed under it did not
-// happen.
-const reasonContended = "contended"
-
 // storeError is a path or a file the store will not read or write.
 type storeError struct {
 	subject, detail string
@@ -47,12 +34,6 @@ func (e *interruptedError) Error() string {
 		landed = strings.Join(e.written, ", ")
 	}
 	return fmt.Sprintf("%s could not be replaced (%v); this batch is interrupted, not refused — already committed: %s", e.failed, e.cause, landed)
-}
-
-type outcome struct {
-	status                  status
-	written                 []string
-	reason, subject, detail string
 }
 
 func lineTerminator(line string) string {
@@ -159,5 +140,3 @@ func stillMatches(src *kb.Source, path string, disk *string) bool {
 	}
 	return (now == nil) == (disk == nil) && (now == nil || *now == *disk)
 }
-
-func scoreEqual(a, b *float64) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }

@@ -23,6 +23,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"kbase/internal/argmark"
 )
 
 // Logger is what the rest of the appliance logs through.
@@ -70,7 +72,8 @@ const DefaultLevel = LevelWarn
 // something went wrong; kbase is a documentation tool, not a keystore (ruled
 // 2026-08-14), and it never writes key material here (see config's providers
 // loader, which keeps key bytes out of every record). Same number as
-// atomicfile.CreateMode, declared here because log imports nothing of kbase.
+// atomicfile.CreateMode, declared here because log imports nothing of kbase
+// but argmark.
 const logFileMode = 0o666
 
 // ParseLevel converts a --log-level value to a Level. Surrounding space is
@@ -150,8 +153,24 @@ func New(opts Options) (Logger, io.Closer, error) {
 		dest, closer = io.MultiWriter(console, f), f
 	}
 
-	handler := slog.NewTextHandler(dest, &slog.HandlerOptions{Level: level.slogLevel()})
+	handler := slog.NewTextHandler(dest, &slog.HandlerOptions{Level: level.slogLevel(), ReplaceAttr: spelled})
 	return &slogLogger{l: slog.New(handler)}, closer, nil
+}
+
+// spelled is a record's attribute, the message among them, with each argument
+// marker its text holds spelled as the command line takes it: a log line is
+// read at a terminal or in a file, never by an MCP reader, and carries no
+// marker. A string's text and an error's are spelled; other values hold none.
+func spelled(_ []string, a slog.Attr) slog.Attr {
+	switch v := a.Value.Any().(type) {
+	case string:
+		a.Value = slog.StringValue(argmark.Spelling{}.Spell(v))
+	case error:
+		if text := v.Error(); argmark.Marked(text) {
+			a.Value = slog.StringValue(argmark.Spelling{}.Spell(text))
+		}
+	}
+	return a
 }
 
 // Discard returns a Logger that drops every record. It exists so a component

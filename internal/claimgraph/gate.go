@@ -18,7 +18,7 @@ func gate(kbRoot string, lg log.Logger) []Finding {
 	}
 	slices.Sort(written)
 	findings := []Finding{pass("refresh", field("written", slices.Compact(written)))}
-	found, err := index.BuildVerify(src)
+	found, err := index.Verify(src)
 	if err != nil {
 		return append(findings, Finding{StatusFail, "verify", recordOf(field("detail", err.Error()))})
 	}

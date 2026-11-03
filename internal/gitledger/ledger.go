@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"kbase/internal/log"
@@ -63,8 +64,9 @@ type Entry struct {
 	Stage, Commit, Subject, Body string
 }
 
-// Trail is every boundary commit reachable from HEAD, newest first. A branch
-// with no commits has an empty trail.
+// Trail is every boundary commit reachable from HEAD above Removal, newest
+// first: a removal of the owned paths ends every trail below it. A branch with
+// no commits has an empty trail.
 func (r *Repo) Trail() ([]Entry, error) {
 	head, err := r.Head()
 	if err != nil {
@@ -73,7 +75,15 @@ func (r *Repo) Trail() ([]Entry, error) {
 	if head == "" {
 		return nil, nil
 	}
-	out, err := r.run("log", "--grep=^"+Prefix, "--format=%H%x1f%s%x1f%b%x1e")
+	removal, err := r.Removal()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"log", "--grep=^" + Prefix, "--format=%H%x1f%s%x1f%b%x1e"}
+	if removal != "" {
+		args = append(args, "HEAD", "^"+removal)
+	}
+	out, err := r.run(args...)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +100,60 @@ func (r *Repo) Trail() ([]Entry, error) {
 	return trail, nil
 }
 
+// Removal is the newest commit reachable from HEAD, no boundary, that took
+// every owned path out of the tree — kb-root/ removed to start over — "" where
+// none did. A boundary is never one: a fresh build's first boundary commits the
+// removal it started over.
+func (r *Repo) Removal() (string, error) {
+	head, err := r.Head()
+	if err != nil || head == "" {
+		return "", err
+	}
+	var paths []string
+	for _, p := range r.owned {
+		if !strings.HasPrefix(p, ":(exclude)") {
+			paths = append(paths, p)
+		}
+	}
+	out, err := r.run(append([]string{"log", "--no-renames", "--diff-filter=D", "--format=%H%x1f%s", "--"}, r.owned...)...)
+	if err != nil {
+		return "", err
+	}
+	var candidates []string
+	var query strings.Builder
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		commit, subject, ok := strings.Cut(line, "\x1f")
+		if !ok || subjectRE.MatchString(subject) {
+			continue
+		}
+		candidates = append(candidates, commit)
+		for _, p := range paths {
+			query.WriteString(commit + ":" + p + "\n")
+		}
+	}
+	if len(candidates) == 0 || len(paths) == 0 {
+		return "", nil
+	}
+	out, err = r.gitIn(r.Root, query.String(), "cat-file", "--batch-check")
+	if err != nil {
+		return "", err
+	}
+	answers := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(answers) != len(candidates)*len(paths) {
+		return "", fmt.Errorf("git cat-file answered %d of %d objects", len(answers), len(candidates)*len(paths))
+	}
+	for i, commit := range candidates {
+		gone := true
+		for _, a := range answers[i*len(paths) : (i+1)*len(paths)] {
+			gone = gone && strings.HasSuffix(a, " missing")
+		}
+		if gone {
+			return commit, nil
+		}
+	}
+	return "", nil
+}
+
 // Head is the commit HEAD names, "" on a branch with no commits.
 func (r *Repo) Head() (string, error) {
 	out, err := r.run("rev-parse", "--verify", "--quiet", "HEAD")
@@ -101,19 +165,6 @@ func (r *Repo) Head() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
-}
-
-// Parent is commit's first parent, "" where commit is a root commit.
-func (r *Repo) Parent(commit string) (string, error) {
-	out, err := r.run("rev-list", "--parents", "-n", "1", commit)
-	if err != nil {
-		return "", err
-	}
-	fields := strings.Fields(out)
-	if len(fields) < 2 {
-		return "", nil
-	}
-	return fields[1], nil
 }
 
 // Record commits the owned paths as the boundary of stage, its subject
@@ -142,11 +193,15 @@ func (r *Repo) commit(subject, body string) (string, error) {
 			return "", err
 		}
 	}
+	gone, err := r.headOnly(paths)
+	if err != nil {
+		return "", err
+	}
 	args := []string{"commit", "--quiet", "--allow-empty", "--only", "-m", subject}
 	if body != "" {
 		args = append(args, "-m", body)
 	}
-	if _, err := r.run(append(append(args, "--"), paths...)...); err != nil {
+	if _, err := r.run(append(append(append(args, "--"), paths...), gone...)...); err != nil {
 		return "", err
 	}
 	out, err := r.run("rev-parse", "HEAD")
@@ -185,6 +240,17 @@ func (r *Repo) status(args ...string) ([]string, error) {
 		}
 	}
 	return dirty, nil
+}
+
+// Move renames the tracked file at root-relative from to root-relative to
+// with git mv, making to's directory where none stands, so the index records
+// the rename.
+func (r *Repo) Move(from, to string) error {
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(r.Root, to)), 0o755); err != nil {
+		return err
+	}
+	_, err := r.run("mv", "--", from, to)
+	return err
 }
 
 // Restore returns every owned path to its state at commit — HEAD where commit
@@ -289,11 +355,36 @@ func (r *Repo) IndexLock() (string, error) {
 	return p, nil
 }
 
+// Exclude is an owned path that takes path out of the others: Open(dir,
+// []string{"kb-root", Exclude("kb-root/.index")}, lg) owns kb-root/ outside
+// its .index/.
+func Exclude(path string) string { return ":(exclude)" + path }
+
+// Paths is every root-relative path commit changed, a rename as its two
+// sides.
+func (r *Repo) Paths(commit string) ([]string, error) {
+	out, err := r.run("show", "-z", "--name-only", "--no-renames", "--format=", commit)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p = strings.TrimLeft(p, "\n"); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
 // present is the owned paths git would accept in a pathspec: on disk, or
-// tracked.
+// tracked, and every exclusion.
 func (r *Repo) present() ([]string, error) {
 	var paths []string
 	for _, p := range r.owned {
+		if strings.HasPrefix(p, ":(exclude)") {
+			paths = append(paths, p)
+			continue
+		}
 		if _, err := os.Lstat(filepath.Join(r.Root, p)); err == nil {
 			paths = append(paths, p)
 			continue
@@ -309,14 +400,42 @@ func (r *Repo) present() ([]string, error) {
 	return paths, nil
 }
 
+// headOnly is the owned paths missing from present that HEAD still holds: a
+// path a staged move or removal took off disk and out of the index, which a
+// commit takes and an add cannot name.
+func (r *Repo) headOnly(present []string) ([]string, error) {
+	head, err := r.Head()
+	if err != nil || head == "" {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range r.owned {
+		if slices.Contains(present, p) {
+			continue
+		}
+		out, err := r.run("ls-tree", "--name-only", "HEAD", "--", p)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(out) != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
 func (r *Repo) run(args ...string) (string, error) { return r.git(r.Root, args...) }
 
 // git runs one git command in dir. It takes no context: a commit cut short
 // would leave the repository's index locked, so a cancelled build lets the
 // one in flight finish.
-func (r *Repo) git(dir string, args ...string) (string, error) {
+func (r *Repo) git(dir string, args ...string) (string, error) { return r.gitIn(dir, "", args...) }
+
+// gitIn is git with stdin as the command's standard input.
+func (r *Repo) gitIn(dir, stdin string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	r.lg.Debug("git", "dir", dir, "args", strings.Join(args, " "))

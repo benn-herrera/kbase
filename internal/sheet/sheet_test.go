@@ -58,15 +58,15 @@ func TestReduce(t *testing.T) {
 
 func TestClaimKind(t *testing.T) {
 	leaf := "# L\n\n" +
-		"> **Lemma**\n> **Lemma 2** (Small). *Holds.*\n> More. <!-- claim-rigor: clm-blk001 -->\n\n" +
-		"> **Note.** An aside. <!-- claim-rigor: clm-not001 -->\n\n" +
-		"> Plain quote. <!-- claim-rigor: clm-qte001 -->\n\n" +
-		">\n> **Theorem**\n> **Theorem 9.** Holds. <!-- claim-rigor: clm-gap001 -->\n\n" +
-		"> <span id=\"prop:p\">**Proposition 3**</span> (P).\n>\n> Holds. <!-- claim-rigor: clm-spn001 -->\n\n" +
-		"> A plain opening, *then emphasis*. <!-- claim-rigor: clm-emp001 -->\n\n" +
-		"``` math\na = b <!-- claim-rigor: clm-eqn001 -->\n```\n\n" +
-		"```\ncode <!-- claim-rigor: clm-cod001 -->\n```\n\n" +
-		"Prose. <!-- claim-rigor: clm-prs001 -->\n\n" +
+		"> **Lemma**\n> **Lemma 2** (Small). *Holds.*\n> More. <!-- kbase-id: clm-blk001 -->\n\n" +
+		"> **Note.** An aside. <!-- kbase-id: clm-not001 -->\n\n" +
+		"> Plain quote. <!-- kbase-id: clm-qte001 -->\n\n" +
+		">\n> **Theorem**\n> **Theorem 9.** Holds. <!-- kbase-id: clm-gap001 -->\n\n" +
+		"> <span id=\"prop:p\">**Proposition 3**</span> (P).\n>\n> Holds. <!-- kbase-id: clm-spn001 -->\n\n" +
+		"> A plain opening, *then emphasis*. <!-- kbase-id: clm-emp001 -->\n\n" +
+		"``` math\na = b <!-- kbase-id: clm-eqn001 -->\n```\n\n" +
+		"```\ncode <!-- kbase-id: clm-cod001 -->\n```\n\n" +
+		"Prose. <!-- kbase-id: clm-prs001 -->\n\n" +
 		"``` math\nc\n\\label{eq:c}\n```\n"
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "v"), 0o755); err != nil {
@@ -149,8 +149,8 @@ func TestStyleTablesAreTotal(t *testing.T) {
 	if len(strokes) != len(kb.Relations)-1 {
 		t.Errorf("%d strokes for the %d drawn relations, want one each", len(strokes), len(kb.Relations)-1)
 	}
-	if len(ladderFills) != len(kb.BuildBandLadder) {
-		t.Errorf("%d fills for a ladder of %d bands", len(ladderFills), len(kb.BuildBandLadder))
+	if len(ladderFills) != len(kb.StrengthBandLadder) {
+		t.Errorf("%d fills for a ladder of %d bands", len(ladderFills), len(kb.StrengthBandLadder))
 	}
 }
 

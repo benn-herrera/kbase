@@ -22,6 +22,10 @@ import (
 // beside it that the sheets do not read, and the DOT the sheets compose to.
 const adjagentFixture = "testdata/adjagent-sheet"
 
+// sheetGotDir is where TestAdjagentSheetGoldens writes a sheet that differs
+// from its golden, under the golden's name.
+const sheetGotDir = "../../test-data/transient/unit_tests/sheet/got"
+
 func openAdjagentFixture(t *testing.T) *kb.Source {
 	t.Helper()
 	src, err := kbload.Open(filepath.Join(adjagentFixture, "kb-root"))
@@ -107,10 +111,17 @@ func TestAdjagentSheetGoldens(t *testing.T) {
 			continue
 		}
 		if got != want {
+			gotPath := filepath.Join(sheetGotDir, golden)
+			if err := os.MkdirAll(sheetGotDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(gotPath, []byte(got), 0o644); err != nil {
+				t.Fatal(err)
+			}
 			gl, wl := strings.Split(got, "\n"), strings.Split(want, "\n")
 			for i := range max(len(gl), len(wl)) {
 				if i >= len(gl) || i >= len(wl) || gl[i] != wl[i] {
-					t.Errorf("%s differs from %s at line %d:\ngot:  %s\nwant: %s", path, golden, i+1, at(gl, i), at(wl, i))
+					t.Errorf("%s differs from %s at line %d:\ngot:  %s\nwant: %s\nthe drawn sheet is written to %s", path, golden, i+1, at(gl, i), at(wl, i), gotPath)
 					break
 				}
 			}
@@ -180,14 +191,17 @@ func composedDOT(t *testing.T, root string) map[string]string {
 	return out
 }
 
-// TestBuildRecordsDrawNothing: the build records beside kb-root move no
-// sheet — neither the fixture's unmarked record, whose "points" answer the
-// goldens draw as the one supports stroke, nor a cull record linking a drawn
+// TestBuildRecordsDrawNothing: the build records move no sheet — neither the
+// fixture's unmarked record, whose "points" answer the goldens draw as the
+// one supports stroke, nor a cull record in kb-root/.build/ linking a drawn
 // supports pair.
 func TestBuildRecordsDrawNothing(t *testing.T) {
 	root := copiedAdjagentFixture(t)
 	without := composedDOT(t, root)
 	record := "links:\n  - a: clm-aaa001\n    b: clm-bbb001\n    harvest: adjacent\n"
+	if err := os.MkdirAll(filepath.Join(root, buildrecords.Dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, buildrecords.CullFile), []byte(record), 0o644); err != nil {
 		t.Fatal(err)
 	}

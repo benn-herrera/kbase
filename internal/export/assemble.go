@@ -396,7 +396,7 @@ func bibliography(src *kb.Source, tree Tree) (map[string]string, error) {
 		return nil, fmt.Errorf("reading the node records: %w", err)
 	}
 	for _, w := range g.Works {
-		add(kb.WorkKey(w.ID), w.Title)
+		add(w.Label, w.Title)
 	}
 	return out, nil
 }

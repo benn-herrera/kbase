@@ -17,13 +17,13 @@ type entry struct {
 type plan struct {
 	entries []entry
 	works   []CitedWork
-	// restsOn is (entry position, work id), the off-graph edges.
+	// restsOn is (entry position, work's citation key), the off-graph edges.
 	restsOn []restsOn
 }
 
 type restsOn struct {
-	entry  int
-	workID string
+	entry   int
+	workKey string
 }
 
 func blockRationale(c Claim) string {
@@ -86,13 +86,13 @@ func assemblePlan(t *Tree, inv *Inventory, claims []Claim) plan {
 		if !ok {
 			continue
 		}
-		for _, id := range off.pairings[s] {
-			p.restsOn = append(p.restsOn, restsOn{i, id})
-			cited[id] = true
+		for _, key := range off.pairings[s] {
+			p.restsOn = append(p.restsOn, restsOn{i, key})
+			cited[key] = true
 		}
 	}
 	for _, w := range off.works {
-		if cited[w.ID()] {
+		if cited[w.Key] {
 			p.works = append(p.works, w)
 		}
 	}

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/formats/format300"
+	"kbase/internal/formats/format400"
 )
 
 // Derived-field placeholders: the identity value of each field refresh
@@ -16,22 +16,22 @@ const (
 	LeafReferencesPendingFooter = LeafReferencesPrefix + " *(none)*"
 )
 
-// BuildBand is one rung of the strength ladder; Threshold is its inclusive
+// StrengthBand is one rung of the strength ladder; Threshold is its inclusive
 // lower bound.
-type BuildBand struct {
+type StrengthBand struct {
 	Slug         string
 	Threshold    float64
 	StatusPhrase string
 	Label        string
 }
 
-// BuildBandLadder is in descending threshold order. Its last rung states an
+// StrengthBandLadder is in descending threshold order. Its last rung states an
 // outcome and not a cause: every strength under 0.20 lands there from either
 // direction — a refuter's cap, or a minimum no premise carries — and what it
 // says is that nothing a claim built on this would inherit substantiates the
 // claim. The cause, where a reader needs it, is the fault record and the
 // derivation trace's own.
-var BuildBandLadder = []BuildBand{
+var StrengthBandLadder = []StrengthBand{
 	{"ok-to-build", 0.85, "ok to build on", "ok to build on"},
 	{"ok-with-caveats", 0.65, "ok to build on, see caveats", "ok to build on, see caveats"},
 	{"input-only", 0.45, "use as input only, don't build deeper", "use as input only"},
@@ -44,22 +44,22 @@ const UnknownBandSlug = "unknown"
 
 // BandFor is the band a strength falls in, or nil for a pending one. A value
 // below the ladder falls to its last rung.
-func BandFor(strength *float64) *BuildBand {
+func BandFor(strength *float64) *StrengthBand {
 	if strength == nil {
 		return nil
 	}
-	for i := range BuildBandLadder {
-		if *strength >= BuildBandLadder[i].Threshold {
-			return &BuildBandLadder[i]
+	for i := range StrengthBandLadder {
+		if *strength >= StrengthBandLadder[i].Threshold {
+			return &StrengthBandLadder[i]
 		}
 	}
-	return &BuildBandLadder[len(BuildBandLadder)-1]
+	return &StrengthBandLadder[len(StrengthBandLadder)-1]
 }
 
 // The id body's alphabet and length, as IDBody spells them.
 const (
-	HashAlphabet = format300.IDBodyAlphabet
-	HashLen      = format300.IDBodyLen
+	HashAlphabet = format400.IDBodyAlphabet
+	HashLen      = format400.IDBodyLen
 )
 
 // IDPlaceholders are authored placeholder ids, never real nodes: each minted
@@ -97,11 +97,11 @@ func MintID(kind string, taken func(id string) bool) string {
 // LabelName is the name a labelled block's label line carries — letters, in
 // words single-spaced — as a pattern fragment: a label line is read only where
 // its name is this.
-const LabelName = format300.LabelName
+const LabelName = format400.LabelName
 
 // LabelLine is the name line carries where it is a labelled block's label
 // line as it is read; ok false for any other line.
-func LabelLine(line string) (name string, ok bool) { return format300.LabelLine(line) }
+func LabelLine(line string) (name string, ok bool) { return format400.LabelLine(line) }
 
 // The document kinds a frontmatter block's kind: names, by path shape alone:
 // the entry point, a document with children, one without.
@@ -126,30 +126,21 @@ func DocumentKind(p string, hasChildren bool) string {
 	return DocumentLeaf
 }
 
-// WorkKey is the citation key inside a work id, or "" for any other id.
-func WorkKey(nodeID string) string {
-	prefix, key, _ := strings.Cut(nodeID, "-")
-	if prefix != WorkPrefix {
-		return ""
-	}
-	return key
-}
-
 // AxiomRigor is an axiom's strength by rule: an axiom has no premises, so its
 // strength is its rigor, 1.0, which no authored file carries.
 const AxiomRigor = 1.0
 
 // EquationLabel is the \label an equation node's title carries, or "" with
 // ok false for any other title.
-func EquationLabel(title string) (string, bool) { return format300.EquationLabel(title) }
+func EquationLabel(title string) (string, bool) { return format400.EquationLabel(title) }
 
 // EquationLocator is the text that locates the line inside an equation's
 // display-maths fence carrying its label, where the equation's statement
 // marker goes.
-func EquationLocator(label string) string { return format300.EquationLocator(label) }
+func EquationLocator(label string) string { return format400.EquationLocator(label) }
 
 // DisplayMathInfo is the info string of a displayed equation's fence.
-const DisplayMathInfo = format300.DisplayMathInfo
+const DisplayMathInfo = format400.DisplayMathInfo
 
 // SheetDigestDrawn is whether a KB whose node rows are these holds the volume
 // digest sheet and the per-volume sheets: two or more volumes hold nodes, a
@@ -177,6 +168,14 @@ var ScoringRelations = []string{RelationSupports, RelationFounds, RelationLifts,
 // lifts and refutes do; references and demoted stand outside the walk.
 func Scoring(relation string) bool { return slices.Contains(ScoringRelations, relation) }
 
+// DemotedMatch reports, of a demoted record, whether it replaced the relation
+// edge from source to target.
+func DemotedMatch(relation, source, target string) func(DemotedEdge) bool {
+	return func(d DemotedEdge) bool {
+		return d.ReplacedRelation == relation && d.Source == source && d.Target == target
+	}
+}
+
 // BearingWalkRelations is the relations a score run's bearing pass asks about,
 // in listing order: the edges a model may judge from the KB itself.
 var BearingWalkRelations = []string{RelationSupports, RelationLifts, RelationRefutes}
@@ -185,6 +184,6 @@ var BearingWalkRelations = []string{RelationSupports, RelationLifts, RelationRef
 // relation: supports, lifts and refutes do. A founds edge carries a bearing —
 // Scoring says so, and the values table prices it — but its source is a work or
 // an axiom lying outside the corpus, so a model shown only the KB cannot judge
-// the link: that bearing is the user's, written by hand through set-bearing, as
-// a work's rigor is through set-rigor.
+// the link: that bearing is the user's, written by hand through add-edge or
+// edit-edge, as a work's rigor is through add-work or edit-work.
 func BearingWalk(relation string) bool { return slices.Contains(BearingWalkRelations, relation) }

@@ -37,7 +37,7 @@ func seedElisionLeaves(t *testing.T, leaves [][]string, wires values, demoted ..
 		entry += "- [" + title + "](" + rel + ")\n"
 		prose := ""
 		for _, n := range names {
-			prose += "\n" + elisionTitles[n] + " holds here. <!-- claim-rigor: " + elisionIDs[n] + " -->\n"
+			prose += "\n" + elisionTitles[n] + " holds here." + kb.StatementMarker(elisionIDs[n]) + "\n"
 			titles[elisionIDs[n]] = elisionTitles[n]
 		}
 		docs[rel] = "[↑ Entry](entry-point.md)\n\n# " + title + "\n" + prose
@@ -91,9 +91,9 @@ func TestIssueCullsLeavesNoUnknownID(t *testing.T) {
 				ids[i] = elisionIDs[n]
 			}
 			run := func(op string, values []byte) write.Result {
-				return write.Run(op, write.Options{KBRoot: root, Values: values, NoRefresh: true, Provenance: write.ProvenanceMachine})
+				return write.Run(op, write.Options{KBRoot: root, Values: values, Provenance: write.ProvenanceMachine})
 			}
-			if _, err := IssueCulls(ids, run); err != nil {
+			if _, err := IssueCulls(root, ids, run); err != nil {
 				t.Errorf("IssueCulls: %v", err)
 			}
 			tree, err := readTree(root)
@@ -119,7 +119,7 @@ func TestIssueCullsLeavesNoUnknownID(t *testing.T) {
 				for _, fl := range f.Fields {
 					items, _ := fl.Value.([]result.Item)
 					for _, it := range items {
-						if it.Check == "unknown id" {
+						if it.Check == kb.CheckUnknownID {
 							t.Errorf("gate: %s", it.Detail)
 						}
 					}
@@ -129,68 +129,103 @@ func TestIssueCullsLeavesNoUnknownID(t *testing.T) {
 	}
 }
 
-// TestIssueCullsDropsAClaimNamedOnlyByAnotherCull: the one case where the
-// per-op batches accept what culling claim by claim refuses — y named only in
-// x's rationale, y issued first — lands, both records gone.
+// TestIssueCullsDropsAClaimNamedOnlyByAnotherCull: y named only in x's
+// rationale lands in one batch with x whichever of the two the plan names
+// first, both records gone, x removed before y; y culled alone is refused
+// while x stands naming it. x and y naming each other land too, an edit-claim
+// entry clearing one rationale ahead of both removals.
 func TestIssueCullsDropsAClaimNamedOnlyByAnotherCull(t *testing.T) {
-	seed := func() (string, func(op string, values []byte) write.Result) {
+	seed := func(rationales values) (string, func(op string, values []byte) write.Result) {
 		root := seedElisionLeaves(t, [][]string{{"a", "b", "c", "d"}, {"x", "y"}},
 			values{dependsOn("a", "x"), dependsOn("x", "y"), dependsOn("y", "b"), dependsOn("c", "a"), dependsOn("b", "d")})
 		w := writer{kbRoot: root, lg: log.Discard()}
-		if _, err := w.run("seed", "set-rationale", values{{"id": elisionIDs["x"], "rationale": "Follows from " + elisionIDs["y"] + "."}}); err != nil {
+		if _, err := w.run("seed", write.EditClaim, rationales); err != nil {
 			t.Fatal(err)
 		}
 		return root, w.raw
 	}
-	cull := []string{elisionIDs["y"], elisionIDs["x"]}
+	names := func(n, m string) map[string]any {
+		return map[string]any{"id": elisionIDs[n], "rationale": "Follows from " + elisionIDs[m] + "."}
+	}
+	x, y := elisionIDs["x"], elisionIDs["y"]
 
-	_, run := seed()
-	if _, err := IssueCulls(cull[:1], run); err == nil {
+	root, run := seed(values{names("x", "y")})
+	if _, err := IssueCulls(root, []string{y}, run); err == nil {
 		t.Fatal("culling y alone landed while x's rationale names it; the case this test pins does not arise")
 	}
-	root, run := seed()
-	if _, err := IssueCulls(cull, run); err != nil {
-		t.Fatalf("IssueCulls: %v", err)
-	}
-	g := loadRecords(t, root)
-	for _, id := range cull {
-		if slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == id }) {
-			t.Errorf("%s's record stands after its cull", id)
-		}
+	for _, tc := range []struct {
+		name       string
+		rationales values
+		plan       []string
+		want       []string
+	}{
+		{"x named first", values{names("x", "y")}, []string{x, y}, []string{"remove-node " + x, "remove-node " + y}},
+		{"y named first", values{names("x", "y")}, []string{y, x}, []string{"remove-node " + x, "remove-node " + y}},
+		{"each naming the other", values{names("x", "y"), names("y", "x")}, []string{x, y},
+			[]string{"edit-claim " + y, "remove-node " + x, "remove-node " + y}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, run := seed(tc.rationales)
+			var issued []string
+			spy := func(op string, data []byte) write.Result {
+				var batch struct {
+					Entry []struct{ Operation, ID string }
+				}
+				if err := json.Unmarshal(data, &batch); err != nil {
+					t.Fatal(err)
+				}
+				for _, e := range batch.Entry {
+					issued = append(issued, e.Operation+" "+e.ID)
+				}
+				return run(op, data)
+			}
+			if _, err := IssueCulls(root, tc.plan, spy); err != nil {
+				t.Fatalf("IssueCulls: %v", err)
+			}
+			if !slices.Equal(issued, tc.want) {
+				t.Errorf("issued %q, want %q", issued, tc.want)
+			}
+			g := loadRecords(t, root)
+			for _, id := range tc.plan {
+				if slices.ContainsFunc(g.Claims, func(n kb.ClaimNode) bool { return n.ID == id }) {
+					t.Errorf("%s's record stands after its cull", id)
+				}
+			}
+		})
 	}
 }
 
-// TestIssueCullsStopsOnRefusal: each op is one batch over every culled id in
-// plan order, and the issuer stops at the first batch whose outcome is
-// neither done nor unchanged, with the batches before it issued.
+// TestIssueCullsStopsOnRefusal: the culls are one batch removing every culled
+// id, in plan order where no culled claim names another, and an outcome
+// neither done nor unchanged is the issuer's error, returned with that
+// outcome.
 func TestIssueCullsStopsOnRefusal(t *testing.T) {
+	root := seedElisionLeaves(t, [][]string{{"a", "b", "c", "d"}, {"x", "y"}}, elisionWires())
 	var ops []string
 	run := func(op string, values []byte) write.Result {
 		var batch struct {
-			Entry []struct{ ID string }
+			Entry []struct{ Operation, ID string }
 		}
 		if err := json.Unmarshal(values, &batch); err != nil {
 			t.Fatal(err)
 		}
-		ids := make([]string, len(batch.Entry))
+		entries := make([]string, len(batch.Entry))
 		for i, e := range batch.Entry {
-			ids[i] = e.ID
+			entries[i] = e.Operation + " " + e.ID
 		}
-		ops = append(ops, op+" "+strings.Join(ids, ","))
-		if op == "drop-inbound-edges" {
-			return write.Result{Outcome: result.Refused}
-		}
-		return write.Result{Outcome: result.Done}
+		ops = append(ops, op+": "+strings.Join(entries, ", "))
+		return write.Result{Outcome: result.Refused}
 	}
-	results, err := IssueCulls([]string{"y", "x"}, run)
+	y, x := elisionIDs["y"], elisionIDs["x"]
+	res, err := IssueCulls(root, []string{y, x}, run)
 	if err == nil {
 		t.Fatal("IssueCulls succeeded over a refused op")
 	}
-	want := []string{"drop-claim-edges y,x", "drop-inbound-edges y,x"}
+	want := []string{write.Batch + ": remove-node " + y + ", remove-node " + x}
 	if !slices.Equal(ops, want) {
 		t.Errorf("issued %q, want %q", ops, want)
 	}
-	if len(results) != 1 {
-		t.Errorf("returned %d results, want the 1 before the refusal", len(results))
+	if res.Outcome != result.Refused {
+		t.Errorf("returned outcome %s, want the refusal", res.Outcome)
 	}
 }

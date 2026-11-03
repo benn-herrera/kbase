@@ -1,0 +1,8 @@
+# ${ID1} is the lower of the two staged claims' ids and ${ID3} the staged
+# analysis's id, substituted before the op reads the file: the demoted record
+# from ${ID1} to ${ID3}, named as its edges row names it. restore-demoted and
+# remove-edge both read it.
+entry:
+- source: ${ID1}
+  target: ${ID3}
+  relation: demoted

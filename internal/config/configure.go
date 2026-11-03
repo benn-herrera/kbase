@@ -1,364 +1,197 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"kbase/internal/argmark"
 	"kbase/internal/result"
 )
 
-const (
-	// ModelMapPairSep separates category assignments within one --model-map
-	// value; modelMapAssign separates a category from its reference.
-	ModelMapPairSep = ","
-	modelMapAssign  = "="
-
-	// keyModelMap is the flag a reference the pool cannot resolve belongs to.
-	keyModelMap = "--model-map"
-
-	// modelMapSyntax is the flag spelling quoted back to the user in every
-	// failure a manual assignment would resolve. A value is a reference, the
-	// form config.toml's [models] values take.
-	modelMapSyntax = keyModelMap + " " + CategoryDecision + "=<entry>/<id>" + ModelMapPairSep +
-		CategoryText + "=<entry>/<id>" + ModelMapPairSep + CategoryScoring + "=<entry>/<id>"
-)
-
-// CheckDetect names a category no --model-map assignment supplied.
-const CheckDetect = "detect"
-
 // CatalogueFunc is the model ids entry's provider lists, in the order it
-// listed them. Its error is returned by Configure unchanged.
+// listed them. Its error is returned by ConfigureModels unchanged.
 type CatalogueFunc func(entry Provider) ([]string, error)
 
-// ConfigureRequest is one configure run: the loaded configuration, whose
-// WriteDir is the layer the run writes into, the --provider flag, the
-// category→reference map ParseModelMap read from --model-map, and whether the
-// run may create the layer's files.
-type ConfigureRequest struct {
-	Inputs   Inputs
-	Provider string
-	Models   map[string]Reference
-	Create   bool
-}
-
-// Offline is Create with no Provider: the run dials nothing, and no reference
-// is checked against a catalogue.
-func (req ConfigureRequest) Offline() bool {
-	return req.Create && strings.TrimSpace(req.Provider) == ""
-}
-
-// CatalogueMiss is a --model-map reference whose model its provider's
-// catalogue does not list.
-type CatalogueMiss struct {
-	Category  string
+// RoleReference is a role and a reference it holds or is given.
+type RoleReference struct {
+	Role      Role
 	Reference Reference
 }
 
-// Configured is what a configure run got as far as, whatever its error.
-type Configured struct {
-	// Selected says the dialled run settled the entry it configures:
-	// Provider, Rule and Layer name it, all "" where the references alone name
-	// their providers.
-	Selected              bool
-	Provider, Rule, Layer string
-
-	// Misses are the references their catalogues omit, in category order.
-	Misses []CatalogueMiss
-
-	// Models is the [models] table the run wrote or tried to write, nil where
-	// it did not reach the write; Written is the files it wrote, in order.
+// ConfiguredModels is what a configure-models run got as far as, whatever its
+// error: the references whose model its provider's catalogue does not list, in
+// role order, and — once it reached the write — the [models] table the target
+// config.toml holds and the files it wrote.
+type ConfiguredModels struct {
+	Misses  []RoleReference
 	Models  *ModelMap
 	Written []string
 }
 
-// Configure assigns a reference to each model category and writes them to the
-// target layer's config.toml.
-//
-// Every category gets a reference from the map or, for scoring alone, from
-// the target file's own value: a category with neither is refused, listing
-// what the selected provider offered, with nothing written — config.toml is
-// what every later stage draws its models from, and nothing between the flags
-// and the file picks a model on the user's behalf. Each reference is checked
-// against its own provider's catalogue, read through catalogue. Create with no
-// Provider is the one exception: catalogue is never called, the run writes
-// what the map names over what the file holds, and the superseded provider key
-// is removed.
-func Configure(req ConfigureRequest, catalogue CatalogueFunc) (Configured, error) {
-	if req.Offline() {
-		return configureOffline(req)
-	}
-	return configureDialed(req, catalogue)
-}
-
-// configureDialed is the ordinary path: every reference the map names is
-// checked against its own provider's catalogue and the three references are
-// written; an unassigned category is offered the selected provider's
-// catalogue. A refusal or a failed listing writes nothing.
-func configureDialed(req ConfigureRequest, catalogue CatalogueFunc) (Configured, error) {
-	var run Configured
-	in := req.Inputs
-
-	// The one value this run may leave standing: the target file's own
-	// scoring reference, where the map names none. It is the file's, not the
-	// merge's — a lower layer's value is not this file's to keep.
-	configFile := ConfigPath(in.WriteDir)
-	fileCfg, err := LoadConfig(configFile)
-	if err != nil {
-		return run, err
-	}
-	scoring, err := keepScoring(req.Models, configFile, fileCfg.Models.Scoring)
+// ConfigureModels writes a reference into in.WriteDir's config.toml for each
+// role given holds a value for, creating the file where it is absent; the
+// roles not given stand as the file has them, and so does every other byte. in
+// is the stack written into: that layer and the layers beneath it. A value
+// that is no reference, and a provider the pool in does not hold, are refused,
+// every one at once, before anything is dialled; so is a run naming no role.
+// The refusal of a provider the pool does not hold gives the configure-providers
+// call that adds it, carrying locationFlag, the location flag of the call
+// being answered ("" for none). The provider part folds to lowercase, as the
+// pool's names are, and is written so. Each provider named is listed once,
+// through catalogue: a model its catalogue omits is a miss, not a failure,
+// since catalogues rotate; a listing that fails is returned, nothing written.
+func ConfigureModels(in Inputs, locationFlag string, given map[Role]string, catalogue CatalogueFunc) (ConfiguredModels, error) {
+	var run ConfiguredModels
+	refs, err := givenReferences(in, locationFlag, given)
 	if err != nil {
 		return run, err
 	}
 
-	name, rule, err := Select(in, req.Provider)
-	if err != nil {
-		if req.Provider != "" || len(req.Models) == 0 {
-			return run, err
-		}
-		// The references name their own providers, so the pool's size is no
-		// reason to demand a selection no reference needs.
-		name, rule = "", ""
-	}
-	run.Selected, run.Provider, run.Rule, run.Layer = true, name, rule, in.Providers[name].Layer
-
-	// Every distinct provider the references name, the selected entry first:
-	// one catalogue is what an unassigned category is offered, and each
-	// reference's own is what its model part is checked against.
-	targets := make([]string, 0, len(Roles)+1)
-	addTarget := func(provider string) {
-		if provider != "" && !slices.Contains(targets, provider) {
-			targets = append(targets, provider)
-		}
-	}
-	addTarget(name)
+	catalogues := map[string][]string{}
 	for _, role := range Roles {
-		if ref, given := req.Models[string(role)]; given {
-			addTarget(ref.Provider)
-		}
-	}
-
-	catalogues := make(map[string][]string, len(targets))
-	for _, target := range targets {
-		entry, ok := in.Providers[target]
+		ref, ok := refs[role]
 		if !ok {
-			return run, missingReferenceProvider(target, in)
-		}
-		ids, err := catalogue(entry)
-		if err != nil {
-			return run, err
-		}
-		catalogues[target] = ids
-	}
-
-	// A reference whose model part its provider does not list is a warning,
-	// not a failure: catalogues rotate, and a user pinning a model the listing
-	// omits may know something the listing does not.
-	for _, role := range Roles {
-		ref, given := req.Models[string(role)]
-		if given && !slices.Contains(catalogues[ref.Provider], ref.Model) {
-			run.Misses = append(run.Misses, CatalogueMiss{Category: string(role), Reference: ref})
-		}
-	}
-
-	// A category with nothing to write is refused, one item per missing
-	// category; the catalogue listing is the models to choose from.
-	offered := name
-	if offered == "" {
-		offered = targets[0]
-	}
-	var unassigned result.Refusal
-	for _, role := range Roles {
-		if _, given := req.Models[string(role)]; given {
 			continue
 		}
-		if role == RoleScoring && scoring != nil {
-			continue
-		}
-		unassigned = append(unassigned, unassignedCategoryItem(role, offered, catalogues[offered]))
-	}
-	if unassigned != nil {
-		return run, unassigned
-	}
-
-	models := ModelMap{
-		Decision: req.Models[CategoryDecision].String(),
-		Text:     req.Models[CategoryText].String(),
-	}
-	if scoring != nil {
-		models.Scoring = scoring.String()
-	}
-	return run.write(req, Config{Models: models})
-}
-
-// keepScoring is the scoring reference a dialed run writes: the map's where
-// it names one, the target file's own where the file holds one, and none where
-// it holds none — which the run then refuses, naming the key. A file's bare id
-// is refused rather than kept: writing it back would produce a file kbase
-// score refuses.
-func keepScoring(manual map[string]Reference, path, fileValue string) (*Reference, error) {
-	if ref, given := manual[CategoryScoring]; given {
-		return &ref, nil
-	}
-	if fileValue == "" {
-		return nil, nil
-	}
-	ref, err := FileReference(fileValue)
-	if err != nil {
-		return nil, result.Refusal{{Check: CheckProvider, Key: RoleScoring.key(), Path: path,
-			Remedy: "kbase configure " + keyModelMap + " " + CategoryScoring + "=<entry>/<id>",
-			Detail: fmt.Sprintf("%s names %q, and a model is named <provider>/<model> — the entry in %s that supplies the endpoint, then the model it serves",
-				RoleScoring.key(), fileValue, ProvidersFileName)}}
-	}
-	return &ref, nil
-}
-
-// missingReferenceProvider is a --model-map reference whose provider the pool
-// does not hold: the flag is what named it, so the flag is what the refusal
-// names, and the pool's entries are the names that would work. The pool's own
-// refusal is reused, which keeps a faulted provider reading as faulted rather
-// than as a typo.
-func missingReferenceProvider(provider string, in Inputs) result.Refusal {
-	_, _, err := Select(in, provider)
-	var refusal result.Refusal
-	if !errors.As(err, &refusal) || len(refusal) != 1 {
-		return result.Refusal{{Check: CheckUsage, Key: keyModelMap,
-			Detail: fmt.Sprintf("%s names provider %q, which is not in %s", keyModelMap, provider, ProvidersFileName)}}
-	}
-	refusal[0].Key = keyModelMap
-	refusal[0].Detail = fmt.Sprintf("%s names a provider the pool does not hold: %s", keyModelMap, refusal[0].Detail)
-	return refusal
-}
-
-// configureOffline writes what the map names and nothing else: no provider was
-// named, so no request is made and no reference is checked against a catalogue.
-// What the target layer's config.toml already holds — an untouched category, a
-// comment — survives, because configure is an editor and Create is only
-// permission to create the file it edits. The superseded provider key goes
-// either way: the writer removes it.
-func configureOffline(req ConfigureRequest) (Configured, error) {
-	var run Configured
-	cfg, err := LoadConfig(ConfigPath(req.Inputs.WriteDir))
-	if err != nil {
-		return run, err
-	}
-	for _, role := range Roles {
-		if ref, given := req.Models[string(role)]; given {
-			switch role {
-			case RoleDecision:
-				cfg.Models.Decision = ref.String()
-			case RoleText:
-				cfg.Models.Text = ref.String()
-			case RoleScoring:
-				cfg.Models.Scoring = ref.String()
+		if _, listed := catalogues[ref.Provider]; !listed {
+			ids, err := catalogue(in.Providers[ref.Provider])
+			if err != nil {
+				return run, err
 			}
+			catalogues[ref.Provider] = ids
+		}
+		if !slices.Contains(catalogues[ref.Provider], ref.Model) {
+			run.Misses = append(run.Misses, RoleReference{Role: role, Reference: ref})
 		}
 	}
-	return run.write(req, cfg)
-}
 
-// write writes cfg into the target layer, creating the layer's files where the
-// run may — providers.toml, then config.toml — and records what it wrote.
-//
-// Nothing is overwritten: the providers.toml template lands only where no file
-// stands, and config.toml is edited line by line, so a directory a user has
-// already filled in keeps everything this call was not asked to change.
-func (run Configured) write(req ConfigureRequest, cfg Config) (Configured, error) {
-	run.Models = &cfg.Models
-	dir := req.Inputs.WriteDir
-	if req.Create {
-		providersFile := ProvidersPath(dir)
-		created, err := CreateProvidersFile(providersFile)
-		if err != nil {
-			return run, err
-		}
-		if created {
-			run.Written = append(run.Written, providersFile)
-		}
-	}
-	configFile := ConfigPath(dir)
-	wrote, err := UpdateConfig(configFile, cfg)
+	path := ConfigPath(in.WriteDir)
+	cfg, err := LoadConfig(path)
 	if err != nil {
 		return run, err
 	}
+	var set ModelMap
+	for role, ref := range refs {
+		*role.field(&set) = ref.String()
+		*role.field(&cfg.Models) = ref.String()
+	}
+	wrote, err := UpdateConfig(path, Config{Models: set})
+	if err != nil {
+		return run, err
+	}
+	run.Models = &cfg.Models
 	if wrote {
-		run.Written = append(run.Written, configFile)
+		run.Written = append(run.Written, path)
 	}
 	return run, nil
 }
 
-// ParseModelMap turns the raw --model-map values into a category→reference
-// map. Values accumulate across repeats of the flag and across comma-separated
-// entries within one value, so `--model-map decision=a/d --model-map text=a/t`
-// and `--model-map decision=a/d,text=a/t` are the same request. A value is a
-// reference — the form config.toml's [models] values take — so no run writes a
-// bare id. A partial map is syntactically legal here; Configure refuses a
-// category it does not name, so every accepted dialled run assigns what the
-// file does not already hold.
-func ParseModelMap(values []string) (map[string]Reference, error) {
-	categories := categoryNames()
-	out := make(map[string]Reference, len(categories))
-	for _, value := range values {
-		for _, entry := range strings.Split(value, ModelMapPairSep) {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
+// givenReferences is each role given a value for, as the reference it names
+// at the pool entry that supplies it.
+func givenReferences(in Inputs, locationFlag string, given map[Role]string) (map[Role]Reference, error) {
+	refs := map[Role]Reference{}
+	var refusal result.Refusal
+	for _, role := range Roles {
+		value := strings.TrimSpace(given[role])
+		if value == "" {
+			continue
+		}
+		ref, err := ParseReference(value)
+		if err != nil {
+			refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Flag(string(role)),
+				Detail: fmt.Sprintf("%s names %q, and a model reference is <provider>/<model>: a provider, then the model it serves",
+					argmark.Flag(string(role)), value)})
+			continue
+		}
+		refs[role] = ref
+	}
+	if len(refusal) > 0 {
+		return nil, refusal
+	}
+	if len(refs) == 0 {
+		return nil, result.Refusal{{Check: result.CheckUsage,
+			Detail: fmt.Sprintf("name a reference for at least one role: %s, %s or %s",
+				argmark.Flag(string(RoleDecision)), argmark.Flag(string(RoleText)), argmark.Flag(string(RoleScoring)))}}
+	}
+	for _, role := range Roles {
+		ref, ok := refs[role]
+		if !ok {
+			continue
+		}
+		if _, found := in.Providers[ref.Provider]; !found {
+			item := unresolvedProvider(ref.Provider, in)
+			item.Key = argmark.Flag(string(role))
+			// A faulted entry, which carries no remedy, keeps its fault's reason.
+			if item.Remedy != "" {
+				item.Detail = fmt.Sprintf("%s names provider `%s`, which no providers.toml this call reads holds", argmark.Flag(string(role)), ref.Provider)
+				args := map[string]any{"provider": ref.Provider, "base-url": "<url>"}
+				if locationFlag != "" {
+					args[locationFlag] = true
+				}
+				item.Remedy = argmark.Call("configure-providers", args)
 			}
-			rawCategory, rawID, split := strings.Cut(entry, modelMapAssign)
-			category := strings.ToLower(strings.TrimSpace(rawCategory))
-			id := strings.TrimSpace(rawID)
-			if !split || category == "" || id == "" {
-				return nil, modelMapError(fmt.Sprintf("malformed --model-map entry %q — expected %s", entry, modelMapSyntax))
-			}
-			if !slices.Contains(categories, category) {
-				err := modelMapError(fmt.Sprintf("unknown category %q in --model-map (categories: %s)", category, strings.Join(categories, ", ")))
-				err[0].Allowed = categories
-				return nil, err
-			}
-			ref, err := FileReference(id)
-			if err != nil {
-				return nil, modelMapError(fmt.Sprintf("--model-map %s names %q, and a value is a reference: %s", category, id, modelMapSyntax))
-			}
-			if prev, dup := out[category]; dup && prev != ref {
-				return nil, modelMapError(fmt.Sprintf("--model-map assigns the %s category twice (%q and %q)", category, prev.String(), ref.String()))
-			}
-			out[category] = ref
+			refusal = append(refusal, item)
 		}
 	}
-	return out, nil
+	if len(refusal) > 0 {
+		return nil, refusal
+	}
+	return refs, nil
 }
 
-// categoryNames is Roles as the [models] table spells each role.
-func categoryNames() []string {
-	out := make([]string, len(Roles))
-	for i, role := range Roles {
-		out[i] = string(role)
+// RolesNaming is each role, in role order, whose reference in cfg names
+// provider, a lowercase name.
+func RolesNaming(cfg Config, provider string) []RoleReference {
+	var out []RoleReference
+	for _, role := range Roles {
+		if ref, err := ParseReference(role.model(cfg.Models)); err == nil && ref.Provider == provider {
+			out = append(out, RoleReference{Role: role, Reference: ref})
+		}
 	}
 	return out
 }
 
-// modelMapError is a --model-map value refused as usage.
-func modelMapError(detail string) result.Refusal {
-	return result.Refusal{{Check: CheckUsage, Key: keyModelMap, Detail: detail}}
-}
-
-// unassignedCategoryItem refuses a category with no reference to write. The
-// provider's catalogue is listed as the models to choose from — informational
-// only, nothing in it is matched against the category.
-func unassignedCategoryItem(role Role, provider string, ids []string) result.Item {
-	detail := fmt.Sprintf("no reference assigned to the %s category at provider %q; assign one explicitly, the provider offers: %s",
-		role, provider, strings.Join(sortedCopy(ids), ", "))
-	if len(ids) == 0 {
-		detail = fmt.Sprintf("no reference assigned to the %s category at provider %q; assign one explicitly, it offered no models at all", role, provider)
+// ProviderEntryRefusals is the refusal of a configure-providers entry: name
+// must keep the provider-name rule; baseURL, api and flavor, where given, must
+// be an absolute http or https URL carrying no credentials and values the pool
+// loads. Each fault is an item keyed by the argument that carries it, every one
+// at once; none where the entry is one to write. No item names any part of
+// baseURL, which may hold a key.
+func ProviderEntryRefusals(name, baseURL, api, flavor string) result.Refusal {
+	var refusal result.Refusal
+	if !providerName.MatchString(name) {
+		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Positional("provider"),
+			Detail: fmt.Sprintf("%q is no provider name: %s", name, ProviderNameRule)})
 	}
-	return result.Item{Check: CheckDetect, Key: role.key(), Allowed: sortedCopy(ids),
-		Remedy: "kbase configure " + keyModelMap + " " + string(role) + "=" + provider + "/<id>", Detail: detail}
+	switch {
+	case baseURL == "":
+	case baseURLCarriesCredentials(baseURL):
+		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Flag("base-url"), Remedy: AuthAddRemedy(name),
+			Detail: WithRefusedKeyNote(argmark.Flag("base-url") + " carries credentials; a key is stored apart from the URL")})
+	case !absoluteHTTPURL(baseURL):
+		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Flag("base-url"),
+			Detail: argmark.Flag("base-url") + " is no absolute http or https URL"})
+	}
+	for _, c := range []struct {
+		flag, value string
+		allowed     []string
+	}{
+		{"api", api, []string{ProviderAPIAnthropic, ProviderAPIOpenAI}},
+		{"decisions-flavor", flavor, []string{FlavorSystemOne, FlavorDecisions}},
+	} {
+		if c.value != "" && !slices.Contains(c.allowed, c.value) {
+			refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Flag(c.flag), Allowed: c.allowed,
+				Detail: fmt.Sprintf("%s names %q, which is not one of %s", argmark.Flag(c.flag), c.value, strings.Join(c.allowed, ", "))})
+		}
+	}
+	return refusal
 }
 
-func sortedCopy(values []string) []string {
-	sorted := append([]string{}, values...)
-	slices.Sort(sorted)
-	return sorted
+// NoProvider is the refusal of a removal naming a provider the providers.toml
+// at path holds no entry for. Its remedy is the call that lists the entries
+// that stand.
+func NoProvider(name, path string) result.Refusal {
+	return result.Refusal{{Check: CheckProvider, Key: argmark.Positional("provider"), Path: path,
+		Remedy: argmark.Call("show-config", nil), Detail: fmt.Sprintf("no provider `%s` in %s", name, path)}}
 }

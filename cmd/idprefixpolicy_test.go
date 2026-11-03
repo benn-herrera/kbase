@@ -25,18 +25,14 @@ var idPrefixSpellingRE = regexp.MustCompile(`\b(?:` + strings.Join([]string{
 // such literals each holds: each command's help, which its MCP tool's
 // description carries, naming the ids the command takes or mints.
 var idPrefixProse = map[string]int{
-	"cmd/add-rests-on.go":            1,
-	"cmd/insert-analysis-entry.go":   1,
-	"cmd/insert-axiom-entry.go":      1,
-	"cmd/insert-claim-entry.go":      1,
-	"cmd/insert-experiment-entry.go": 1,
-	"cmd/insert-work-entry.go":       1,
+	"cmd/add-axiom.go": 1,
+	"cmd/add-work.go":  1,
 }
 
 // TestNoIDPrefixSpelledOutsideFormats: outside internal/formats, a node id is
 // composed and matched through kb's prefix constants and kb.IDBody, so no
 // production string literal spells a prefix. The formats tree is outside the
-// rule: format300 defines the prefixes, and a superseded format keeps its own.
+// rule: format400 defines the prefixes, and a superseded format keeps its own.
 func TestNoIDPrefixSpelledOutsideFormats(t *testing.T) {
 	fset := token.NewFileSet()
 	seen := map[string]int{}

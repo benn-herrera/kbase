@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/buildstore"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/result"
@@ -56,7 +57,7 @@ func TestNewerStoreRefusedByEveryVerb(t *testing.T) {
 		outcome, fields := run()
 		items, _ := storetest.Field(fields, result.RefusalsKey).([]result.Item)
 		if outcome != result.Refused || len(items) != 1 || items[0].Check != buildstore.CheckStateDir ||
-			items[0].Remedy != "update kbase, or use another --state-dir" ||
+			items[0].Remedy != "update kbase, or use another "+argmark.Flag("state-dir") ||
 			!strings.Contains(items[0].Detail, "format 2") || !strings.Contains(items[0].Detail, "format 1") {
 			t.Errorf("%s over a store at format 2 = %s %v; want refused, check state-dir, both versions named", verb, outcome, fields)
 		}

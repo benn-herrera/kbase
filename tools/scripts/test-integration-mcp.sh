@@ -5,7 +5,8 @@
 # expected line after placeholder substitution. A transcript named gui-* is fed
 # to `./bin/kbase mcp --project-dir-required` from the evidence directory, not
 # the staged repository. Every transcript runs: none needs a stub child or a
-# provider (build-refused refuses before it starts one).
+# provider (build-refused refuses before it starts one). Then each command's
+# help resource is read and compared with the binary's `<command> --help`.
 #
 # Inputs (environment): BIN_DIR; RESULTS_FIXTURE_DIR, the committed fixture;
 # MCP_TRANSCRIPT_DIR, the transcripts; MCP_OUT_DIR, the evidence directory.
@@ -25,34 +26,83 @@ kbase="${root}/${BIN_DIR}/kbase"
 fixture="${root}/${RESULTS_FIXTURE_DIR}"
 transcripts="${root}/${MCP_TRANSCRIPT_DIR}"
 repo="${out}/repo"
-rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/comparison.tsv"
-mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts"
+# The state home every kbase call runs under, so the credentials store each
+# reads is one under the evidence directory, never the operator's own.
+export XDG_STATE_HOME="${out}/xdg"
+rm -rf "${repo}" "${out}/state" "${out}/transcripts" "${out}/staging" "${out}/help" "${out}/comparison.tsv" "${out}/nodot-bin" "${XDG_STATE_HOME}"
+mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${out}/transcripts" "${out}/staging" "${out}/help" "${out}/nodot-bin"
+# The transcripts are served with git alone on PATH, as TestMCPTranscripts
+# serves them: a write's result pins the sheets not drawn, whether or not
+# this host has Graphviz dot.
+ln -s "$(command -v git)" "${out}/nodot-bin/git"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
 cp -R "${fixture}/kb-root" "${repo}/"
+# The 3.0.0 copy committed and converted before the first write: update-format
+# runs over a clean kb-root/, and every other write is refused until it has.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+KBASE="${kbase}" REPO="${repo}" OUT_DIR="${out}" RECIPE="test-integration-mcp" COMMIT_MESSAGE="the results fixture as staged" tools/scripts/stage-converted-copy.sh
 mkdir "${repo}/kb-root/b"
-( cd "${repo}" && "${kbase}" insert-claim-entry --values "${transcripts}/seed.yaml" ) > "${out}/insert.out" 2> "${out}/insert.log"
-( cd "${repo}" && "${kbase}" refresh ) > "${out}/refresh.out" 2> "${out}/refresh.log"
-kb_root="$(sed -n 's/^kb-root: "\(.*\)"$/\1/p' "${out}/insert.out")"
-ids=()
-while IFS= read -r id; do ids+=("${id}"); done < <(sed -n '/^ids:/,/^minted:/s/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${out}/insert.out" | sort)
-if [[ -z "${kb_root}" || "${#ids[@]}" -ne 2 ]]; then
-    printf 'integration(test-integration-mcp): the staging insert reported no kb-root and two ids — see insert.out\n' >&2
-    exit 1
-fi
+# The lines the claims and the analysis are placed on.
+cat "${fixture}/values/statements.md" >> "${repo}/kb-root/a.md"
 version="$("${kbase}" --version)"
 version="${version##* }"
 # sub <line>: the transcript placeholders, as cmd/mcp_test.go's mcpServer
-# derives them (paths here carry no JSON-escaped characters).
+# derives them (paths and titles here carry no JSON-escaped characters). Each
+# id and title is empty until the add minting it reports it.
+ids=()
+titles=()
+work=""
+kb_root=""
 sub() {
     local s="${1}"
     s="${s//'${KB_ROOT}'/${kb_root}}"
     s="${s//'${REPO}'/${repo}}"
     s="${s//'${STATE_DIR}'/${out}/state}"
     s="${s//'${VERSION}'/${version}}"
-    s="${s//'${ID1}'/${ids[0]}}"
-    s="${s//'${ID2}'/${ids[1]}}"
+    s="${s//'${ID1}'/${ids[0]-}}"
+    s="${s//'${ID2}'/${ids[1]-}}"
+    s="${s//'${ID3}'/${ids[2]-}}"
+    s="${s//'${TITLE1}'/${titles[0]-}}"
+    s="${s//'${TITLE2}'/${titles[1]-}}"
+    s="${s//'${WORK1}'/${work}}"
     printf '%s' "${s}"
 }
+# stage <op> <values>: one staging batch of <op> from the repository over
+# <values>, its placeholders substituted; the values as given and the result
+# are kept under staging/.
+stage() {
+    local values="${out}/staging/$(basename "${2}")"
+    printf '%s\n' "$(sub "$(cat "${2}")")" > "${values}"
+    ( cd "${repo}" && "${kbase}" "${1}" --values "${values}" ) > "${out}/staging/${1}.out" 2> "${out}/staging/${1}.log" || {
+        printf 'integration(test-integration-mcp): the staging %s failed — see staging/%s.out\n' "${1}" "${1}" >&2
+        exit 1
+    }
+}
+# The nodes, then the edges that name them: ${ID1} and ${ID2} the seeded
+# claims in id order, each with its title from seed.yaml's entry in the same
+# position, ${WORK1} the work and ${ID3} the analysis, each id read from its
+# add's result.
+stage add-claim "${transcripts}/seed.yaml"
+kb_root="$(sed -n 's/^kb-root: "\(.*\)"$/\1/p' "${out}/staging/add-claim.out")"
+while IFS= read -r id; do ids+=("${id}"); done < <(tools/scripts/entry-ids.sh "${out}/staging/add-claim.out" clm-)
+while IFS= read -r title; do titles+=("${title}"); done < <(sed -n 's/^- title: //p' "${transcripts}/seed.yaml")
+if [[ -z "${kb_root}" || "${#ids[@]}" -ne 2 || "${#titles[@]}" -ne 2 ]]; then
+    printf 'integration(test-integration-mcp): the staging add-claim reported no kb-root and two ids — see staging/add-claim.out\n' >&2
+    exit 1
+fi
+if [[ "${ids[0]}" > "${ids[1]}" ]]; then
+    ids=("${ids[1]}" "${ids[0]}")
+    titles=("${titles[1]}" "${titles[0]}")
+fi
+stage add-work "${fixture}/values/add-work.yaml"
+work="$(tools/scripts/entry-ids.sh "${out}/staging/add-work.out" wrk-)"
+stage add-analysis "${fixture}/values/add-analysis.yaml"
+ids+=("$(tools/scripts/entry-ids.sh "${out}/staging/add-analysis.out" ana-)")
+if [[ -z "${work}" || -z "${ids[2]}" ]]; then
+    printf 'integration(test-integration-mcp): the staging add-work or add-analysis reported no id — see staging/\n' >&2
+    exit 1
+fi
+stage add-edge "${fixture}/values/add-edge.yaml"
 status=0
 for file in "${transcripts}"/*.jsonl; do
     name="$(basename "${file}" .jsonl)"
@@ -74,7 +124,7 @@ for file in "${transcripts}"/*.jsonl; do
             printf '%s\n' "$(sub "${lines[$((i + 1))]}")" >> "${tdir}/expected.jsonl"
         fi
     done
-    # A gui- transcript runs GUI mode: no located project, so it is served from
+    # A gui- transcript runs the not-located mode: no located project, so it is served from
     # outside the staged repository and each call names its own.
     serve_dir="${repo}"
     mode=()
@@ -83,7 +133,7 @@ for file in "${transcripts}"/*.jsonl; do
         mode=(--project-dir-required)
     fi
     set +e
-    ( cd "${serve_dir}" && "${kbase}" mcp ${mode[@]+"${mode[@]}"} ) < "${tdir}/requests.jsonl" > "${tdir}/actual.jsonl" 2> "${tdir}/mcp.log"
+    ( cd "${serve_dir}" && PATH="${out}/nodot-bin" "${kbase}" mcp ${mode[@]+"${mode[@]}"} ) < "${tdir}/requests.jsonl" > "${tdir}/actual.jsonl" 2> "${tdir}/mcp.log"
     printf '%s\n' "$?" > "${tdir}/mcp.exit"
     set -e
     bad=0
@@ -105,7 +155,41 @@ for file in "${transcripts}"/*.jsonl; do
         status=1
     fi
 done
-OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); mkdir repo/kb-root/b\nrepo/: ${kbase} insert-claim-entry --values ${MCP_TRANSCRIPT_DIR}/seed.yaml; ${kbase} refresh\nper transcript but gui-*, repo/: ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: ${kbase} mcp --project-dir-required, the same comparison\ncomparison.tsv: per transcript, the response line that differs, or pass" \
+# Each help resource the server lists against what `kbase <name> --help`
+# prints: the same shared body and argument list, each followed by its own
+# note, --help opened by its usage line. The shell reads
+# only the URIs, plain tokens (the instructions in the initialize frame name
+# the bare prefix, hence a letter must follow it); the frames are decoded by
+# TestHelpResourcesShareTheBinarysHelpBody.
+hdir="${out}/help"
+init_frames='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-integration-mcp","version":"1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}'
+printf '%s\n{"jsonrpc":"2.0","id":2,"method":"resources/list"}\n' "${init_frames}" > "${hdir}/list.requests.jsonl"
+( cd "${repo}" && "${kbase}" mcp ) < "${hdir}/list.requests.jsonl" > "${hdir}/list.jsonl" 2> "${hdir}/list.log"
+names=()
+while IFS= read -r n; do names+=("${n}"); done < <(grep -o 'kbase://help/[a-z][a-z-]*' "${hdir}/list.jsonl" | sed 's|kbase://help/||' | grep -v -x -e query)
+{
+    printf '%s\n' "${init_frames}"
+    id=1
+    for n in ${names[@]+"${names[@]}"}; do
+        id=$((id + 1))
+        printf '{"jsonrpc":"2.0","id":%d,"method":"resources/read","params":{"uri":"kbase://help/%s"}}\n' "${id}" "${n}"
+    done
+} > "${hdir}/read.requests.jsonl"
+( cd "${repo}" && "${kbase}" mcp ) < "${hdir}/read.requests.jsonl" > "${hdir}/read.jsonl" 2> "${hdir}/read.log"
+for n in ${names[@]+"${names[@]}"}; do
+    ( cd "${repo}" && "${kbase}" "${n}" --help ) > "${hdir}/${n}.txt" 2> "${hdir}/${n}.log"
+done
+# -tags kbasedev: the binary is the development build, whose --help names the
+# flags only that build carries, so the test composes the help it expects
+# from the same tree.
+if go test -tags kbasedev -count=1 -run '^TestHelpResourcesShareTheBinarysHelpBody$' ./cmd -args -help.frames="${hdir}/read.jsonl" -help.dir="${hdir}" > "${hdir}/compare.log" 2>&1; then
+    printf '  pass help resources: %d, each with its --help exactly its parts: one body, one argument list as each surface takes it, its own note, --help its usage line\n' "${#names[@]}"
+else
+    printf '  fail help resources — see help/compare.log\n'
+    status=1
+fi
+OUT_DIR="${out}" RECIPE="test-integration-mcp" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); git add kb-root and commit\nrepo/: ${kbase} update-format\nmkdir repo/kb-root/b; ${RESULTS_FIXTURE_DIR}/values/statements.md appended to repo/kb-root/a.md\nrepo/: per staging batch in turn — add-claim (${MCP_TRANSCRIPT_DIR}/seed.yaml), add-work, add-analysis, add-edge (${RESULTS_FIXTURE_DIR}/values/<op>.yaml) — ${kbase} <op> --values staging/<file>, placeholders substituted, \${ID1} and \${ID2} the claims' ids in id order, \${TITLE1} and \${TITLE2} their titles from seed.yaml, \${WORK1} the work's id and \${ID3} the analysis's, each read from its add's result; result in staging/<op>.out\nper transcript but gui-*, repo/: PATH=nodot-bin (git alone) ${kbase} mcp < transcripts/<name>/requests.jsonl > transcripts/<name>/actual.jsonl, compared line by line to transcripts/<name>/expected.jsonl\nper gui-* transcript, ${MCP_OUT_DIR}/: PATH=nodot-bin ${kbase} mcp --project-dir-required, the same comparison\nrepo/: ${kbase} mcp < help/list.requests.jsonl > help/list.jsonl (initialize, resources/list); per listed help resource but the query family's, ${kbase} mcp < help/read.requests.jsonl > help/read.jsonl (one resources/read each) and ${kbase} <name> --help > help/<name>.txt\ngo test -tags kbasedev -run '^TestHelpResourcesShareTheBinarysHelpBody\$' ./cmd -args -help.frames=help/read.jsonl -help.dir=help > help/compare.log\ncomparison.tsv: per transcript, the response line that differs, or pass" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-mcp): a response differs from its transcript — see comparison.tsv\n'

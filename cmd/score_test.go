@@ -32,6 +32,7 @@ import (
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/score"
+	"kbase/internal/secret"
 )
 
 // scoreRepo is a KB the score verb can walk: one claim recorded and marked in a
@@ -45,18 +46,16 @@ func scoreRepo(t *testing.T) string {
 		".git/HEAD":              "ref: refs/heads/main\n",
 		"kb-root/entry-point.md": maintenanceEntryPoint,
 		maintenanceStampFile:     maintenanceFormatStamp,
-		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n# A\n\nThe claim's own paragraph. <!-- claim-rigor: clm-aaaaaa -->\n",
+		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n# A\n\nThe claim's own paragraph.<!-- kbase-id: clm-aaaaaa -->\n",
 	}
 	maps.Copy(files, recordFiles(kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A Claim", Rigor: &rigor, Rationale: "Shown."}}}))
 	writeRepo(t, repo, files)
-	if out, code := kbase(t, repo, "refresh"); code != 0 {
-		t.Fatalf("refresh: exit %d\n%s", code, out)
-	}
+	updateFormatKB(t, repo)
 	return repo
 }
 
 // fixtureRepo stages a copy of the fixture KB under name — a directory under
-// testdata/ — as a repository, and nothing else: the caller refreshes, or
+// testdata/ — as a repository, and nothing else: the caller converts it, or
 // leaves the KB in the format it was authored in.
 func fixtureRepo(t *testing.T, name string) string {
 	t.Helper()
@@ -226,15 +225,14 @@ func formatOf(t *testing.T, repo string) string {
 }
 
 // scoreFixture is the fixture KB the scoring passes are exercised on: the
-// testdata/score-kb copy, refreshed, so its index stands and its entry point is
-// stamped current. internal/score's invokeKB is the same KB in that package's
-// own form: a package test reads only its own package's testdata.
+// testdata/score-kb copy, committed and converted by update-format, so its
+// conversion is saved, its index stands and it is stamped current.
+// internal/score's invokeKB is the same KB in that package's own form: a
+// package test reads only its own package's testdata.
 func scoreFixture(t *testing.T) string {
 	t.Helper()
 	repo := fixtureRepo(t, "score-kb")
-	if _, err := index.Refresh(kb.OnDisk(filepath.Join(repo, kb.KBDir)), log.Discard()); err != nil {
-		t.Fatalf("refresh the fixture: %v", err)
-	}
+	updateFormatKB(t, repo)
 	return repo
 }
 
@@ -287,9 +285,11 @@ func jsonLines(t *testing.T, path string) []map[string]any {
 	return out
 }
 
-// TestScoreWalksBothPassesByDefault: a run naming no pass walks both sets and
-// says so in its document, and a finished run carries no resume.
-func TestScoreWalksBothPassesByDefault(t *testing.T) {
+// TestScoreWalksEveryPassByDefault: a run naming no pass walks both sets and
+// says so in its document, a finished run carries no resume, and a second run
+// over the KB it scored asks nothing: every value it landed recorded the hash
+// of what it was judged against, so nothing is dirty.
+func TestScoreWalksEveryPassByDefault(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
 	got := scoreIn(t, repo, state, scoreOptions{}, func() model.Client {
 		return scoring("none", "none", "none", "none", "none", "none", "none", "none")
@@ -297,8 +297,8 @@ func TestScoreWalksBothPassesByDefault(t *testing.T) {
 	if got.doc.Outcome != "done" || got.dialled != 1 {
 		t.Fatalf("the run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
 	}
-	if got.doc.Values["pass"] != query.PassBoth {
-		t.Errorf("the document's pass = %v, want the mixed set %q", got.doc.Values["pass"], query.PassBoth)
+	if got.doc.Values["pass"] != query.PassAll {
+		t.Errorf("the document's pass = %v, want the mixed set %q", got.doc.Values["pass"], query.PassAll)
 	}
 	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 8 {
 		t.Errorf("counts %v, want the eight items of both sets\n%s", got.doc.Values["counts"], got.stdout)
@@ -306,23 +306,34 @@ func TestScoreWalksBothPassesByDefault(t *testing.T) {
 	if _, resumes := got.doc.Values["resume"]; resumes {
 		t.Errorf("a finished run carries resume:\n%s", got.stdout)
 	}
+	again := scoreIn(t, repo, state, scoreOptions{}, func() model.Client { return scoring() })
+	if counts, _ := again.doc.Values["counts"].(map[string]any); again.doc.Outcome != "done" || counts["total"] != 0 {
+		t.Errorf("the second run: outcome %s, counts %v; want done over no dirty item\n%s", again.doc.Outcome, counts, again.stdout)
+	}
 }
 
-// TestScoreResumesAMixedRun: a run bounded inside the node set leaves the rest
-// for the command that continues it, and that command carries no --pass — the
-// header is what says which set the run walks.
+// TestScoreResumesAMixedRun: a run whose mixed set fails after its first five
+// items leaves the rest for the call that continues it, which carries no
+// argument naming the scope — the header is what says which set the run walks
+// — and continuing it walks the rest to the end.
 func TestScoreResumesAMixedRun(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
-	bounded := scoreIn(t, repo, state, scoreOptions{Limit: 5}, func() model.Client {
+	partial := scoreIn(t, repo, state, scoreOptions{}, func() model.Client {
 		return scoring("none", "none", "none", "none", "none")
 	})
-	if bounded.doc.Outcome != "bounded" {
-		t.Fatalf("the bounded run: outcome %s\n%s", bounded.doc.Outcome, bounded.stdout)
+	if partial.doc.Outcome != "failed" {
+		t.Fatalf("the failing run: outcome %s\n%s", partial.doc.Outcome, partial.stdout)
 	}
-	run, _ := bounded.doc.Values["run"].(string)
-	resume, _ := bounded.doc.Values["resume"].(string)
-	if strings.Contains(resume, "--pass") || !strings.Contains(resume, "--resume "+run) {
-		t.Errorf("resume %q, want the same set continued with no --pass", resume)
+	run, _ := partial.doc.Values["run"].(string)
+	if resume, _ := partial.doc.Values["resume"].(string); resume != "kbase score --resume --state-dir "+state {
+		t.Errorf("resume %q, want the most recent run continued with no argument naming its scope", resume)
+	}
+	again := scoreIn(t, repo, state, scoreOptions{Resume: true}, func() model.Client { return scoring("none", "none", "none") })
+	counts, _ := again.doc.Values["counts"].(map[string]any)
+	if again.doc.Outcome != "done" || again.doc.Values["run"] != run || again.doc.Values["pass"] != query.PassAll ||
+		counts["total"] != 8 || counts["done"] != 8 {
+		t.Errorf("the resume: outcome %s, run %v, pass %v, counts %v; want run %s over the mixed set, every item done\n%s",
+			again.doc.Outcome, again.doc.Values["run"], again.doc.Values["pass"], counts, run, again.stdout)
 	}
 }
 
@@ -363,39 +374,25 @@ func TestScoreCancelledClosesOnTheItemItStoppedBefore(t *testing.T) {
 	}
 }
 
-// TestScoreStopAfterAPartialWalkCarriesResume: a run that stops inside its end
-// refresh — here with the register page it must publish left unwritable — still
-// reports the command that continues it, ahead of the record its outcome closes
-// on, and the failure the document names is the refresh's, not an item's.
-func TestScoreStopAfterAPartialWalkCarriesResume(t *testing.T) {
+// TestScoreFailedRunCarriesResumeBeforeFailures: a run whose items failed
+// after one landed reports the call that continues it ahead of the record its
+// outcome closes on, one failure per failed item.
+func TestScoreFailedRunCarriesResumeBeforeFailures(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
-	// The page stands current, so the start refresh has no changed file to
-	// write; the one item --limit leaves the walk at lands in the records under
-	// .index/, which stays writable, and changes the page in kb-root/, which
-	// does not.
-	root := filepath.Join(repo, kb.KBDir)
-	if err := os.Chmod(root, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(root, 0o755) })
-	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Limit: 1}, func() model.Client { return scoring("none") })
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") })
 	if got.doc.Outcome != "failed" || got.code != toolresult.ExitCode("failed") {
-		t.Fatalf("the run whose refresh could not publish: outcome %s\n%s", got.doc.Outcome, got.stdout)
+		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
 	keys := got.doc.Keys
 	if keys[len(keys)-1] != "failures" || keys[len(keys)-2] != "resume" {
 		t.Fatalf("keys %q, want resume before the record the outcome closes on", keys)
 	}
-	run, _ := got.doc.Values["run"].(string)
-	if resumed, _ := got.doc.Values["resume"].(string); !strings.HasPrefix(resumed, "kbase score --pass "+query.PassRigor+" --resume "+run) {
-		t.Errorf("resume %q, want the command continuing run %s\n%s", resumed, run, got.stdout)
-	}
 	counts, _ := got.doc.Values["counts"].(map[string]any)
-	if counts["total"] != 4 || counts["done"] != 1 || counts["remaining"] != 3 || counts["failed"] != 0 {
-		t.Errorf("counts %v, want one item landed, three remaining and no item failed\n%s", counts, got.stdout)
+	if counts["total"] != 4 || counts["done"] != 1 || counts["failed"] != 3 {
+		t.Errorf("counts %v, want one item landed and three failed\n%s", counts, got.stdout)
 	}
-	if items := got.doc.items("failures"); len(items) != 1 || items[0]["check"] != checkError {
-		t.Errorf("failures %v, want the refresh's own failure\n%s", items, got.stdout)
+	if items := got.doc.items("failures"); len(items) != 3 || items[0]["check"] != checkError {
+		t.Errorf("failures %v, want the three failed items'\n%s", items, got.stdout)
 	}
 }
 
@@ -441,14 +438,17 @@ func TestScoreDryRunIsInert(t *testing.T) {
 	}
 }
 
-// TestScoreRefusesADryRunOnAnOlderKB: a dry run writes nothing, so the refresh
-// that would save the fixture's 1.0.0 KB does not run: the KB still unmigrated
-// is refused, with the migration record after kb-root, and left as it stands.
+// TestScoreRefusesADryRunOnAnOlderKB: a dry run over the fixture's 1.0.0 KB
+// is refused as a real run is, remedy kbase update-format, with the migration
+// record after kb-root, and the KB left as it stands.
 func TestScoreRefusesADryRunOnAnOlderKB(t *testing.T) {
 	repo, state := fixtureRepo(t, "score-kb-1.0.0"), t.TempDir()
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, DryRun: true}, nil)
 	if got.doc.Outcome != "refused" || got.code != toolresult.ExitCode("refused") {
 		t.Fatalf("the dry run over 1.0.0: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	}
+	if items := got.doc.items("refusals"); len(items) != 1 || items[0]["check"] != index.CheckIndex || items[0]["remedy"] != atTheCommandLine(index.UpdateFormatRemedy) {
+		t.Errorf("refusals %v, want the pending conversion's, remedy %s", items, atTheCommandLine(index.UpdateFormatRemedy))
 	}
 	if got.doc.Keys[1] != "kb-root" || got.doc.Keys[2] != "migration" {
 		t.Errorf("keys %q, want the migration record after kb-root", got.doc.Keys)
@@ -461,9 +461,9 @@ func TestScoreRefusesADryRunOnAnOlderKB(t *testing.T) {
 // TestScoreSaysTheKeyTravelsInCleartext: a run whose endpoint is http:// to a
 // host other than loopback, with a key configured, says so in one line on stderr
 // and proceeds — the same line `build` writes, naming the host and never the key.
-// A loopback endpoint says nothing.
+// A loopback endpoint says nothing of it: on a PATH without dot, stderr holds
+// only the lines saying no sheet was drawn.
 func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
-	unsetInferenceEnv(t)
 	for _, tc := range []struct {
 		name, url string
 		warn      bool
@@ -472,6 +472,9 @@ func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
 		{"loopback", "http://127.0.0.1:8080/v1", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if !tc.warn {
+				t.Setenv("PATH", gitOnlyPath(t))
+			}
 			opts := scoreOptions{Pass: query.PassRigor}
 			opts.providerOptions = providerOptions{
 				Providers: config.Providers{"solo": provider("solo", tc.url)},
@@ -482,44 +485,23 @@ func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
 				t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
 			}
 			if !tc.warn {
-				if got.stderr != "" {
-					t.Errorf("stderr = %q, want nothing for %s", got.stderr, tc.url)
+				// The run refreshes at its start, saying that dot is absent;
+				// its landing's derivation says nothing on stderr.
+				var noDot bytes.Buffer
+				sayNoDot(&noDot, "score")
+				if want := noDot.String(); got.stderr != want {
+					t.Errorf("stderr = %q, want %q alone for %s", got.stderr, want, tc.url)
 				}
 				return
 			}
-			line := config.CleartextWarning(tc.url, testAPIKey)
+			line := config.CleartextWarning(tc.url, secret.NewKey(testAPIKey))
 			if line == "" || strings.Count(got.stderr, line) != 1 {
-				t.Errorf("stderr = %q, want one line %q", got.stderr, line)
+				t.Errorf("stderr (%d bytes), want one cleartext warning for %s", len(got.stderr), tc.url)
 			}
 			if strings.Contains(got.stderr, testAPIKey) {
-				t.Errorf("stderr names the key: %q", got.stderr)
+				t.Error("stderr names the key")
 			}
 		})
-	}
-}
-
-// TestScoreResumeRefusesAPath: --resume names a run id kbase minted, never a
-// path — the value is joined into the state store, and a directory under it is
-// removed recursively — so a value of any other shape is a usage refusal naming
-// the flag, and nothing is opened. The shape is MintID's own: what it mints,
-// --resume takes.
-func TestScoreResumeRefusesAPath(t *testing.T) {
-	repo, state := scoreRepo(t), t.TempDir()
-	for _, resume := range []string{"../../..", "run-aaaaaa/../../..", "run-1", "..", "/", "run-AAAAAA", "run-aaaaaaa", " run-aaaaaa"} {
-		got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: resume}, nil)
-		items := got.doc.items("refusals")
-		if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--resume" {
-			t.Errorf("--resume %q = %s, %v; want one usage refusal naming --resume\n%s",
-				resume, got.doc.Outcome, items, got.stdout)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(state, "score")); !os.IsNotExist(err) {
-		t.Errorf("a refused --resume left a score directory: %v", err)
-	}
-	for range 100 {
-		if id := kb.MintID("run", func(string) bool { return false }); !runIDRE.MatchString(id) {
-			t.Fatalf("MintID minted %q, which --resume refuses", id)
-		}
 	}
 }
 
@@ -543,22 +525,6 @@ func standRuns(t *testing.T, state, kind string, n, at int) []string {
 	return ids
 }
 
-// TestScoreResumeRefusesADryRunsID: --resume naming a dry run's id is refused by
-// the id-shape check, which says it takes a real run's.
-func TestScoreResumeRefusesADryRunsID(t *testing.T) {
-	repo, state := scoreRepo(t), t.TempDir()
-	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: "dry-aaaaaa"}, nil)
-	items := got.doc.items("refusals")
-	var detail string
-	if len(items) == 1 {
-		detail, _ = items[0]["detail"].(string)
-	}
-	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["key"] != "--resume" ||
-		!strings.HasPrefix(detail, "--resume names a real run's id (run-<") {
-		t.Errorf("--resume dry-aaaaaa = %s, %v; want the id-shape refusal naming a real run's id\n%s", got.doc.Outcome, items, got.stdout)
-	}
-}
-
 // TestScoreRefusals: a pass no document names is a usage refusal, naming the
 // passes the flag takes; a run that meets the lock another run holds is retry,
 // naming the directory held rather than a file that is not there.
@@ -569,8 +535,8 @@ func TestScoreRefusals(t *testing.T) {
 		t.Fatalf("--pass other: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
 	items := got.doc.items("refusals")
-	if len(items) != 1 || items[0]["check"] != checkUsage || items[0]["key"] != "--pass" ||
-		!slices.Equal(anyStrings(items[0]["allowed"]), []string{query.PassRigor, query.PassBearing, query.PassBoth}) {
+	if len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--pass" ||
+		!slices.Equal(anyStrings(items[0]["allowed"]), []string{query.PassRigor, query.PassBearing, query.PassAll}) {
 		t.Errorf("refusals %v, want one usage refusal naming the passes the flag takes\n%s", items, got.stdout)
 	}
 
@@ -631,7 +597,7 @@ func TestScoreRetriesWhileAnotherRunHoldsTheStore(t *testing.T) {
 	}
 	items := got.doc.items("refusals")
 	if len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != buildstore.HolderPath(state) ||
-		items[0]["detail"] != "another build (pid 1073741824, started 2026-01-01T00:00:00Z) holds the state store" {
+		items[0]["detail"] != "another build (pid 1073741824, started 2026-01-01T00:00:00Z) holds the state store; "+toolresult.RetryAsk {
 		t.Errorf("refusals %v, want one lock retry naming the store's holder\n%s", items, got.stdout)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".git", "kbase-operation.lock")); !errors.Is(err, os.ErrNotExist) {
@@ -639,27 +605,29 @@ func TestScoreRetriesWhileAnotherRunHoldsTheStore(t *testing.T) {
 	}
 }
 
-// TestScoreMigratesAnOlderKB: a real run over the fixture's 1.0.0 KB is done —
-// the start refresh is the write that saves the conversion — a value lands, the
-// KB is current afterwards with exactly one migration record after kb-root, and
-// the next run carries none.
-func TestScoreMigratesAnOlderKB(t *testing.T) {
+// TestScoreRunsOverAnOlderKBOnceUpdateFormatSavesIt: a real run over the
+// fixture's 1.0.0 KB is refused, asking nothing and writing nothing; once
+// update-format saves the conversion a run is done, a value lands as a node of
+// the converted KB, and no run carries a migration record.
+func TestScoreRunsOverAnOlderKBOnceUpdateFormatSavesIt(t *testing.T) {
 	repo, state := fixtureRepo(t, "score-kb-1.0.0"), t.TempDir()
 	if format := formatOf(t, repo); format != "1.0.0" {
 		t.Fatalf("the fixture stands at %s, want the 1.0.0 KB it is", format)
 	}
+	refusedRun := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none", "none") })
+	if refusedRun.doc.Outcome != "refused" || refusedRun.dialled != 0 || formatOf(t, repo) != "1.0.0" {
+		t.Fatalf("the run over 1.0.0: outcome %s, %d dials, want refused before any ask or write\n%s", refusedRun.doc.Outcome, refusedRun.dialled, refusedRun.stdout)
+	}
+	updateFormatKB(t, repo)
+	if format := formatOf(t, repo); format != kb.FormatVersion {
+		t.Fatalf("the KB stands at %s after update-format, want %s", format, kb.FormatVersion)
+	}
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none", "none") })
 	if got.doc.Outcome != "done" {
-		t.Fatalf("the run over 1.0.0: outcome %s\n%s", got.doc.Outcome, got.stdout)
+		t.Fatalf("the run over the converted KB: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
-	if got.doc.Keys[1] != "kb-root" || got.doc.Keys[2] != "migration" {
-		t.Fatalf("keys %q, want one migration record after kb-root", got.doc.Keys)
-	}
-	if m, _ := got.doc.Values["migration"].(map[string]any); m["from"] != "1.0.0" || m["to"] != kb.FormatVersion {
-		t.Errorf("migration %v, want 1.0.0 → %s", m, kb.FormatVersion)
-	}
-	if format := formatOf(t, repo); format != kb.FormatVersion {
-		t.Errorf("the KB stands at %s after a done run, want %s", format, kb.FormatVersion)
+	if _, migrated := got.doc.Values["migration"]; migrated {
+		t.Errorf("a run over the converted KB carries a migration record:\n%s", got.stdout)
 	}
 	if v := rigorOf(t, repo, "clm-aaaaaa"); v != 1.0 {
 		t.Errorf("the claim's rigor = %v, want the maximum the reply `none` lands", v)
@@ -706,10 +674,13 @@ func scoreProviderAt(baseURL string) providerOptions {
 }
 
 // scoringWire is the endpoint a scoring run's asks reach: every request body it
-// read, in the order it read them, each answered with the charge list `none`.
+// read, in the order it read them, each answered with the charge list `none` —
+// but, where refuseFrom is above zero, a request from that one on, counted
+// from 1, which it refuses with a 400.
 type scoringWire struct {
-	mu     sync.Mutex
-	bodies [][]byte
+	mu         sync.Mutex
+	bodies     [][]byte
+	refuseFrom int
 }
 
 // handler reads each request's body and answers it with the charge list `none`
@@ -719,7 +690,13 @@ func (w *scoringWire) handler() http.HandlerFunc {
 		body, _ := io.ReadAll(r.Body)
 		w.mu.Lock()
 		w.bodies = append(w.bodies, body)
+		refused := w.refuseFrom > 0 && len(w.bodies) >= w.refuseFrom
 		w.mu.Unlock()
+		if refused {
+			rw.WriteHeader(http.StatusBadRequest)
+			_, _ = rw.Write([]byte(`{"error":{"message":"refused"}}`))
+			return
+		}
 		rw.Header().Set("Content-Type", "text/event-stream")
 		_, _ = rw.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"none\"}}]}\n\n" +
 			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
@@ -764,8 +741,7 @@ func (w *scoringWire) promptCacheFields(t *testing.T) []promptCacheField {
 // share one cache entry. Two items of one run, one server, one key — the id the
 // result document names.
 func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
-	unsetInferenceEnv(t)
-	repo := fixtureRepo(t, "score-kb")
+	repo := scoreFixture(t)
 	wire := &scoringWire{}
 	srv := httptest.NewServer(wire.handler())
 	defer srv.Close()
@@ -792,33 +768,36 @@ func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
 	}
 }
 
-// TestScoreResumeSendsTheSamePromptCacheKey: a resumed run continues the id it
-// was given rather than minting one, so its asks carry the key the first
+// TestScoreResumeSendsTheSamePromptCacheKey: a resumed run continues the most
+// recent run's id rather than minting one, so its asks carry the key the first
 // invocation's did — one provider and one cache entry for the run, across
 // processes.
 func TestScoreResumeSendsTheSamePromptCacheKey(t *testing.T) {
-	unsetInferenceEnv(t)
-	repo, state := fixtureRepo(t, "score-kb"), t.TempDir()
-	wire := &scoringWire{}
+	repo, state := scoreFixture(t), t.TempDir()
+	wire := &scoringWire{refuseFrom: 2}
 	srv := httptest.NewServer(wire.handler())
 	defer srv.Close()
 	overHTTP := func(e model.Endpoint) model.Client { return model.NewOpenAIClient(e) }
 
-	first := scoreDrive(t, repo, state, scoreOptions{Pass: query.PassRigor, Limit: 1, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
+	first := scoreDrive(t, repo, state, scoreOptions{Pass: query.PassRigor, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
 	run, _ := first.doc.Values["run"].(string)
-	if run == "" {
-		t.Fatalf("the document names no run: %v", first.doc.Values)
+	if run == "" || first.doc.Outcome != "failed" {
+		t.Fatalf("the first invocation: outcome %s, run %q; want failed naming its run\n%s", first.doc.Outcome, run, first.stdout)
 	}
 	firstAsks := wire.promptCacheFields(t)
-	if len(firstAsks) != 1 {
-		t.Fatalf("%d asks for the one item --limit named\n%s", len(firstAsks), first.stdout)
+	if len(firstAsks) != 4 {
+		t.Fatalf("%d asks for the four items of the rigor set\n%s", len(firstAsks), first.stdout)
 	}
-	if !firstAsks[0].present || firstAsks[0].key != run {
-		t.Errorf("the first invocation's ask carried prompt_cache_key %q (present %v), want the run id %q",
-			firstAsks[0].key, firstAsks[0].present, run)
+	for i, f := range firstAsks {
+		if !f.present || f.key != run {
+			t.Errorf("the first invocation's ask %d carried prompt_cache_key %q (present %v), want the run id %q", i+1, f.key, f.present, run)
+		}
 	}
 
-	resumed := scoreDrive(t, repo, state, scoreOptions{Pass: query.PassRigor, Resume: run, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
+	wire.mu.Lock()
+	wire.refuseFrom = 0
+	wire.mu.Unlock()
+	resumed := scoreDrive(t, repo, state, scoreOptions{Resume: true, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
 	if got := resumed.doc.Values["run"]; got != run {
 		t.Fatalf("the resumed run's document names %v, want %q", got, run)
 	}

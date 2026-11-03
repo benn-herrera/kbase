@@ -1,0 +1,25 @@
+## 10. Metadata format version
+
+Contents:
+
+- [§10 The stamp](the-stamp.md)
+- [§10 Reading the stamp](reading-the-stamp.md)
+- [§10 One version read and written](one-version-read-and-written.md)
+- [§10 The KB YAML dialect](the-kb-yaml-dialect.md)
+- [§10 Recognising frontmatter](recognising-frontmatter.md)
+- [§10 The record files](the-record-files.md)
+- [§10 `canonical_path` and `canonical_anchor`](canonical-path-and-canonical-anchor.md)
+- [§10 Axioms](axioms.md)
+- [§10 The load: every fault refused](the-load-strict-on-syntax-lenient-on-integrity.md)
+- [§10 Five node types](five-node-types.md)
+- [§10 Three quantities](three-quantities.md)
+- [§10 Four scoring relations, one arithmetic](four-scoring-relations-one-arithmetic.md)
+- [§10 The band ladder](the-band-ladder.md)
+- [§10 Edge direction and authoring](edge-direction-and-authoring.md)
+- [§10 Required bearings](required-bearings.md)
+- [§10 The vocabulary](the-vocabulary.md)
+- [§10 The `1.0.0 → 2.0.0` migration](the-1-0-0-2-0-0-migration.md)
+- [§10 The `2.0.x → 3.0.0` migration](the-2-0-x-3-0-0-migration.md)
+- [§10 The `3.0.0 → 4.0.0` migration](the-3-0-0-4-0-0-migration.md)
+- [§10 The migration announces itself](the-migration-announces-itself.md)
+- [§10 Cycles: cut as the walk finds them](cycles-cut-as-the-walk-finds-them.md)

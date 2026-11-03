@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,28 +21,28 @@ import (
 	"kbase/internal/write"
 )
 
-// lockedRepo is maintenanceRepo refreshed, with a claim recorded.
+// lockedRepo is maintenanceRepo committed and through update-format, with a
+// work recorded.
 func lockedRepo(t *testing.T) string {
 	t.Helper()
 	repo := maintenanceRepo(t)
-	if code, out := runMaintenance(t, runRefresh, repo); code != 0 {
-		t.Fatalf("refresh: exit %d\n%s", code, out)
-	}
-	if out, err := insertClaim(repo, "Seed"); err != nil || !strings.Contains(out, `outcome: "done"`) {
-		t.Fatalf("seed insert: %v\n%s", err, out)
+	updateFormatKB(t, repo)
+	if out, err := addWork(repo, "Seed"); err != nil || !strings.Contains(out, `outcome: "done"`) {
+		t.Fatalf("seed add: %v\n%s", err, out)
 	}
 	return repo
 }
 
-// insertClaim inserts a claim titled title into the root register; it
-// reports through its return so a goroutine may call it.
-func insertClaim(repo, title string) (string, error) {
+// addWork records a work titled title, its label the title without spaces;
+// it reports through its return so a goroutine may call it.
+func addWork(repo, title string) (string, error) {
 	values := filepath.Join(repo, title+".yaml")
-	if err := os.WriteFile(values, fmt.Appendf(nil, "entry:\n- title: %s\n  rigor: 0.5\n  rationale: Shown.\n", title), 0o644); err != nil {
+	if err := os.WriteFile(values, fmt.Appendf(nil, "entry:\n- label: %s\n  title: %s\n  rationale: Shown.\n",
+		strings.ReplaceAll(title, " ", ""), title), 0o644); err != nil {
 		return "", err
 	}
 	var out bytes.Buffer
-	_, err := runWriteOp(writeOpOptions{Op: "insert-claim-entry", WorkDir: repo, ValuesFile: values,
+	_, err := runWriteOp(writeOpOptions{Op: write.AddWork, WorkDir: repo, ValuesFile: values,
 		Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()})
 	return out.String(), err
 }
@@ -77,25 +78,25 @@ func concurrently(calls ...func() (string, error)) ([]string, []error) {
 	return outs, errs
 }
 
-// landedOrRetried checks a racing insert: done with its title in the node
+// landedOrRetried checks a racing add: done with its title in the node
 // records, or retry with the lock item; never done and lost.
 func landedOrRetried(t *testing.T, repo, title, out string, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := checkDocument(t, "insert-claim-entry", out)
+	d := checkDocument(t, write.AddWork, out)
 	switch d.Outcome {
 	case "done":
 		if records := nodeRecords(t, repo); !strings.Contains(records, title) {
-			t.Errorf("insert of %q reported done and the node records lack it:\n%s", title, records)
+			t.Errorf("add of %q reported done and the node records lack it:\n%s", title, records)
 		}
 	case "retry":
 		if items := d.items("refusals"); len(items) != 1 || items[0]["check"] != checkLock {
-			t.Errorf("insert of %q retried with %v, want one lock item", title, items)
+			t.Errorf("add of %q retried with %v, want one lock item", title, items)
 		}
 	default:
-		t.Errorf("insert of %q = %s, want done or retry\n%s", title, d.Outcome, out)
+		t.Errorf("add of %q = %s, want done or retry\n%s", title, d.Outcome, out)
 	}
 }
 
@@ -103,23 +104,30 @@ func TestRacingWriteOpsLoseNoEdit(t *testing.T) {
 	repo := lockedRepo(t)
 	for round := range 3 {
 		a, b := fmt.Sprintf("Left %d", round), fmt.Sprintf("Right %d", round)
-		outs, errs := concurrently(func() (string, error) { return insertClaim(repo, a) }, func() (string, error) { return insertClaim(repo, b) })
+		outs, errs := concurrently(func() (string, error) { return addWork(repo, a) }, func() (string, error) { return addWork(repo, b) })
 		landedOrRetried(t, repo, a, outs[0], errs[0])
 		landedOrRetried(t, repo, b, outs[1], errs[1])
 	}
 }
 
-func TestRefreshRacingAWriteOpLosesNoEdit(t *testing.T) {
+// TestUpdateFormatRacingAWriteOpLosesNoEdit: update-format over a committed
+// kb-root/ and a write op race for the write lock. The write lands or is told
+// to retry; update-format runs, is told to retry, or — taking the lock after
+// the write landed — finds kb-root/ dirty and refuses.
+func TestUpdateFormatRacingAWriteOpLosesNoEdit(t *testing.T) {
 	repo := lockedRepo(t)
 	for round := range 3 {
+		commitKB(t, repo)
 		title := fmt.Sprintf("Raced %d", round)
-		outs, errs := concurrently(func() (string, error) { return insertClaim(repo, title) }, func() (string, error) { return runQuiet(runRefresh, repo) })
+		outs, errs := concurrently(func() (string, error) { return addWork(repo, title) }, func() (string, error) { return runQuiet(runUpdateFormat, repo) })
 		landedOrRetried(t, repo, title, outs[0], errs[0])
 		if errs[1] != nil {
 			t.Fatal(errs[1])
 		}
-		if d := checkDocument(t, "refresh", outs[1]); d.Outcome != "done" && d.Outcome != "unchanged" && d.Outcome != "retry" {
-			t.Errorf("racing refresh = %s\n%s", d.Outcome, outs[1])
+		d := checkDocument(t, "update-format", outs[1])
+		dirty := d.Outcome == "refused" && !slices.ContainsFunc(d.items("refusals"), func(it map[string]any) bool { return it["check"] != checkDirtyPaths })
+		if d.Outcome != "done" && d.Outcome != "unchanged" && d.Outcome != "retry" && !dirty {
+			t.Errorf("racing update-format = %s\n%s", d.Outcome, outs[1])
 		}
 	}
 }
@@ -151,14 +159,13 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	insert, insertErr := insertClaim(repo, "Blocked")
-	refreshed, refreshErr := runQuiet(runRefresh, repo)
-	rendered, renderErr := runQuiet(runRenderClaimGraph, repo)
+	added, addErr := addWork(repo, "Blocked")
+	updated, updateErr := runQuiet(runUpdateFormat, repo)
 	detail := fmt.Sprintf("a build (pid %d) is running; its state-dir is %s", os.Getpid(), state)
 	for _, c := range []struct {
 		verb, out string
 		err       error
-	}{{"insert-claim-entry", insert, insertErr}, {"refresh", refreshed, refreshErr}, {"render-claim-graph", rendered, renderErr}} {
+	}{{write.AddWork, added, addErr}, {"update-format", updated, updateErr}} {
 		if c.err != nil {
 			t.Fatal(c.err)
 		}
@@ -168,6 +175,19 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 			items[0]["detail"] != detail || items[0]["remedy"] != nil {
 			t.Errorf("%s under a running build:\n%s", c.verb, c.out)
 		}
+	}
+	dryRun := filepath.Join(repo, "dry-run.yaml")
+	if err := os.WriteFile(dryRun, []byte("dry-run: true\nentry:\n- label: Dry\n  title: Dry\n  rationale: Shown.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var dryOut bytes.Buffer
+	if _, err := runWriteOp(writeOpOptions{Op: write.AddWork, WorkDir: repo, ValuesFile: dryRun,
+		Stdout: &dryOut, Stderr: &bytes.Buffer{}, Logger: log.Discard()}); err != nil {
+		t.Fatal(err)
+	}
+	d := checkDocument(t, write.AddWork, dryOut.String())
+	if items := d.items("refusals"); d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkLock || d.Values["dry-run"] != true {
+		t.Errorf("a dry run under a running build:\n%s", dryOut.String())
 	}
 	if after := nodeRecords(t, repo); after != before {
 		t.Errorf("a refused write changed the node records:\n%s", after)
@@ -199,11 +219,11 @@ func TestWriterRefusedAtOnceWhileABuildWaitsOutAnother(t *testing.T) {
 	}
 	defer writer.Release()
 	start := time.Now()
-	out, err := insertClaim(repo, "Blocked")
+	out, err := addWork(repo, "Blocked")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); checkDocument(t, "insert-claim-entry", out).Outcome != "refused" || took > write.LockWait/2 {
+	if took := time.Since(start); checkDocument(t, write.AddWork, out).Outcome != "refused" || took > write.LockWait/2 {
 		t.Errorf("a writer behind a waiting build took %v:\n%s", took, out)
 	}
 }

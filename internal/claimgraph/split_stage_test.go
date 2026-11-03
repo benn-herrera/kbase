@@ -16,8 +16,8 @@ import (
 	"kbase/internal/records"
 )
 
-// marked is a line's statement marker for id, with the space before it.
-func marked(id string) string { return " " + kb.StatementMarker(id) }
+// marked is a line's statement marker for id, attached with no space.
+func marked(id string) string { return kb.StatementMarker(id) }
 
 // treeFiles is every file under dir, by slash path relative to it.
 func treeFiles(t *testing.T, dir string) map[string]string {

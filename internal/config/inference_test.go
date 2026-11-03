@@ -1,13 +1,18 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"kbase/internal/argmark"
 	"kbase/internal/result"
+	"kbase/internal/secret"
 )
 
 // keyFile stages a key file holding key and returns its path.
@@ -20,115 +25,27 @@ func keyFile(t *testing.T, key string) string {
 	return p
 }
 
-// TestEnvOverrides: the environment reads each variable into its field,
-// trimmed.
-func TestEnvOverrides(t *testing.T) {
-	getenv := func(name string) string {
-		switch name {
-		case EnvAPIBaseURL:
-			return " http://env.example/v1 "
-		case EnvDecision:
-			return " clef "
-		case EnvText:
-			return "Qwen3.8-27B"
-		case EnvScoring:
-			return " scoring-id "
-		case EnvAPIKeyFile:
-			return "/keys/reaper.txt"
-		default:
-			return ""
-		}
-	}
-	want := Overrides{BaseURL: "http://env.example/v1", Decision: "clef", Text: "Qwen3.8-27B",
-		Scoring: "scoring-id", APIKeyFile: "/keys/reaper.txt"}
-	if got := EnvOverrides(getenv); got != want {
-		t.Errorf("EnvOverrides = %+v, want %+v", got, want)
-	}
-	if got := EnvOverrides(func(string) string { return "" }); got != (Overrides{}) {
-		t.Errorf("EnvOverrides with an empty environment = %+v, want the zero layer", got)
-	}
-}
-
-// TestModeOf: the environment either supplies the whole inference
-// configuration or nothing. With no inference variable set the files do; with
-// the base URL and no file value the environment does; and every other
-// combination is a refusal listing every side the user has to decide between.
-func TestModeOf(t *testing.T) {
-	files := Config{Models: ModelMap{Decision: "p/d", Text: "p/t"}}
-	scoringOnly := Config{Models: ModelMap{Scoring: "p/s"}}
-	for _, tc := range []struct {
-		name string
-		cfg  Config
-		env  Overrides
-		want Mode
-		keys []string // the refusal's keys, in order, where it refuses
-	}{
-		{name: "the files alone", cfg: files, want: ModeFile},
-		{name: "no configuration at all", want: ModeFile},
-		{name: "the environment alone", env: Overrides{BaseURL: "http://env/v1", Decision: "d", Text: "t"}, want: ModeEnvironment},
-		{name: "the key file is no mode", env: Overrides{APIKeyFile: "/keys/k"}, want: ModeFile},
-		{name: "the key file beside a file value", cfg: files, env: Overrides{APIKeyFile: "/keys/k"}, want: ModeFile},
-		{name: "a role variable with no base URL", env: Overrides{Text: "t"},
-			keys: []string{EnvText, EnvAPIBaseURL}},
-		{name: "the base URL alone beside a file value", cfg: files, env: Overrides{BaseURL: "http://env/v1"},
-			keys: []string{EnvAPIBaseURL, "models.decision", "models.text"}},
-		{name: "a role variable beside a file value", cfg: files, env: Overrides{BaseURL: "http://env/v1", Text: "t"},
-			keys: []string{EnvAPIBaseURL, EnvText, "models.decision", "models.text"}},
-		{name: "the scoring variable is an inference variable", cfg: scoringOnly, env: Overrides{BaseURL: "http://env/v1", Scoring: "s"},
-			keys: []string{EnvAPIBaseURL, EnvScoring, "models.scoring"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			mode, err := ModeOf(Inputs{Cfg: tc.cfg, Env: tc.env, WriteDir: dir})
-			if tc.keys == nil {
-				if err != nil || mode != tc.want {
-					t.Fatalf("= %q, %v; want %q", mode, err, tc.want)
-				}
-				return
-			}
-			refusals, ok := err.(result.Refusal)
-			if !ok {
-				t.Fatalf("err = %v, want refusals", err)
-			}
-			var keys []string
-			for _, r := range refusals {
-				keys = append(keys, r.Key)
-				if r.Check != CheckProvider {
-					t.Errorf("%s: check = %q, want %q", r.Key, r.Check, CheckProvider)
-				}
-				if strings.HasPrefix(r.Key, "models.") && r.Path != ConfigPath(dir) {
-					t.Errorf("%s names no config.toml: path %q", r.Key, r.Path)
-				}
-			}
-			if strings.Join(keys, ",") != strings.Join(tc.keys, ",") {
-				t.Errorf("keys = %q, want %q", keys, tc.keys)
-			}
-		})
-	}
-}
-
 // TestSelect: the catalogue verbs' choice is the flag, else the pool's only
-// entry — a role is never chosen this way, and config.toml's provider key is
-// never a fallback.
+// entry — a role is never chosen this way.
 func TestSelect(t *testing.T) {
 	two := Providers{"a": {Name: "a"}, "b": {Name: "b"}}
 	for _, tc := range []struct {
 		name, flag string
 		providers  Providers
-		configured string
 		wantName   string
 		wantRule   string
 		wantErr    string
 	}{
-		{name: "the flag", flag: "a", providers: two, configured: "b", wantName: "a", wantRule: RuleFlag},
-		{name: "the only entry", providers: Providers{"solo": {Name: "solo"}}, wantName: "solo", wantRule: RuleSoleEntry},
-		{name: "several entries, none named", providers: two, configured: "b", wantErr: "no provider selected"},
+		{name: "the flag", flag: "a", providers: two, wantName: "a", wantRule: RuleFlag},
+		{name: "the flag in another case", flag: "A", providers: two, wantName: "a", wantRule: RuleFlag},
+		{name: "the only entry", providers: Providers{"solo": {Name: "solo"}}, wantName: "solo", wantRule: RuleSoleProvider},
+		{name: "several entries, none named", providers: two, wantErr: "no provider selected"},
 		{name: "no entries", wantErr: "no usable provider"},
 		{name: "a name the pool lacks", flag: "typo", providers: Providers{"a": {Name: "a"}}, wantErr: `provider "typo" not found`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			in := Inputs{Providers: tc.providers, Cfg: Config{Provider: tc.configured}, WriteDir: dir}
+			in := Inputs{Providers: tc.providers, WriteDir: dir}
 			name, rule, err := Select(in, tc.flag)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -143,18 +60,57 @@ func TestSelect(t *testing.T) {
 	}
 }
 
-// TestSelectNeverReadsTheProviderKey: a config.toml naming one entry of two
-// selects nothing — the key is inert, so the verb refuses and lists both.
-func TestSelectNeverReadsTheProviderKey(t *testing.T) {
-	in := Inputs{Cfg: Config{Provider: "a"}, Providers: Providers{"a": {Name: "a"}, "b": {Name: "b"}}}
-	if _, _, err := Select(in, ""); err == nil {
-		t.Fatal("the superseded provider key selected an entry")
+// TestShowConfigRemedy: with no clearing text the remedy is show-config alone;
+// with one, the clearing text comes first and show-config after it.
+func TestShowConfigRemedy(t *testing.T) {
+	for _, tc := range []struct{ name, clearing, want string }{
+		{"no clearing text", "", argmark.Call("show-config", nil)},
+		{"show-config itself", argmark.Call("show-config", nil), argmark.Call("show-config", nil)},
+		{"a clearing command", "kbase auth add lab", "kbase auth add lab; " + argmark.Call("show-config", nil) + " reports how the configuration resolves"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ShowConfigRemedy(tc.clearing); got != tc.want {
+				t.Errorf("ShowConfigRemedy(%q) = %q, want %q", tc.clearing, got, tc.want)
+			}
+		})
 	}
 }
 
-// TestReferenceGrammar: one grammar per mode. A file value is
-// provider/model, split at the FIRST slash; an environment value is a bare id
-// of the environment's endpoint, which no parser reads.
+// TestUnresolvedProviderRemedy: a name the pool lacks is refused naming the
+// table to add in the write target's providers.toml, with the
+// configure-providers call that writes it there as the remedy; a name that
+// faulted out of the pool keeps its fault's reason and no remedy.
+func TestUnresolvedProviderRemedy(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name       string
+		faults     []ProviderFault
+		wantDetail string
+		wantRemedy string
+	}{
+		{name: "never declared",
+			wantDetail: fmt.Sprintf("provider %q not found in %s — add a [typo] table there with its baseUrl", "typo", ProvidersPath(dir)),
+			wantRemedy: argmark.Call("configure-providers", map[string]any{"provider": "typo", "base-url": "<url>"})},
+		{name: "faulted out of the pool", faults: []ProviderFault{{Name: "typo", Reason: "no baseUrl declared"}},
+			wantDetail: fmt.Sprintf("provider %q failed to load: no baseUrl declared", "typo")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := Inputs{Providers: Providers{"a": {Name: "a"}}, Faults: tc.faults, WriteDir: dir}
+			_, _, err := Select(in, "typo")
+			var refusal result.Refusal
+			if !errors.As(err, &refusal) || len(refusal) != 1 {
+				t.Fatalf("Select = %v, want one refusal", err)
+			}
+			if item := refusal[0]; item.Detail != tc.wantDetail || item.Remedy != tc.wantRemedy {
+				t.Errorf("refusal = %+v, want detail %q and remedy %q", item, tc.wantDetail, tc.wantRemedy)
+			}
+		})
+	}
+}
+
+// TestReferenceGrammar: a value is provider/model, split at the FIRST slash,
+// and a bare id is no reference. The provider part folds to lowercase; the
+// model id keeps its case.
 func TestReferenceGrammar(t *testing.T) {
 	for _, tc := range []struct {
 		value    string
@@ -168,14 +124,12 @@ func TestReferenceGrammar(t *testing.T) {
 		{value: "/d3"},
 		{value: "lab/"},
 		{value: " lab / d3 ", provider: "lab", model: "d3", ok: true},
+		{value: "Lab/D3", provider: "lab", model: "D3", ok: true},
 	} {
 		ref, err := ParseReference(tc.value)
 		if (err == nil) != tc.ok || ref.Provider != tc.provider || ref.Model != tc.model {
 			t.Errorf("ParseReference(%q) = %+v, %v; want %q/%q ok %t", tc.value, ref, err, tc.provider, tc.model, tc.ok)
 		}
-	}
-	if _, err := FileReference("bare"); err == nil {
-		t.Error("FileReference accepted a bare id")
 	}
 }
 
@@ -188,82 +142,86 @@ func scenario(t *testing.T) Inputs {
 	return Inputs{
 		Cfg: Config{Models: ModelMap{Decision: "lab/d3", Text: "lab/qwen", Scoring: "cloud/clef"},
 			Sources: Sources{Decision: LayerSourceRepository, Text: LayerSourceGlobal, Scoring: LayerSourceRepository}},
-		Providers: Providers{"lab": {Name: "lab", BaseURL: "https://lab.example/v1", APIKey: "lab-key",
+		Providers: Providers{"lab": {Name: "lab", BaseURL: "https://lab.example/v1", APIKey: secret.NewKey("lab-key"),
 			DecisionsFlavor: FlavorDecisions, Layer: LayerSourceRepository}},
 		Faults:   []ProviderFault{{Name: "cloud", Path: "/cfg/providers.toml", Reason: "no baseUrl declared"}},
 		WriteDir: dir,
 	}
 }
 
-// TestResolveFileMode: a role's endpoint is the entry its own reference names,
-// with the model it names and the provenance its record states.
-func TestResolveFileMode(t *testing.T) {
+// TestResolve: a role's endpoint is the entry its own reference names, with
+// the model it names and the provenance its record states.
+func TestResolve(t *testing.T) {
 	in := scenario(t)
-	ep, err := Resolve(in, ModeFile, RoleDecision, "")
+	ep, err := Resolve(in, RoleDecision, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Endpoint{Role: RoleDecision, Mode: ModeFile, Provider: "lab", Model: "d3", Rule: RuleConfig,
+	want := Endpoint{Role: RoleDecision, Provider: "lab", Model: "d3", Rule: RuleConfig,
 		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
-		APIKey: "lab-key", BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
-	if ep != want {
-		t.Errorf("= %+v, want %+v", ep, want)
-	}
-	// The key file is no mode: it replaces the key of whichever endpoint is in
-	// force, and the dial reads it.
-	in.Env = Overrides{APIKeyFile: "~/keys/lab.txt"}
-	ep, err = Resolve(in, ModeFile, RoleText, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	home, _ := os.UserHomeDir()
-	if ep.APIKeyFile != filepath.Join(home, "keys", "lab.txt") || ep.KeySource != LayerSourceEnvironment || ep.Model != "qwen" {
-		t.Errorf("= %+v, want the key file expanded and named environment", ep)
+		APIKey: secret.NewKey("lab-key"), BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
+	if !reflect.DeepEqual(ep, want) {
+		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", shownEndpoint(ep), shownEndpoint(want), len(ep.APIKey.Reveal()), len(want.APIKey.Reveal()))
 	}
 	// The flag overrides the configured model and says so: the entry is the
 	// reference's, the model is the flag's, and the rule is what named it.
-	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/judge")
+	ep, err = Resolve(in, RoleScoring, "lab/judge")
 	if err != nil || ep.Provider != "lab" || ep.Model != "judge" || ep.Rule != RuleFlag {
-		t.Errorf("= %+v, %v; want lab/judge under the flag's rule", ep, err)
+		t.Errorf("= %s/%s under %q, %v; want lab/judge under the flag's rule", ep.Provider, ep.Model, ep.Rule, err)
 	}
 	// The flag supplies the role the files name no model for: the entry is the
 	// flag's, no layer named the model, and the rule is the flag's.
 	in.Cfg.Models.Scoring, in.Cfg.Sources.Scoring = "", ""
-	ep, err = Resolve(in, ModeFile, RoleScoring, "lab/clef")
+	ep, err = Resolve(in, RoleScoring, "lab/clef")
 	if err != nil || ep.Provider != "lab" || ep.Model != "clef" || ep.Rule != RuleFlag || ep.ModelSource != "" {
-		t.Errorf("= %+v, %v; want the flag to supply lab/clef under its own rule", ep, err)
+		t.Errorf("= %s/%s under %q, model source %q, %v; want the flag to supply lab/clef under its own rule",
+			ep.Provider, ep.Model, ep.Rule, ep.ModelSource, err)
 	}
 }
 
-// TestResolveEnvironmentMode: the environment's endpoint, its role's bare id,
-// and no pool entry behind it.
-func TestResolveEnvironmentMode(t *testing.T) {
-	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"}}
-	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ep.Provider != "" || ep.Layer != "" || ep.Model != "qwen" || ep.BaseURL != "https://env.example/v1" ||
-		ep.Mode != ModeEnvironment || ep.BaseURLSource != LayerSourceEnvironment || ep.ModelSource != LayerSourceEnvironment || ep.KeySource != "" {
-		t.Errorf("= %+v, want the environment endpoint and the role's bare id", ep)
-	}
-	// A value bearing a slash is the endpoint's model, sent verbatim: nothing
-	// parses it against a provider the environment does not name.
-	ep, err = Resolve(in, ModeEnvironment, RoleText, "org/model")
-	if err != nil || ep.Model != "org/model" || ep.ModelSource != "" {
-		t.Errorf("= %+v, %v; want the flag verbatim", ep, err)
+// shownEndpoint is ep with its key left out, for a failure message.
+func shownEndpoint(ep Endpoint) Endpoint {
+	ep.APIKey = secret.Key{}
+	return ep
+}
+
+// TestResolveKeySource: a role's key source names the store where the store
+// supplied the entry's key, whatever the entry's apiKeyFile; the entry's layer
+// where its key file did; and nothing where it has no key.
+func TestResolveKeySource(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry Provider
+		want  string
+	}{
+		{"a stored key over a key file", Provider{APIKeyFile: "lab.key", KeyStored: true}, string(KeyKindStore)},
+		{"a key file", Provider{APIKeyFile: "lab.key"}, LayerSourceGlobal},
+		{"no key", Provider{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := scenario(t)
+			entry := tc.entry
+			entry.Name, entry.BaseURL, entry.Layer = "lab", "https://lab.example/v1", LayerSourceGlobal
+			in.Providers = Providers{"lab": entry}
+			ep, err := Resolve(in, RoleDecision, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ep.KeySource != tc.want {
+				t.Errorf("KeySource = %q, want %q", ep.KeySource, tc.want)
+			}
+		})
 	}
 }
 
 // TestResolveRefusals: every way a role does not resolve, by its own key —
-// never another role's endpoint, never the superseded provider key.
+// never another role's endpoint.
 func TestResolveRefusals(t *testing.T) {
 	configFile, providersFile := "config.toml", "providers.toml"
 	for _, tc := range []struct {
 		name    string
 		mutate  func(*Inputs)
 		role    Role
-		mode    Mode
 		flag    string
 		key     string
 		check   string
@@ -271,33 +229,30 @@ func TestResolveRefusals(t *testing.T) {
 		allowed []string
 		detail  string
 	}{
-		{name: "no value in the file, and no flag", role: RoleScoring, mode: ModeFile,
+		{name: "no value in the file, and no flag", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
-			key:    "models.scoring", path: configFile, detail: "and --scoring-model names no model"},
-		{name: "a bare id", role: RoleScoring, mode: ModeFile,
+			key:    "models.scoring", path: configFile, detail: "and " + keyScoringModel + " names no model"},
+		{name: "a bare id", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "clef" },
 			key:    "models.scoring", path: configFile, detail: "<provider>/<model>"},
-		{name: "a provider the pool does not hold", role: RoleScoring, mode: ModeFile,
+		{name: "a provider the pool does not hold", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "elsewhere/clef" },
 			key:    "models.scoring", path: providersFile, allowed: []string{"lab"}},
-		{name: "a provider that faulted out", role: RoleScoring, mode: ModeFile,
+		{name: "a provider that faulted out", role: RoleScoring,
 			key: "models.scoring", path: providersFile, detail: `provider "cloud" failed to load: no baseUrl declared`},
-		{name: "the environment names no model for the role", role: RoleScoring, mode: ModeEnvironment,
-			mutate: func(in *Inputs) { in.Env = Overrides{BaseURL: "https://env/v1"} },
-			key:    EnvScoring},
-		{name: "the flag is not a reference", role: RoleScoring, mode: ModeFile, flag: "clef",
-			key: keyScoringModel, check: CheckUsage, detail: "<provider>/<model>"},
-		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring, mode: ModeFile,
+		{name: "the flag is not a reference", role: RoleScoring, flag: "clef",
+			key: keyScoringModel, check: result.CheckUsage, detail: "<provider>/<model>"},
+		{name: "the flag names a provider the pool does not hold, for a role the files leave unset", role: RoleScoring,
 			mutate: func(in *Inputs) { in.Cfg.Models.Scoring = "" },
 			flag:   "elsewhere/clef", key: keyScoringModel, path: providersFile, allowed: []string{"lab"},
-			detail: "--scoring-model names a provider the pool does not hold"},
+			detail: keyScoringModel + " names a provider the configuration does not resolve"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := scenario(t)
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			_, err := Resolve(in, tc.mode, tc.role, tc.flag)
+			_, err := Resolve(in, tc.role, tc.flag)
 			refusal, ok := asRefusal(err)
 			if !ok {
 				t.Fatalf("err = %v, want one refusal", err)
@@ -329,12 +284,12 @@ func TestResolveRefusals(t *testing.T) {
 func TestResolveDefaultRefusalNamesTheRoleFirst(t *testing.T) {
 	in := scenario(t)
 	in.Cfg.Models.Scoring = ""
-	_, err := ResolveFlag(in, ModeFile, RoleScoring, "", keyScoringModel, true)
+	_, err := ResolveFlag(in, RoleScoring, "", keyScoringModel, true)
 	refusal, ok := asRefusal(err)
 	if !ok {
 		t.Fatalf("err = %v, want one refusal", err)
 	}
-	if refusal.Key != "models.scoring" || refusal.Path != ConfigPath(in.WriteDir) || refusal.Remedy != configureRemedy {
+	if refusal.Key != "models.scoring" || refusal.Path != ConfigPath(in.WriteDir) || refusal.Remedy != argmark.Call("configure-models", map[string]any{"scoring": "<provider>/<model>"}) {
 		t.Errorf("named %s in %s, remedy %q; want the role's key and file", refusal.Key, refusal.Path, refusal.Remedy)
 	}
 	for _, want := range []string{"sets no models.scoring", "nothing named a selection",
@@ -369,9 +324,9 @@ func TestCleartextWarning(t *testing.T) {
 		{"https", "https://reaper.local/v1", "k", false},
 		{"non-loopback with key", "http://reaper.local:4000/v1", "secret-key", true},
 	} {
-		got := CleartextWarning(tc.url, tc.key)
+		got := CleartextWarning(tc.url, secret.NewKey(tc.key))
 		if (got != "") != tc.warns || strings.Contains(got, "secret-key") || strings.Contains(got, "\n") {
-			t.Errorf("%s: %q, want warning %t, one line naming no key", tc.name, got, tc.warns)
+			t.Errorf("%s: warning of %d bytes, want warning %t, one line naming no key", tc.name, len(got), tc.warns)
 		}
 	}
 }
@@ -419,7 +374,7 @@ func TestResolveSamplingRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&in)
 			}
-			_, err := Resolve(in, ModeFile, tc.role, tc.flag)
+			_, err := Resolve(in, tc.role, tc.flag)
 			refusal, ok := asRefusal(err)
 			if !ok {
 				t.Fatalf("err = %v, want one refusal", err)
@@ -439,7 +394,7 @@ func TestResolveSamplingRefusals(t *testing.T) {
 // detail and remedy name the layer that does.
 func TestResolveSamplingNamesTheSupplyingLayer(t *testing.T) {
 	in := samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(2.5)}}, Sources{TextTemperature: LayerSourceGlobal})
-	_, err := Resolve(in, ModeFile, RoleText, "")
+	_, err := Resolve(in, RoleText, "")
 	refusal, ok := asRefusal(err)
 	if !ok {
 		t.Fatalf("err = %v, want one refusal", err)
@@ -471,7 +426,7 @@ func TestResolveSamplingAccepts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := samplingInputs(t, tc.sampling, Sources{TextTemperature: LayerSourceGlobal,
 				ScoringTemperature: LayerSourceGlobal, ScoringThinking: LayerSourceRepository})
-			ep, err := Resolve(in, ModeFile, tc.role, "")
+			ep, err := Resolve(in, tc.role, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -493,45 +448,21 @@ func TestResolveSamplingAccepts(t *testing.T) {
 // unset, and the decision role carries none even where text states its own.
 func TestResolveSamplingUnset(t *testing.T) {
 	in := samplingInputs(t, SamplingTable{}, Sources{})
-	ep, err := Resolve(in, ModeFile, RoleText, "")
+	ep, err := Resolve(in, RoleText, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ep.Temperature != nil || ep.Thinking != "" || ep.TemperatureSource != "" || ep.ThinkingSource != "" {
-		t.Errorf("endpoint = %+v, want no sampling", ep)
+		t.Errorf("endpoint = %+v, want no sampling", shownEndpoint(ep))
 	}
 
 	in = samplingInputs(t, SamplingTable{Text: RoleSampling{Temperature: new(0.5), Thinking: ThinkingHigh}}, Sources{
 		TextTemperature: LayerSourceGlobal, TextThinking: LayerSourceGlobal})
-	ep, err = Resolve(in, ModeFile, RoleDecision, "")
+	ep, err = Resolve(in, RoleDecision, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ep.Temperature != nil || ep.Thinking != "" {
-		t.Errorf("decision endpoint = %+v, want no sampling", ep)
-	}
-}
-
-// TestResolveSamplingInEnvironmentMode: the environment names the endpoint and
-// the model, and the file still says how the role is asked; the endpoint speaks
-// openai, so its range is openai's.
-func TestResolveSamplingInEnvironmentMode(t *testing.T) {
-	in := Inputs{Env: Overrides{BaseURL: "https://env.example/v1", Decision: "d3", Text: "qwen", Scoring: "clef"},
-		WriteDir: t.TempDir()}
-	in.Cfg.Sampling.Text = RoleSampling{Temperature: new(1.8), Thinking: ThinkingMedium}
-	in.Cfg.Sources.TextTemperature, in.Cfg.Sources.TextThinking = LayerSourceRepository, LayerSourceGlobal
-
-	ep, err := Resolve(in, ModeEnvironment, RoleText, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ep.Temperature == nil || *ep.Temperature != 1.8 || ep.Thinking != ThinkingMedium ||
-		ep.TemperatureSource != LayerSourceRepository || ep.ThinkingSource != LayerSourceGlobal {
-		t.Errorf("endpoint = %+v, want the file's text sampling with its layers", ep)
-	}
-
-	in.Cfg.Sampling.Text.Temperature = new(2.5)
-	if _, err := Resolve(in, ModeEnvironment, RoleText, ""); err == nil {
-		t.Error("an environment-mode role accepted a temperature outside openai's range")
+		t.Errorf("decision endpoint = %+v, want no sampling", shownEndpoint(ep))
 	}
 }

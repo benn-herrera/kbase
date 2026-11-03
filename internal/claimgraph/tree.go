@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/index"
 	"kbase/internal/kb"
 )
 
@@ -73,7 +72,7 @@ func unquote(text string) string {
 // pageText is text as the words the page shows: citation and cross-reference
 // markup off, what each renders kept.
 func pageText(text string) string {
-	return kb.Strip(anchorRenderingRE.ReplaceAllString(citationSpanRE.ReplaceAllString(text, "${rendering}"), "$1"))
+	return kb.Strip(anchorRenderingRE.ReplaceAllString(kb.CitationSpanRE.ReplaceAllString(text, "${rendering}"), "$1"))
 }
 
 // Document is one document of the tree, by its kb-root-relative slash path.
@@ -126,7 +125,7 @@ func (t *Tree) kind(p string) string { return kb.DocumentKind(p, len(t.Children[
 // registerTitle is a title read off document as its register page carries it:
 // every relative link rebased to resolve from that page's directory.
 func (t *Tree) registerTitle(title, document string) string {
-	return kb.RebaseInlineLinks(title, path.Dir(document), path.Dir(index.RegisterPage(document, t.volumes)))
+	return kb.RebaseInlineLinks(title, path.Dir(document), path.Dir(kb.SummaryPage(document, t.volumes)))
 }
 
 // builtTree is the KB this build is writing. The walk's start loaded it and
@@ -154,7 +153,7 @@ func readTree(kbRoot string) (*Tree, error) {
 		t.Paths = append(t.Paths, p)
 	}
 	slices.Sort(t.Paths)
-	t.volumes = index.Volumes(t.Paths)
+	t.volumes = kb.Volumes(t.Paths)
 	for _, p := range t.Paths {
 		parent, ok, children := kb.TreeLinks(p, t.Documents[p].Text)
 		if ok {

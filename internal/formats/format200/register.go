@@ -596,8 +596,7 @@ func (r bulletReader) premises(line, entryID, entryKind string) []Edge {
 	if len(bearings) == 1 {
 		var ok bool
 		if bearing, ok = BearingFromValue(bearings[0][1]); !ok {
-			r.fault(ListRestsOn, AnnotationFault{Allowed: "[0, 1] or " + PendingLiteral,
-				Remedy: "write a number in [0, 1] or " + PendingLiteral,
+			r.fault(ListRestsOn, AnnotationFault{Remedy: "write a number in [0, 1] or " + PendingLiteral,
 				Detail: "(bearing " + Strip(bearings[0][1]) + ")"})
 			return nil
 		}

@@ -174,29 +174,75 @@ func TestTrailReportsAnUnreadableRepository(t *testing.T) {
 	}
 }
 
-func TestParent(t *testing.T) {
+// TestTrailEndsAtARemovalOfTheOwnedPaths: a commit off the trail that takes
+// every owned path out of the tree ends the trail below it; a deletion leaving
+// any owned path standing does not, and neither does a boundary that records
+// the removal — a fresh build's start over it.
+func TestTrailEndsAtARemovalOfTheOwnedPaths(t *testing.T) {
 	r := newRepo(t)
-	write(t, r, "kb-root/a.md", "a\n")
-	root, err := r.Record("start", "build started", "")
-	if err != nil {
-		t.Fatal(err)
+	stages := func() []string {
+		t.Helper()
+		trail, err := r.Trail()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, e := range trail {
+			out = append(out, e.Stage)
+		}
+		return out
 	}
-	child, err := r.Record("document-graph", "document tree derived", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct{ name, commit, want string }{
-		{"non-root commit", child, root},
-		{"root commit", root, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got, err := r.Parent(tc.commit); err != nil || got != tc.want {
-				t.Errorf("Parent(%s) = %q, %v, want %q", tc.commit, got, err, tc.want)
+	removeOwned := func() {
+		t.Helper()
+		for _, p := range owned {
+			if err := os.RemoveAll(filepath.Join(r.Root, p)); err != nil {
+				t.Fatal(err)
 			}
-		})
+		}
 	}
-	if got, err := r.Parent(strings.Repeat("0", 40)); err == nil {
-		t.Errorf("Parent of an unknown hash = %q, nil, want an error", got)
+	record := func(stage string) {
+		t.Helper()
+		if _, err := r.Record(stage, stage, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, r, "kb-root/a.md", "a\n")
+	write(t, r, "kb-root/b.md", "b\n")
+	write(t, r, "record.yaml", "a: 1\n")
+	record("start")
+	record("document-graph")
+	if err := os.Remove(filepath.Join(r.Root, "kb-root", "a.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(r.Root, "record.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Commit("a deletion leaving kb-root/b.md", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stages(), []string{"document-graph", "start"}; !slices.Equal(got, want) {
+		t.Errorf("trail over a partial deletion = %q, want %q", got, want)
+	}
+
+	removeOwned()
+	record("start")
+	if got, want := stages(), []string{"start", "document-graph", "start"}; !slices.Equal(got, want) {
+		t.Errorf("trail over a boundary recording the removal = %q, want %q", got, want)
+	}
+
+	write(t, r, "kb-root/c.md", "c\n")
+	record("document-graph")
+	removeOwned()
+	if _, err := r.Commit("removed to start over", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := stages(); len(got) != 0 {
+		t.Errorf("trail over a committed removal = %q, want none", got)
+	}
+	write(t, r, "kb-root/d.md", "d\n")
+	record("start")
+	if got, want := stages(), []string{"start"}; !slices.Equal(got, want) {
+		t.Errorf("trail of a build after the removal = %q, want its own %q", got, want)
 	}
 }
 
@@ -242,6 +288,66 @@ func TestCommitPlainSubjectIsOffTheTrail(t *testing.T) {
 	out, err := r.run("rev-list", "--count", "HEAD")
 	if err != nil || strings.TrimSpace(out) != "2" {
 		t.Errorf("commits on HEAD = %q (%v), want 2", strings.TrimSpace(out), err)
+	}
+}
+
+// TestExcludedPathsStayOutOfTheCommit: an owned exclusion keeps its paths out
+// of Dirty and of the commit, and Paths reads back what a commit took, a
+// rename as its two sides.
+func TestExcludedPathsStayOutOfTheCommit(t *testing.T) {
+	r := newRepo(t)
+	write(t, r, "kb-root/a.md", "a\n")
+	write(t, r, "kb-root/.index/nodes.yaml", "n: 1\n")
+	outside, err := Open(r.Root, []string{"kb-root", Exclude("kb-root/.index")}, log.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirty, err := outside.Dirty(); err != nil || !slices.Equal(dirty, []string{"kb-root/a.md"}) {
+		t.Fatalf("Dirty = %q, %v; want kb-root/a.md alone", dirty, err)
+	}
+	commit, err := outside.Commit("outside", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := outside.Paths(commit); err != nil || !slices.Equal(paths, []string{"kb-root/a.md"}) {
+		t.Errorf("Paths = %q, %v; want kb-root/a.md alone", paths, err)
+	}
+	if dirty, err := r.Dirty(); err != nil || !slices.Equal(dirty, []string{"kb-root/.index/nodes.yaml"}) {
+		t.Errorf("Dirty after the commit = %q, %v; want the excluded record left uncommitted", dirty, err)
+	}
+	if _, err := r.run("mv", "kb-root/a.md", "kb-root/b.md"); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := outside.Commit("moved", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := outside.Paths(moved); err != nil || !slices.Equal(paths, []string{"kb-root/a.md", "kb-root/b.md"}) {
+		t.Errorf("Paths of a rename = %q, %v; want both sides", paths, err)
+	}
+}
+
+// TestCommitTakesAStagedMoveOutOfAnOwnedPath: an owned path a staged git mv
+// took off disk and out of the index is committed with the move, both sides
+// in one commit, leaving nothing staged.
+func TestCommitTakesAStagedMoveOutOfAnOwnedPath(t *testing.T) {
+	r := newRepo(t)
+	write(t, r, "record.yaml", "a: 1\n")
+	if _, err := r.Commit("record", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Move("record.yaml", "kb-root/record.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := r.Commit("moved", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := r.Paths(commit); err != nil || !slices.Equal(paths, []string{"kb-root/record.yaml", "record.yaml"}) {
+		t.Errorf("Paths = %q, %v; want both sides of the move", paths, err)
+	}
+	if status, _ := r.run("status", "--porcelain"); status != "" {
+		t.Errorf("status after the commit = %q, want clean", status)
 	}
 }
 

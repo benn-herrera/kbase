@@ -6,7 +6,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"kbase/internal/formats/format300"
+	"kbase/internal/formats/format400"
 )
 
 // RenderStrengthLine is an entry's derived "- strength:" line; a nil value is
@@ -34,20 +34,21 @@ func BearingText(b Bearing) string {
 // RenderBearingAnnotation is a scoring edge's "(bearing …)" annotation.
 func RenderBearingAnnotation(b Bearing) string { return "(bearing " + BearingText(b) + ")" }
 
-// RenderIDMarker is a register entry's id marker, the line below its heading.
-func RenderIDMarker(nodeID string) string { return "<!-- id: " + nodeID + " -->" }
-
 // StatementMarkerOpener is the text a statement marker opens with, ahead of
 // the node id.
-const StatementMarkerOpener = format300.StatementMarkerOpener
+const StatementMarkerOpener = format400.StatementMarkerOpener
 
 // StatementMarker is the statement marker naming nodeID.
-func StatementMarker(nodeID string) string { return format300.StatementMarker(nodeID) }
+func StatementMarker(nodeID string) string { return format400.StatementMarker(nodeID) }
 
-// AppendMarker is line, which carries no line break, with marker appended
-// ahead of its trailing spaces and tabs; a line already carrying the marker
-// is returned as it is.
-func AppendMarker(line, marker string) string { return format300.AppendMarker(line, marker) }
+// StatementMarkerRE is one statement marker as it is read, a newline inside
+// it included; its group is the text naming the node ids.
+var StatementMarkerRE = format400.StatementMarkerRE
+
+// AppendMarker is line, which carries no line break, with marker attached
+// directly after its last character but its trailing spaces and tabs, with no
+// space between; a line already carrying the marker is returned as it is.
+func AppendMarker(line, marker string) string { return format400.AppendMarker(line, marker) }
 
 var (
 	// plainSafeRE is a string no YAML 1.1 or 1.2 reader takes for anything but

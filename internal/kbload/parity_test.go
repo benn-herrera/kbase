@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/argmark"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 )
@@ -29,9 +32,9 @@ var (
 const (
 	parityGoldenDir = "testdata/parity-2.0.1"
 	parityFrom      = "2.0.1"
-	// parityConverted is the 2.0.1 fixture's conversion as the converter's
-	// golden pair pins it.
-	parityConverted = "../formats/testdata/adjagent-sheet-3.0.0/" + kb.KBDir
+	// parityConverted is the 2.0.1 fixture's conversion to the current format
+	// as the converters' golden pairs pin it.
+	parityConverted = "../formats/testdata/adjagent-sheet-4.0.0/" + kb.KBDir
 )
 
 // markerHosted is whether a node kind is hosted by a statement marker, total
@@ -48,15 +51,83 @@ var (
 	// parityUnhosted is every claim, analysis and experiment the conversion
 	// leaves with no statement marker: claims listed and marked nowhere.
 	parityUnhosted = []string{"clm-aaa005", "clm-aaa006", "clm-bbb001", "clm-bbb003"}
-	// parityLeafPages is every document but the entry point the conversion
-	// leaves with no child list: the 2.0.1 fixture's index pages list no child.
-	parityLeafPages = []string{"alpha/analysis.md", "alpha/experiments/flow.md", "alpha/index.md", "alpha/results.md",
-		"beta/governance.md", "beta/index.md", "gamma/index.md"}
+	// paritySummaryAnchors is the anchor each hosted node's title takes on
+	// its kb-summary.md, by title.
+	paritySummaryAnchors = map[string]string{
+		"A supporting lemma":                   "a-supporting-lemma",
+		"Flow simulation":                      "flow-simulation",
+		"Theorem 1":                            "theorem-1",
+		"Equation (`eq:flow`) — Flow Dynamics": "equation-eqflow--flow-dynamics",
+		"The gradient $`\\nabla f`$ is \"bounded\" when a < b & c":                                                                "the-gradient-nabla-f-is-bounded-when-a--b--c",
+		"A deliberately long prose claim title that runs well past the three wrapped lines a sheet label allows before it is cut": "a-deliberately-long-prose-claim-title-that-runs-well-past-the-three-wrapped-lines-a-sheet-label-allows-before-it-is-cut",
+		"The governance bifurcation":                "the-governance-bifurcation",
+		"Smith, A. 2020. *Markets*. Fixture Press.": "smith-a-2020-markets-fixture-press",
+	}
+	// parityHosts is each hosted node's host leaf and the anchor of the
+	// section its statement marker stands in, by id.
+	parityHosts = map[string][2]string{
+		"clm-aaa001": {"alpha/results.md", "results"},
+		"clm-aaa002": {"alpha/results.md", "results"},
+		"clm-aaa003": {"alpha/results.md", "results"},
+		"clm-aaa004": {"alpha/results.md", "results"},
+		"clm-bbb002": {"beta/governance.md", "governance"},
+		"ana-aaa007": {"alpha/analysis.md", "a-supporting-lemma"},
+		"exp-aaa008": {"alpha/experiments/flow.md", "flow-simulation"},
+	}
+	// parityVolumes is the conversion's volumes: the top-level directories
+	// holding an index.md.
+	parityVolumes = map[string]bool{"alpha": true, "beta": true, "gamma": true}
+	// parityRationales is the rationale of each analysis and work record the
+	// conversion leaves, which 2.0.1's show did not carry, by id.
+	parityRationales = map[string]string{"ana-aaa007": "Fixture.", "wrk-omcjwo": "Fixture Press."}
+	// parityModelScoredEdges is the conversion's edges carrying a
+	// manually_scored flag, every one false: its scorable and demoted edges.
+	parityModelScoredEdges = 9
 )
 
+// What the 2.0.1 fixture's graph holds that no golden shows, stated here.
+var (
+	// parityDependents is the nodes each claim's strength enters, by id, for
+	// every claim with any.
+	parityDependents = map[string]int{"clm-aaa001": 2, "clm-aaa002": 2}
+	// parityPremisesMerged is the scoring edges into each claim that repeat
+	// another's relation, other end and bearing, by id: the conversion merges
+	// each into the edge it repeats.
+	parityPremisesMerged = map[string]int{"clm-aaa001": 1}
+	// parityEdgesMerged is every edge the conversion merges into one it
+	// repeats.
+	parityEdgesMerged = 1
+)
+
+// parityMintedIDs is the file stating each 2.0.1 work's and axiom's id and
+// the id the conversion mints it, one tab-separated pair per line: the parity
+// recipe runs each golden case's arguments through it, and the parity rules
+// read the answers through it.
+const parityMintedIDs = "testdata/parity-minted-ids.tsv"
+
+// readParityMinted is parityMintedIDs' pairs, by 2.0.1 id.
+func readParityMinted(t *testing.T) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(parityMintedIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		from, to, ok := strings.Cut(line, "\t")
+		if !ok {
+			t.Fatalf("%s: %q is no tab-separated pair", parityMintedIDs, line)
+		}
+		out[from] = to
+	}
+	return out
+}
+
 // TestParityFactsAreTheConvertersGolden: the parity rules' statement of what
-// the conversion leaves unhosted and which documents it leaves leaves is what
-// the converter's golden output holds.
+// the conversion leaves unhosted, where each hosted node is stated, which
+// directories are volumes, the analyses' and works' rationales, how many edges
+// are model-scored and the minted ids is what the converter's golden output
+// holds.
 func TestParityFactsAreTheConvertersGolden(t *testing.T) {
 	src := kb.OnDisk(parityConverted)
 	g, err := kb.LoadGraph(src)
@@ -68,17 +139,15 @@ func TestParityFactsAreTheConvertersGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	marked := map[string]bool{}
-	leafPages := []string{}
+	hosts := map[string][2]string{}
 	for _, rel := range docs {
 		body, err := src.ReadText(src.KBPath(rel))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for id := range kb.MarkerLines(body) {
+		for id, line := range kb.MarkerLines(body) {
 			marked[id] = true
-		}
-		if rel != kb.EntryPointFile && len(kb.ChildList(rel, body)) == 0 {
-			leafPages = append(leafPages, rel)
+			hosts[id] = [2]string{rel, index.SectionSlug(body, line)}
 		}
 	}
 	unhosted := []string{}
@@ -88,12 +157,37 @@ func TestParityFactsAreTheConvertersGolden(t *testing.T) {
 		}
 	}
 	slices.Sort(unhosted)
-	slices.Sort(leafPages)
 	if !slices.Equal(unhosted, parityUnhosted) {
 		t.Errorf("the converter's golden leaves %q unhosted, the parity rules state %q", unhosted, parityUnhosted)
 	}
-	if !slices.Equal(leafPages, parityLeafPages) {
-		t.Errorf("the converter's golden leaves %q with no child list, the parity rules state %q", leafPages, parityLeafPages)
+	if !maps.Equal(hosts, parityHosts) {
+		t.Errorf("the converter's golden hosts %v, the parity rules state %v", hosts, parityHosts)
+	}
+	if volumes := kb.Volumes(docs); !maps.Equal(volumes, parityVolumes) {
+		t.Errorf("the converter's golden has volumes %v, the parity rules state %v", volumes, parityVolumes)
+	}
+	rationales := map[string]string{}
+	for _, n := range g.Analyses {
+		rationales[n.ID] = n.Rationale
+	}
+	for _, n := range g.Works {
+		rationales[n.ID] = n.Rationale
+	}
+	if !maps.Equal(rationales, parityRationales) {
+		t.Errorf("the converter's golden gives the analyses and works the rationales %v, the parity rules state %v", rationales, parityRationales)
+	}
+	if flagged := len(g.Scorable) + len(g.Demoted); flagged != parityModelScoredEdges {
+		t.Errorf("the converter's golden has %d scorable and demoted edges, the parity rules state %d", flagged, parityModelScoredEdges)
+	}
+	minted := map[string]string{}
+	for _, n := range g.Works {
+		minted[kb.WorkPrefix+"-"+n.Label] = n.ID
+	}
+	for _, n := range g.Axioms {
+		minted[kb.AxiomPrefix+"-"+n.Label] = n.ID
+	}
+	if stated := readParityMinted(t); !maps.Equal(minted, stated) {
+		t.Errorf("the converter's golden mints the 2.0.1 works and axioms %v, %s states %v", minted, parityMintedIDs, stated)
 	}
 }
 
@@ -104,12 +198,51 @@ var goldenRules = []struct {
 	name  string
 	apply func(f *conversionFacts, args []string, doc *yaml.Node) bool
 }{
-	{"an edge identity authored twice with equal bearings is one record, its contexts joined", (*conversionFacts).mergeEdges},
-	{"a demoted edge is oriented as the edge it replaced", (*conversionFacts).orientDemoted},
-	{"a claim listed in a leaf and marked in none is marked in its first listing leaf", (*conversionFacts).markListed},
-	{"a cited-by row is a marker in a leaf, so it names no leaf_kind and no tier2_marked", (*conversionFacts).citedByMarkerRow},
-	{"a document's kind comes from its child list: an index page with none is a leaf", (*conversionFacts).kindFromChildList},
+	{"an edge identity authored twice with equal bearings is one record: a claim's premise_count and stats' edges count it once", (*conversionFacts).mergeEdges},
 	{"a node with no marker has a null canonical path and anchor", (*conversionFacts).unhostedCanonical},
+	{"4.0.0 carries no strengthen-by: a claim record has no strengthen_by_count or strengthen_by, stats no strengthen_by_items", (*conversionFacts).dropStrengthenBy},
+	{"no query counts citations: a claim record has no citation_count, stats no citation_edges", (*conversionFacts).dropCitationCounts},
+	{"stats' subtree_aggregates is per volume: each volume's claims and experiments hosted under it", (*conversionFacts).volumeAggregates},
+	{"4.0.0's register page is kb-summary.md, an entry anchored at the anchor the parity rules state for its title", (*conversionFacts).summaryPageAnchors},
+	{"an unknown id is refused with the one no-node refusal, its remedy included", (*conversionFacts).noNodeRefusal},
+	{"show names a node's host, host_anchor and summary entry in place of its canonical path and anchor, a work's and an axiom's label, its 2.0.1 key or label, and an analysis's and a work's rationale", (*conversionFacts).showIdentity},
+	{"show reads a pending rigor or strength *pending*", (*conversionFacts).showPending},
+	{"find does not page, a row its id, node_type, title, label (null on a claim), host, strength (*pending* where pending) and dependents; a case asks --kind claim --title, the claims by title 2.0.1's find listed", (*conversionFacts).findRows},
+	{"a node's band is keyed strength_band", (*conversionFacts).strengthBandKey},
+	{"every work's and axiom's id is minted: a 2.0.1 work or axiom id, its key or label now its label, reads as the id parity-minted-ids.tsv states the conversion mints it", (*conversionFacts).mintedIDs},
+}
+
+// strengthBandKey renames every build_band key of an answer strength_band.
+func (f *conversionFacts) strengthBandKey(_ []string, doc *yaml.Node) bool {
+	moved := false
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if i := keyAt(n, "build_band"); i >= 0 {
+			n.Content[i].Value, moved = "strength_band", true
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return moved
+}
+
+// mintedIDs gives every scalar of an answer naming a 2.0.1 work or axiom id
+// the id the conversion mints it.
+func (f *conversionFacts) mintedIDs(_ []string, doc *yaml.Node) bool {
+	moved := false
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if to, ok := f.minted[n.Value]; ok && n.Kind == yaml.ScalarNode {
+			n.Value, moved = to, true
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return moved
 }
 
 // An answer-side rule removes from the converted KB's answer a key 3.0.0 adds,
@@ -120,7 +253,8 @@ var answerRules = []struct {
 	apply func(a *answerFacts, args []string, doc *yaml.Node) string
 }{
 	{"a converted, unsaved KB's answer carries its migration record after kb-root", (*answerFacts).migrationRecord},
-	{"manually_scored after a deps record's bearing and a show record's rigor; stats' four flag counts", (*answerFacts).manuallyScored},
+	{"stats' relations after bearing_model, as 3.0.0 adds it", (*answerFacts).statsRelations},
+	{"manually_scored after a show record's rigor; stats' four flag counts", (*answerFacts).manuallyScored},
 }
 
 type parityCase struct {
@@ -208,13 +342,22 @@ func text(n *yaml.Node) string {
 
 func isNull(n *yaml.Node) bool { return n != nil && n.Kind == yaml.ScalarNode && n.Tag == "!!null" }
 
-func setNull(n *yaml.Node) { *n = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"} }
+func setNull(n *yaml.Node) { *n = *null() }
 
-func setInt(n *yaml.Node, v int) {
-	*n = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(v)}
+func setInt(n *yaml.Node, v int) { *n = *integer(v) }
+
+// quoted is s as a result document emits a string; key is s as a mapping key.
+func quoted(s string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: s}
 }
 
-func setTrue(n *yaml.Node) { *n = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"} }
+func key(s string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s} }
+
+func null() *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"} }
+
+func integer(v int) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(v)}
+}
 
 // removeAfter removes key from mapping m where it stands directly after
 // prev, returning its value; nil where it does not stand there.
@@ -248,254 +391,69 @@ func listAnswer(doc *yaml.Node) *yaml.Node {
 	return nil
 }
 
-// depsOf is the id a deps case lists the edges of, "" for any other case.
-func depsOf(args []string) string {
-	if len(args) == 2 && args[0] == "deps" {
-		return args[1]
-	}
-	return ""
-}
-
-// demotedEdge is a 2.0.1 demoted row as deps showed it: from the entry it was
-// listed on to the premise it named.
-type demotedEdge struct {
-	entry, premise   string
-	bearing, context *yaml.Node
-}
-
-// conversionFacts is what the golden-side rules read: each gathered from the
-// 2.0.1 goldens, or stated by parityUnhosted and parityLeafPages.
+// conversionFacts is what the golden-side rules read beside the stated facts
+// they read directly.
 type conversionFacts struct {
-	unhosted       map[string]bool   // parityUnhosted
-	leafPages      map[string]bool   // parityLeafPages
-	firstListing   map[string]string // claim id → the leaf §8.2 marks it in, for a claim listed and marked nowhere
-	premisesMerged map[string]int    // claim id → scoring edges into it merged away
-	edgesMerged    int
-	demoted        []demotedEdge
-	aggregatesLost int
+	unhosted map[string]bool   // parityUnhosted
+	minted   map[string]string // 2.0.1 work or axiom id → its minted id, parityMintedIDs
 }
 
-// duplicates is each deps record of results that repeats an earlier one's
-// relation, direction, other end and bearing, mapped to that earlier one's
-// index. A demoted record is not one: its identity carries the relation it
-// replaced, which deps does not show.
-func duplicates(results *yaml.Node) map[int]int {
-	first := map[string]int{}
-	out := map[int]int{}
-	for i, r := range results.Content {
-		if text(value(r, "relation")) == kb.RelationDemoted {
-			continue
-		}
-		b := value(r, "bearing")
-		key := strings.Join([]string{text(value(r, "relation")), text(value(r, "direction")), text(value(r, "target")), b.Tag, b.Value}, "\x00")
-		if j, seen := first[key]; seen {
-			out[i] = j
-		} else {
-			first[key] = i
-		}
-	}
-	return out
-}
-
-func gatherFacts(t *testing.T, goldens []parityCase) *conversionFacts {
+func readConversionFacts(t *testing.T) *conversionFacts {
 	t.Helper()
-	f := &conversionFacts{unhosted: map[string]bool{}, leafPages: map[string]bool{}, firstListing: map[string]string{}, premisesMerged: map[string]int{}}
+	f := &conversionFacts{unhosted: map[string]bool{}, minted: readParityMinted(t)}
 	for _, id := range parityUnhosted {
 		f.unhosted[id] = true
-	}
-	for _, rel := range parityLeafPages {
-		f.leafPages[rel] = true
-	}
-	listings := map[string][]string{}
-	markedSomewhere := map[string]bool{}
-	aggregates := map[string]bool{}
-	for _, c := range goldens {
-		switch {
-		case depsOf(c.args) != "":
-			results := listAnswer(c.doc)
-			for i := range duplicates(results) {
-				r := results.Content[i]
-				relation := text(value(r, "relation"))
-				switch {
-				case text(value(r, "direction")) == "in":
-					f.premisesMerged[c.args[1]]++
-					f.edgesMerged++
-				case !kb.Scoring(relation):
-					f.edgesMerged++
-				}
-			}
-			for _, r := range results.Content {
-				if text(value(r, "relation")) == kb.RelationDemoted {
-					f.demoted = append(f.demoted, demotedEdge{entry: c.args[1], premise: text(value(r, "target")),
-						bearing: value(r, "bearing"), context: value(r, "context")})
-				}
-			}
-		case c.args[0] == "cited-by" && listAnswer(c.doc) != nil:
-			for _, r := range listAnswer(c.doc).Content {
-				id := text(value(r, "claim_id"))
-				if text(value(r, "tier2_marked")) == "true" {
-					markedSomewhere[id] = true
-				}
-				if text(value(r, "leaf_kind")) == "leaf" {
-					listings[id] = append(listings[id], text(value(r, "leaf_path")))
-				}
-			}
-		case c.args[0] == "subtree" && strings.HasSuffix(c.args[1], ".md"):
-			aggregates[c.args[1]] = true
-		}
-	}
-	for id, leaves := range listings {
-		if !markedSomewhere[id] {
-			f.firstListing[id] = slices.Min(leaves)
-		}
-	}
-	for page := range aggregates {
-		if f.leafPages[page] {
-			f.aggregatesLost++
-		}
 	}
 	return f
 }
 
+// mergeEdges takes the edges parityPremisesMerged and parityEdgesMerged state
+// merged from a claim record's premise_count and from stats' edges.
 func (f *conversionFacts) mergeEdges(args []string, doc *yaml.Node) bool {
 	moved := false
-	if id := depsOf(args); id != "" {
-		results := listAnswer(doc)
-		dups := duplicates(results)
-		var kept []*yaml.Node
-		for i, r := range results.Content {
-			j, dup := dups[i]
-			if !dup {
-				kept = append(kept, r)
-				continue
-			}
-			into := results.Content[j]
-			var contexts []string
-			for _, c := range []*yaml.Node{value(into, "context"), value(r, "context")} {
-				if !isNull(c) {
-					contexts = append(contexts, c.Value)
-				}
-			}
-			if len(contexts) > 0 {
-				*value(into, "context") = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: strings.Join(contexts, "; ")}
-			}
-			moved = true
-		}
-		results.Content = kept
-	}
 	for _, m := range mappings(doc) {
-		if n := value(m, "premise_count"); n != nil && f.premisesMerged[text(value(m, "id"))] > 0 {
+		if n := value(m, "premise_count"); n != nil && parityPremisesMerged[text(value(m, "id"))] > 0 {
 			v, _ := strconv.Atoi(n.Value)
-			setInt(n, v-f.premisesMerged[text(value(m, "id"))])
+			setInt(n, v-parityPremisesMerged[text(value(m, "id"))])
 			moved = true
 		}
 	}
-	if args[0] == "stats" && f.edgesMerged > 0 {
+	if args[0] == "stats" && parityEdgesMerged > 0 {
 		n := value(value(doc, "results"), "edges")
 		v, _ := strconv.Atoi(n.Value)
-		setInt(n, v-f.edgesMerged)
+		setInt(n, v-parityEdgesMerged)
 		moved = true
 	}
 	return moved
 }
 
-// orientDemoted moves each demoted row from the entry's deps to its premise's,
-// naming the entry: deps lists an id's outgoing demoted edges last, by the
-// other end and then the context.
-func (f *conversionFacts) orientDemoted(args []string, doc *yaml.Node) bool {
-	id := depsOf(args)
-	if id == "" || len(f.demoted) == 0 {
+// volumeAggregates gives stats' subtree_aggregates, in place of 2.0.1's
+// count, one record per volume of parityVolumes in path order: its claims and
+// its experiments parityHosts states hosted under it.
+func (f *conversionFacts) volumeAggregates(args []string, doc *yaml.Node) bool {
+	n := value(value(doc, "results"), "subtree_aggregates")
+	if args[0] != "stats" || n == nil {
 		return false
 	}
-	results := listAnswer(doc)
-	before := len(results.Content)
-	results.Content = slices.DeleteFunc(results.Content, func(r *yaml.Node) bool {
-		return text(value(r, "relation")) == kb.RelationDemoted
-	})
-	moved := len(results.Content) != before
-	var reoriented []demotedEdge
-	for _, d := range f.demoted {
-		if d.premise == id {
-			reoriented = append(reoriented, d)
+	out := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	for _, v := range slices.Sorted(maps.Keys(parityVolumes)) {
+		claims, experiments := 0, 0
+		for id, h := range parityHosts {
+			if !strings.HasPrefix(h[0], v+"/") {
+				continue
+			}
+			switch kind, _ := kb.NodeIDKind(id); kind {
+			case kb.NodeKindClaim:
+				claims++
+			case kb.NodeKindExperiment:
+				experiments++
+			}
 		}
+		out.Content = append(out.Content, key(v), &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map",
+			Content: []*yaml.Node{key("claims"), integer(claims), key("experiments"), integer(experiments)}})
 	}
-	slices.SortStableFunc(reoriented, func(a, b demotedEdge) int {
-		if c := strings.Compare(a.entry, b.entry); c != 0 {
-			return c
-		}
-		return strings.Compare(text(a.context), text(b.context))
-	})
-	quoted := func(s string) *yaml.Node {
-		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: s}
-	}
-	key := func(s string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s} }
-	for _, d := range reoriented {
-		results.Content = append(results.Content, &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-			key("relation"), quoted(kb.RelationDemoted), key("direction"), quoted("out"), key("target"), quoted(d.entry),
-			key("bearing"), d.bearing, key("context"), d.context}})
-		moved = true
-	}
-	return moved
-}
-
-func (f *conversionFacts) markListed(args []string, doc *yaml.Node) bool {
-	if args[0] != "cited-by" || listAnswer(doc) == nil {
-		return false
-	}
-	moved := false
-	for _, r := range listAnswer(doc).Content {
-		if leaf, ok := f.firstListing[text(value(r, "claim_id"))]; ok && leaf == text(value(r, "leaf_path")) {
-			setTrue(value(r, "tier2_marked"))
-			moved = true
-		}
-	}
-	return moved
-}
-
-// citedByMarkerRow drops the two keys from a cited-by row that names a leaf
-// and is marked there; any other row keeps them and so differs.
-func (f *conversionFacts) citedByMarkerRow(args []string, doc *yaml.Node) bool {
-	if args[0] != "cited-by" || listAnswer(doc) == nil {
-		return false
-	}
-	moved := false
-	for _, r := range listAnswer(doc).Content {
-		if text(value(r, "leaf_kind")) != "leaf" || text(value(r, "tier2_marked")) != "true" {
-			continue
-		}
-		removeAfter(r, "leaf_path", "leaf_kind")
-		removeAfter(r, "leaf_path", "tier2_marked")
-		moved = true
-	}
-	return moved
-}
-
-// kindFromChildList empties the subtree answer of a page that is now a leaf —
-// named by its path, or by its directory as dir/ — and drops each such
-// page's aggregate from stats' count.
-func (f *conversionFacts) kindFromChildList(args []string, doc *yaml.Node) bool {
-	switch args[0] {
-	case "subtree":
-		page := args[1]
-		if strings.HasSuffix(page, "/") {
-			page += kb.IndexFile
-		}
-		results := listAnswer(doc)
-		if !f.leafPages[page] || results == nil || len(results.Content) == 0 {
-			return false
-		}
-		results.Content, results.Style = nil, yaml.FlowStyle
-		return true
-	case "stats":
-		if f.aggregatesLost == 0 {
-			return false
-		}
-		n := value(value(doc, "results"), "subtree_aggregates")
-		v, _ := strconv.Atoi(n.Value)
-		setInt(n, v-f.aggregatesLost)
-		return true
-	}
-	return false
+	*n = *out
+	return true
 }
 
 func (f *conversionFacts) unhostedCanonical(_ []string, doc *yaml.Node) bool {
@@ -514,12 +472,180 @@ func (f *conversionFacts) unhostedCanonical(_ []string, doc *yaml.Node) bool {
 	return moved
 }
 
-// recount sets a list answer's count to its results' length: every case runs
-// with --limit 0, so the count is the whole list.
-func recount(doc *yaml.Node) {
-	if r, n := listAnswer(doc), value(doc, "count"); r != nil && n != nil {
-		setInt(n, len(r.Content))
+// dropStrengthenBy removes a claim record's strengthen_by_count and the
+// strengthen_by list beside it, each where it stands directly after
+// premise_count, and stats' strengthen_by_items after demoted_edges.
+func (f *conversionFacts) dropStrengthenBy(args []string, doc *yaml.Node) bool {
+	moved := false
+	for _, m := range mappings(doc) {
+		for _, key := range []string{"strengthen_by_count", "strengthen_by"} {
+			if removeAfter(m, "premise_count", key) != nil {
+				moved = true
+			}
+		}
 	}
+	if args[0] == "stats" && removeAfter(value(doc, "results"), "demoted_edges", "strengthen_by_items") != nil {
+		moved = true
+	}
+	return moved
+}
+
+// summaryPageAnchors moves a record whose canonical path is a 2.0.1 register
+// page onto the summary page in its place, anchored at the anchor the parity
+// rules state for its title (paritySummaryAnchors); a title the map lacks keeps
+// its anchor as it stands.
+func (f *conversionFacts) summaryPageAnchors(_ []string, doc *yaml.Node) bool {
+	moved := false
+	for _, m := range mappings(doc) {
+		p := value(m, "canonical_path")
+		dir, page := path.Split(text(p))
+		if page != "claim-rigor.md" {
+			continue
+		}
+		p.Value = dir + kb.RegisterFile
+		if a, anchor := value(m, "canonical_anchor"), paritySummaryAnchors[text(value(m, "title"))]; a != nil && anchor != "" {
+			a.Value = anchor
+		}
+		moved = true
+	}
+	return moved
+}
+
+// cliNoArgumentCalls spells marked text as the answers, CLI documents, carry
+// it, for a remedy whose calls take no argument: such a call is `kbase
+// <command>` whatever the command tree. A call with arguments stays marked, so
+// the answer differs from the golden and says so.
+var cliNoArgumentCalls = argmark.Spelling{Call: func(inv argmark.Invocation) string {
+	if len(inv.Args) > 0 || len(inv.Argv) > 0 {
+		return argmark.Call(inv.Command, inv.Args)
+	}
+	return "kbase " + inv.Command
+}}
+
+// noNodeRefusal gives a show case's unknown-id refusal at <id> kb.NoNode's
+// detail, and its remedy before the detail, where result.Item serializes it,
+// both spelled as the command line spells them.
+func (f *conversionFacts) noNodeRefusal(args []string, doc *yaml.Node) bool {
+	refusals := value(doc, "refusals")
+	if args[0] != "show" || refusals == nil {
+		return false
+	}
+	moved := false
+	for _, item := range refusals.Content {
+		at := keyAt(item, "detail")
+		if text(value(item, "check")) != kb.CheckUnknownID || text(value(item, "key")) != "<id>" || at < 0 || keyAt(item, "remedy") >= 0 {
+			continue
+		}
+		detail, remedy := kb.NoNode(argmark.Positional("id"), args[1])
+		remedy = cliNoArgumentCalls.Spell(remedy)
+		item.Content[at+1].Value = detail
+		item.Content = slices.Insert(item.Content, at,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "remedy"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: remedy})
+		moved = true
+	}
+	return moved
+}
+
+// dropCitationCounts removes a claim record's citation_count where it stands
+// directly after premise_count, and stats' citation_edges after
+// demoted_edges.
+func (f *conversionFacts) dropCitationCounts(args []string, doc *yaml.Node) bool {
+	moved := false
+	for _, m := range mappings(doc) {
+		if removeAfter(m, "premise_count", "citation_count") != nil {
+			moved = true
+		}
+	}
+	if args[0] == "stats" && removeAfter(value(doc, "results"), "demoted_edges", "citation_edges") != nil {
+		moved = true
+	}
+	return moved
+}
+
+// showIdentity gives a show record, in place of its canonical path and
+// anchor, the host leaf and section anchor parityHosts states (null where
+// it states none) and its summary entry: a claim's or a work's canonical path
+// and anchor where it has them, an analysis's or an experiment's volume page
+// at the anchor paritySummaryAnchors states for its title; a work or an axiom
+// takes, after the summary entry, its label, its 2.0.1 id less the prefix; it
+// appends the rationale parityRationales states.
+func (f *conversionFacts) showIdentity(args []string, doc *yaml.Node) bool {
+	m := value(doc, "results")
+	at := keyAt(m, "canonical_path")
+	if args[0] != "show" || at < 0 || keyAt(m, "canonical_anchor") != at+2 {
+		return false
+	}
+	id, kind, path, anchor := args[1], text(value(m, "node_type")), m.Content[at+1], m.Content[at+3]
+	host, hostAnchor, summary := null(), null(), null()
+	h, hosted := parityHosts[id]
+	if hosted {
+		host, hostAnchor = quoted(h[0]), quoted(h[1])
+	}
+	switch {
+	case (kind == kb.NodeKindClaim || kind == kb.NodeKindWork) && !isNull(path):
+		summary = quoted(text(path) + "#" + text(anchor))
+	case (kind == kb.NodeKindAnalysis || kind == kb.NodeKindExperiment) && hosted:
+		summary = quoted(kb.SummaryPage(h[0], parityVolumes) + "#" + paritySummaryAnchors[text(value(m, "title"))])
+	}
+	m.Content[at].Value, m.Content[at+1] = "host", host
+	m.Content[at+2].Value, m.Content[at+3] = "host_anchor", hostAnchor
+	m.Content = slices.Insert(m.Content, at+4, key("summary"), summary)
+	if kind == kb.NodeKindWork || kind == kb.NodeKindAxiom {
+		_, label, _ := strings.Cut(id, "-")
+		m.Content = slices.Insert(m.Content, at+6, key("label"), quoted(label))
+	}
+	if minted, ok := f.minted[id]; ok {
+		id = minted
+	}
+	if r, ok := parityRationales[id]; ok {
+		m.Content = append(m.Content, key("rationale"), quoted(r))
+	}
+	return true
+}
+
+// showPending gives a show answer's null rigor and strength *pending*: 2.0.1
+// printed a pending value null.
+func (f *conversionFacts) showPending(args []string, doc *yaml.Node) bool {
+	if args[0] != "show" {
+		return false
+	}
+	moved := false
+	m := value(doc, "results")
+	for _, k := range []string{"rigor", "strength"} {
+		if v := value(m, k); isNull(v) {
+			*v, moved = *quoted(kb.PendingLiteral), true
+		}
+	}
+	return moved
+}
+
+// findRows gives each row of a find answer — 2.0.1's find listed claims, so
+// each a claim — its node_type, a null label, its host leaf from parityHosts (null where it
+// states none) and the dependents parityDependents states, in place of its
+// build_band, and a null strength *pending*; find does not page, so the answer
+// carries no offset or truncated.
+func (f *conversionFacts) findRows(args []string, doc *yaml.Node) bool {
+	results := listAnswer(doc)
+	if args[0] != "find" || results == nil {
+		return false
+	}
+	removeAfter(doc, "count", "offset")
+	removeAfter(doc, "count", "truncated")
+	for _, r := range results.Content {
+		id := text(value(r, "id"))
+		host := null()
+		if h, ok := parityHosts[id]; ok {
+			host = quoted(h[0])
+		}
+		strength := value(r, "strength")
+		if isNull(strength) {
+			strength = quoted(kb.PendingLiteral)
+		}
+		r.Content = []*yaml.Node{key("id"), value(r, "id"), key("node_type"), quoted(kb.NodeKindClaim), key("title"), value(r, "title"),
+			key("label"), null(), key("host"), host, key("strength"), strength, key("dependents"), integer(parityDependents[id])}
+	}
+	return true
 }
 
 // answerFacts is what the answer-side rules read, gathered from the converted
@@ -527,13 +653,12 @@ func recount(doc *yaml.Node) {
 type answerFacts struct {
 	migration    string          // the first answer's migration record, encoded
 	flaggedNodes map[string]bool // ids whose show record carries manually_scored
-	flaggedEdges map[string]bool // edges a deps record shows with a true or false manually_scored
 	encode       func(*yaml.Node) string
 }
 
 func gatherAnswerFacts(t *testing.T, answers []parityCase) *answerFacts {
 	t.Helper()
-	a := &answerFacts{flaggedNodes: map[string]bool{}, flaggedEdges: map[string]bool{},
+	a := &answerFacts{flaggedNodes: map[string]bool{},
 		encode: func(n *yaml.Node) string { return encodeNode(t, n) }}
 	for _, c := range answers {
 		if a.migration == "" {
@@ -542,22 +667,8 @@ func gatherAnswerFacts(t *testing.T, answers []parityCase) *answerFacts {
 			}
 		}
 		results := value(c.doc, "results")
-		switch {
-		case c.args[0] == "show" && results != nil && results.Kind == yaml.MappingNode:
-			if value(results, "manually_scored") != nil {
-				a.flaggedNodes[c.args[1]] = true
-			}
-		case depsOf(c.args) != "":
-			for _, r := range results.Content {
-				if v := value(r, "manually_scored"); v == nil || isNull(v) {
-					continue
-				}
-				source, target := c.args[1], text(value(r, "target"))
-				if text(value(r, "direction")) == "in" {
-					source, target = target, source
-				}
-				a.flaggedEdges[strings.Join([]string{source, text(value(r, "relation")), target, text(value(r, "context"))}, "\x00")] = true
-			}
+		if c.args[0] == "show" && results != nil && results.Kind == yaml.MappingNode && value(results, "manually_scored") != nil {
+			a.flaggedNodes[c.args[1]] = true
 		}
 	}
 	return a
@@ -576,21 +687,36 @@ func (a *answerFacts) migrationRecord(_ []string, doc *yaml.Node) string {
 	return ""
 }
 
+// statsRelations removes stats' relations, which stands directly after
+// bearing_model and holds one record per relation in kb.Relations order.
+func (a *answerFacts) statsRelations(args []string, doc *yaml.Node) string {
+	results := value(doc, "results")
+	if args[0] != "stats" || results == nil {
+		return ""
+	}
+	relations := removeAfter(results, "bearing_model", "relations")
+	if relations == nil || relations.Kind != yaml.MappingNode {
+		return "stats' relations is not a mapping directly after bearing_model"
+	}
+	var names []string
+	for i := 0; i < len(relations.Content); i += 2 {
+		if relations.Content[i+1].Kind != yaml.MappingNode {
+			return fmt.Sprintf("stats' relations %s is not a record", relations.Content[i].Value)
+		}
+		names = append(names, relations.Content[i].Value)
+	}
+	if !slices.Equal(names, kb.Relations) {
+		return fmt.Sprintf("stats' relations holds %v, not one record per relation in %v", names, kb.Relations)
+	}
+	return ""
+}
+
 func (a *answerFacts) manuallyScored(args []string, doc *yaml.Node) string {
 	results := value(doc, "results")
 	if results == nil {
 		return ""
 	}
 	switch {
-	case depsOf(args) != "":
-		for _, r := range results.Content {
-			relation := text(value(r, "relation"))
-			v := removeAfter(r, "bearing", "manually_scored")
-			carried := kb.BearingWalk(relation) || relation == kb.RelationDemoted
-			if v == nil || (carried && text(v) != "false") || (!carried && !isNull(v)) {
-				return fmt.Sprintf("a %s record's manually_scored after bearing is not %s", relation, map[bool]string{true: "false", false: "null"}[carried])
-			}
-		}
 	case args[0] == "show" && results.Kind == yaml.MappingNode && a.flaggedNodes[args[1]]:
 		if v := removeAfter(results, "rigor", "manually_scored"); v == nil || text(v) != "false" {
 			return "show's manually_scored is not false directly after rigor"
@@ -599,7 +725,7 @@ func (a *answerFacts) manuallyScored(args []string, doc *yaml.Node) string {
 		want := []struct {
 			key   string
 			count int
-		}{{"rigor_manual", 0}, {"rigor_model", len(a.flaggedNodes)}, {"bearing_manual", 0}, {"bearing_model", len(a.flaggedEdges)}}
+		}{{"rigor_manual", 0}, {"rigor_model", len(a.flaggedNodes)}, {"bearing_manual", 0}, {"bearing_model", parityModelScoredEdges}}
 		// Each key removed, the next stands directly after subtree_aggregates.
 		for _, w := range want {
 			v := removeAfter(results, "subtree_aggregates", w.key)
@@ -653,7 +779,7 @@ func TestConvertedAnswersMatchTheGoldens(t *testing.T) {
 		goldens = append(goldens, readParityCase(t, stem, stem))
 		answers = append(answers, readParityCase(t, stem, filepath.Join(*parityAnswers, filepath.Base(stem))))
 	}
-	facts := gatherFacts(t, goldens)
+	facts := readConversionFacts(t)
 	answerSide := gatherAnswerFacts(t, answers)
 
 	cmp := parityComparisonDoc{Cases: len(goldens)}
@@ -689,7 +815,6 @@ func TestConvertedAnswersMatchTheGoldens(t *testing.T) {
 				tallies[len(answerRules)+j].Cases = append(tallies[len(answerRules)+j].Cases, g.name)
 			}
 		}
-		recount(g.doc)
 		switch {
 		case g.exit != a.exit:
 			diff(fmt.Sprintf("exit %d, the golden's %d", a.exit, g.exit))

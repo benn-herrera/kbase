@@ -7,6 +7,7 @@ import (
 
 	"kbase/internal/asks"
 	"kbase/internal/buildrecords"
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/records"
 )
@@ -20,7 +21,7 @@ import (
 // a marked harvest reached is not asked from the link's side. An in-support-of
 // answer writes target to source and a mention a references row. The ring the
 // answers close, A → D → C → A, loses the edge the walk closes it on, A's
-// premise C.
+// premise C, and the records the stage leaves load with no load error.
 func TestDependsAsksEveryLinkOnce(t *testing.T) {
 	const (
 		a = "clm-aaaaaa"
@@ -29,7 +30,7 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 		d = "clm-dddddd"
 		e = "clm-eeeeee"
 	)
-	m := func(id string) string { return " <!-- claim-rigor: " + id + " -->" }
+	m := kb.StatementMarker
 	root, repo, opts := seedTheoremLeaf(t,
 		map[string]string{a: "Result A", b: "Result B", c: "Result C", d: "Theorem 1", e: "Equation (`eq:one`) — x equals one"},
 		"Alpha holds here."+m(a)+"\n\nBeta holds here, by Theorem 1."+m(b)+"\n\nGamma holds here, by Theorem 1."+m(c)+"\n\n"+
@@ -134,5 +135,8 @@ func TestDependsAsksEveryLinkOnce(t *testing.T) {
 	}
 	if want := []string{a + " -> " + c}; !slices.Equal(ring, want) {
 		t.Errorf("stage-D-ring demoted = %q, want the walk's one cut %q", ring, want)
+	}
+	if _, err := index.Derive(kb.OnDisk(root)); err != nil {
+		t.Errorf("the records the stage leaves, its ring cut, fail to load: %v", err)
 	}
 }

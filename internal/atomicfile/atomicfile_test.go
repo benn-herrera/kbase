@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -68,6 +69,47 @@ func TestWriteInRefusesATargetOutsideRoot(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 1 {
 		t.Errorf("the outside directory holds %v (%v), want only the target", entries, err)
+	}
+}
+
+// TestWriteModeSetsTheModeExactly: a new file lands at the mode asked for,
+// group and other write bits the usual umask strips included, and a replaced
+// file takes the mode asked for in place of its own.
+func TestWriteModeSetsTheModeExactly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name     string
+		existing os.FileMode // 0: no file stands
+		mode     os.FileMode
+	}{
+		{"created", 0, 0o666},
+		{"replaced", 0o600, 0o644},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name)
+			if tc.existing != 0 {
+				writeFile(t, path, "old\n")
+				if err := os.Chmod(path, tc.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := WriteMode(path, []byte("new\n"), tc.mode); err != nil {
+				t.Fatalf("WriteMode: %v", err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode().Perm(); got != tc.mode {
+				t.Errorf("mode %#o, want %#o", got, tc.mode)
+			}
+			if got := readFile(t, path); got != "new\n" {
+				t.Errorf("%s = %q, want the written bytes", path, got)
+			}
+		})
 	}
 }
 

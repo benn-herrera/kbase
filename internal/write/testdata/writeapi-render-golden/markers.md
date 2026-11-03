@@ -1,3 +1,3 @@
-<!-- claim-rigor: clm-aa1111 -->
-<!-- claim-rigor: ana-ee5555 -->
-<!-- claim-rigor: exp-ff6666 -->
+<!-- kbase-id: clm-aa1111 -->
+<!-- kbase-id: ana-ee5555 -->
+<!-- kbase-id: exp-ff6666 -->

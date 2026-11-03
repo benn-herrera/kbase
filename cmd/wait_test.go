@@ -27,7 +27,7 @@ func TestWaitRefusesAnAbsentOrNonPositivePid(t *testing.T) {
 			doc := checkDocument(t, "wait", out)
 			items := doc.items(toolresult.RefusalsKey)
 			if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
-				items[0]["check"] != checkUsage || items[0]["key"] != "--pid" {
+				items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--pid" {
 				t.Errorf("wait %q = outcome %s, exit %d, %v\n%s", args, doc.Outcome, code, items, out)
 			}
 		})

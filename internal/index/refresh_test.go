@@ -35,7 +35,7 @@ func smallKB(t *testing.T) string {
 	return kbWith(t, kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "Claim A", Rigor: f(0.7), Rationale: "r."}}}, []string{"vol"},
 		map[string]string{
 			"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
-			"vol/a.md":     "[↑ Vol](index.md)\n\n# A\n\nA claim. <!-- claim-rigor: clm-aaaaaa -->\n",
+			"vol/a.md":     "[↑ Vol](index.md)\n\n# A\n\nA claim. <!-- kbase-id: clm-aaaaaa -->\n",
 		})
 }
 
@@ -66,10 +66,10 @@ func TestRefreshThenVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{kb.ClaimGraphFile, "vol/claim-rigor.md"}; !slices.Equal(slices.Sorted(slices.Values(written)), want) {
+	if want := []string{kb.ClaimGraphFile, "vol/" + kb.RegisterFile}; !slices.Equal(slices.Sorted(slices.Values(written)), want) {
 		t.Errorf("first refresh wrote %q, want %q", written, want)
 	}
-	register := read(t, filepath.Join(root, "vol/claim-rigor.md"))
+	register := read(t, filepath.Join(root, "vol", kb.RegisterFile))
 	for _, want := range []string{"- strength: 0 (unsubstantiated)\n", "> **Leaf references:** [a](./a.md).\n"} {
 		if !strings.Contains(register, want) {
 			t.Errorf("register lacks %q:\n%s", want, register)
@@ -86,39 +86,9 @@ func TestRefreshThenVerify(t *testing.T) {
 	}
 }
 
-// TestRefreshLeavesAnAboveMaximumRigorInTheFile: a rigor standing above the
-// rigor tables' maximum — a hand-edited 1.20 — reads at the maximum, and that
-// is a reading rule: refresh derives the rows from 1.00 and leaves the node
-// records holding `rigor: 1.20` byte for byte, the number it found never
-// rewritten.
-// TestADegradedRepairKeepsAnAboveMaximumRigor: the repair of a degraded load —
-// here an edge naming a node no record carries — rewrites the edge records and
-// leaves a node's rigor of 1.2 in the node records as the file held it.
-func TestADegradedRepairKeepsAnAboveMaximumRigor(t *testing.T) {
-	g := kb.Graph{
-		Claims:      []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "Claim A", Rigor: f(1.2)}},
-		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "Exp", Status: "run", Rigor: f(1.2)}},
-		Scorable:    []kb.ScorableEdge{{Relation: kb.RelationLifts, Source: "exp-aaaaaa", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.5}}},
-		References:  []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-cccccc"}},
-	}
-	root := kbWith(t, g, []string{"vol"}, map[string]string{
-		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n- [exp](exp.md)\n",
-		"vol/a.md":     "[↑ Vol](index.md)\n\n# A\n\nA claim. <!-- claim-rigor: clm-aaaaaa -->\n",
-		"vol/exp.md":   "[↑ Vol](index.md)\n\n# Exp\n<!-- claim-rigor: exp-aaaaaa -->\n",
-	})
-	r, err := RefreshWithWarnings(kb.OnDisk(root), log.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(r.Warnings) != 1 || !slices.Contains(r.Written, kb.GraphEdgesFile) {
-		t.Fatalf("refresh warned %v and wrote %q; want the dangling edge dropped from %s", r.Warnings, r.Written, kb.GraphEdgesFile)
-	}
-	if nodes := read(t, filepath.Join(root, kb.GraphNodesFile)); strings.Count(nodes, "rigor: 1.2\n") != 2 {
-		t.Errorf("the repair rewrote a rigor above the maximum:\n%s", nodes)
-	}
-}
-
-func TestRefreshLeavesAnAboveMaximumRigorInTheFile(t *testing.T) {
+// TestRefreshRefusesAnAboveMaximumRigor: a node record whose rigor stands
+// above the maximum refuses the load, and refresh writes nothing.
+func TestRefreshRefusesAnAboveMaximumRigor(t *testing.T) {
 	g := kb.Graph{
 		Claims:      []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "Claim A", Rigor: f(0.7)}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "Exp", Status: "run", Rigor: f(1.2)}},
@@ -126,37 +96,24 @@ func TestRefreshLeavesAnAboveMaximumRigorInTheFile(t *testing.T) {
 	}
 	root := kbWith(t, g, []string{"vol"}, map[string]string{
 		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n- [exp](exp.md)\n",
-		"vol/a.md":     "[↑ Vol](index.md)\n\n# A\n\nA claim. <!-- claim-rigor: clm-aaaaaa -->\n",
-		"vol/exp.md":   "[↑ Vol](index.md)\n\n# Exp\n<!-- claim-rigor: exp-aaaaaa -->\n",
+		"vol/a.md":     "[↑ Vol](index.md)\n\n# A\n\nA claim. <!-- kbase-id: clm-aaaaaa -->\n",
+		"vol/exp.md":   "[↑ Vol](index.md)\n\n# Exp\n<!-- kbase-id: exp-aaaaaa -->\n",
 	})
 	nodes := read(t, filepath.Join(root, kb.GraphNodesFile))
 	if !strings.Contains(nodes, "rigor: 1.2\n") {
 		t.Fatalf("the node records do not hold the rigor above the maximum:\n%s", nodes)
 	}
-	written, err := Refresh(kb.OnDisk(root), log.Discard())
-	if err != nil {
-		t.Fatal(err)
+	_, err := Refresh(kb.OnDisk(root), log.Discard())
+	var refusal result.Refusal
+	if !errors.As(err, &refusal) || len(refusal) != 1 {
+		t.Fatalf("refresh error = %v, want one refusal item", err)
+	}
+	if it := refusal[0]; it.Check != kb.CheckMetadata || it.Path != kb.GraphNodesFile || it.Key != kb.RigorKey {
+		t.Errorf("refusal item = %+v, want a %s refusal on %s's %s", it, kb.CheckMetadata, kb.GraphNodesFile, kb.RigorKey)
 	}
 	if got := read(t, filepath.Join(root, kb.GraphNodesFile)); got != nodes {
-		t.Errorf("refresh rewrote the node records:\n%s\nwant them as it found them:\n%s", got, nodes)
+		t.Errorf("refresh rewrote the node records:\n%s\nwant them as they were:\n%s", got, nodes)
 	}
-	if slices.Contains(written, kb.GraphNodesFile) {
-		t.Errorf("refresh reports the node records written; it wrote %q", written)
-	}
-	rows, err := Derive(kb.OnDisk(root))
-	if err != nil {
-		t.Fatalf("deriving the rows: %v", err)
-	}
-	for _, r := range rows.Nodes {
-		if r.ID != "exp-aaaaaa" {
-			continue
-		}
-		if r.Rigor == nil || *r.Rigor != kb.RigorMaximum {
-			t.Errorf("the index row reads rigor %v, want the maximum %v", r.Rigor, kb.RigorMaximum)
-		}
-		return
-	}
-	t.Errorf("the index carries no row for exp-aaaaaa: %+v", rows)
 }
 
 // TestRefreshRecordsTheExactStrength: a premise's own value reaches the record
@@ -169,22 +126,22 @@ func TestRefreshRecordsTheExactStrength(t *testing.T) {
 			{ID: "clm-bbbbbb", Title: "Claim B", Rigor: f(0.9), Rationale: "r."},
 			{ID: "clm-cccccc", Title: "Claim C", Rigor: f(0.9), Rationale: "r."},
 			{ID: "clm-dddddd", Title: "Claim D", Rigor: f(1), Rationale: "r."}},
-		Axioms: []kb.AxiomNode{{ID: "axm-S1", Title: "The rule"}},
-		Founds: []kb.BearingEdge{founds("axm-S1", "clm-aaaaaa", kb.Bearing{Value: 0.7})},
+		Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "The rule"}},
+		Founds: []kb.BearingEdge{founds("axm-s10000", "clm-aaaaaa", kb.Bearing{Value: 0.7})},
 		Scorable: []kb.ScorableEdge{scorable(kb.RelationSupports, "clm-aaaaaa", "clm-bbbbbb", 0.72),
 			scorable(kb.RelationSupports, "clm-bbbbbb", "clm-cccccc", 0.72)},
 	}
 	root := kbWith(t, g, []string{"vol"}, map[string]string{
 		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
 		"vol/a.md": "[↑ Vol](index.md)\n\n# A\n\n" +
-			"<!-- claim-rigor: clm-aaaaaa -->\n\nBody A.\n\n<!-- claim-rigor: clm-bbbbbb -->\n\nBody B.\n\n" +
-			"<!-- claim-rigor: clm-cccccc -->\n\nBody C.\n\n<!-- claim-rigor: clm-dddddd -->\n\nBody D.\n",
-		kb.AxiomsFile: "# Axioms\n\n### Axiom S1: The rule\n\nBody.\n",
+			"<!-- kbase-id: clm-aaaaaa -->\n\nBody A.\n\n<!-- kbase-id: clm-bbbbbb -->\n\nBody B.\n\n" +
+			"<!-- kbase-id: clm-cccccc -->\n\nBody C.\n\n<!-- kbase-id: clm-dddddd -->\n\nBody D.\n",
+		kb.AxiomsFile: "# Axioms\n\n" + kb.AxiomHeadingLine("S1", "The rule", "axm-s10000") + "\n\nBody.\n",
 	})
 	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
 		t.Fatal(err)
 	}
-	register := read(t, filepath.Join(root, "vol/claim-rigor.md"))
+	register := read(t, filepath.Join(root, "vol", kb.RegisterFile))
 	for _, want := range []string{
 		"- strength: 0.7 (ok to build on, see caveats)",
 		"- strength: 0.504 (use as input only",
@@ -213,22 +170,22 @@ func TestRefreshRecordsTheExactStrength(t *testing.T) {
 	}
 
 	truncated := strings.Replace(register, "- strength: 0.504 ", "- strength: 0.5 ", 1)
-	if err := os.WriteFile(filepath.Join(root, "vol/claim-rigor.md"), []byte(truncated), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "vol/"+kb.RegisterFile), []byte(truncated), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	findings, err := Verify(kb.OnDisk(root))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 1 || findings[0].Check != CheckRegisterFreshness || findings[0].Path != "vol/claim-rigor.md" || !findings[0].RefreshFixable {
-		t.Errorf("a hand-truncated strength drew %+v, want one refresh-fixable %s finding on vol/claim-rigor.md", findings, CheckRegisterFreshness)
+	if len(findings) != 1 || findings[0].Check != CheckRegisterFreshness || findings[0].Path != "vol/"+kb.RegisterFile || findings[0].Remedy != EmptyBatchRemedy {
+		t.Errorf("a hand-truncated strength drew %+v, want one %s finding on vol/%s, remedy the empty batch", findings, CheckRegisterFreshness, kb.RegisterFile)
 	}
 }
 
-// TestWriteSheetWithoutDot: with no dot on PATH nothing is drawn, a sheet
+// TestSheetWithoutDot: with no dot on PATH nothing is drawn, a sheet
 // standing is left as it is, and the placeholder is written only where
 // kb-root has none.
-func TestWriteSheetWithoutDot(t *testing.T) {
+func TestSheetWithoutDot(t *testing.T) {
 	root := smallKB(t)
 	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
 		t.Fatal(err)
@@ -238,9 +195,9 @@ func TestWriteSheetWithoutDot(t *testing.T) {
 	if err := os.Remove(sheetPath); err != nil {
 		t.Fatal(err)
 	}
-	written, removed, drawn, err := WriteSheet(kb.OnDisk(root))
-	if err != nil || drawn || len(removed) > 0 || !slices.Equal(written, []string{kb.ClaimGraphFile}) {
-		t.Fatalf("WriteSheet with none standing = %q, %q, %t, %v; want the placeholder written", written, removed, drawn, err)
+	written, removed, noDot, err := RefreshReporting(kb.OnDisk(root), log.Discard())
+	if err != nil || !noDot || len(removed) > 0 || !slices.Equal(written, []string{kb.ClaimGraphFile}) {
+		t.Fatalf("refresh with none standing = %q, %q, no dot %t, %v; want the placeholder written", written, removed, noDot, err)
 	}
 	if got, _ := os.ReadFile(sheetPath); !strings.Contains(string(got), ">no Graphviz dot on PATH<") {
 		t.Errorf("the sheet written is not the placeholder: %s", got)
@@ -267,9 +224,9 @@ func TestRefreshRemovesSheetsNoLongerCalledFor(t *testing.T) {
 	root := kbWith(t, kb.Graph{Claims: []kb.ClaimNode{claimA, {ID: "clm-bbbbbb", Title: "Claim B", Rigor: f(0.7), Rationale: "r."}}},
 		[]string{"vol", "wol"}, map[string]string{
 			"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [a](a.md)\n",
-			"vol/a.md":     leaf("Vol", "\nA. <!-- claim-rigor: clm-aaaaaa -->\n"),
+			"vol/a.md":     leaf("Vol", "\nA. <!-- kbase-id: clm-aaaaaa -->\n"),
 			"wol/index.md": "[↑ KB](../entry-point.md)\n\n# Wol\n\n- [a](a.md)\n",
-			"wol/a.md":     leaf("Wol", "\nB. <!-- claim-rigor: clm-bbbbbb -->\n"),
+			"wol/a.md":     leaf("Wol", "\nB. <!-- kbase-id: clm-bbbbbb -->\n"),
 		})
 	sheets := []string{kb.ClaimGraphDigestFile, "vol/" + kb.ClaimGraphFile, "wol/" + kb.ClaimGraphFile}
 	written, removed, noDot, err := RefreshReporting(kb.OnDisk(root), log.Discard())
@@ -306,12 +263,13 @@ func TestRefreshRemovesSheetsNoLongerCalledFor(t *testing.T) {
 	}
 }
 
-// TestRefreshForgetsAPageItRemoves: a 2.0.0 KB's claim sits in a leaf at
-// kb-root with its register entry in the volume's page. The converted KB
-// renders the claim on kb-root's page, so refresh removes the volume's page,
-// and the source the refresh ran over no longer reads it as standing.
-func TestRefreshForgetsAPageItRemoves(t *testing.T) {
-	const page = "vol/" + kb.RegisterFile
+// TestUpdateFormatForgetsAPageItRemoves: a 2.0.0 KB's claim sits in a leaf at
+// kb-root with its register entry in the volume's 2.0.0 register. The
+// converted KB renders the claim on kb-root's page, so update-format removes
+// the volume's register, and the source it ran over no longer reads it as
+// standing.
+func TestUpdateFormatForgetsAPageItRemoves(t *testing.T) {
+	const page = "vol/claim-rigor.md"
 	root := writeKB(t, map[string]string{
 		"entry-point.md": "---\nkind: entry-point\nkb-format: \"2.0.0\"\n---\n\n# KB\n\n- [vol](vol/index.md)\n- [leaf](leaf.md)\n",
 		"vol/index.md":   "---\nkind: index\n---\n[↑ KB](../entry-point.md)\n\n# Vol\n",
@@ -325,40 +283,33 @@ func TestRefreshForgetsAPageItRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening the 2.0.0 KB: %v", err)
 	}
-	r, err := RefreshWithWarnings(src, log.Discard())
+	_, removed, _, err := UpdateFormat(src, nil, nil, log.Discard())
 	if err != nil {
-		t.Fatalf("refresh: %v", err)
+		t.Fatalf("update-format: %v", err)
 	}
-	if !slices.Contains(r.Removed, page) {
-		t.Errorf("refresh removed %q, want %s among them", r.Removed, page)
+	if !slices.Contains(removed, page) {
+		t.Errorf("update-format removed %q, want %s among them", removed, page)
 	}
-	findings, err := RegisterFreshness(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range findings {
-		if f.Path == page {
-			t.Errorf("register freshness after the refresh: %+v", f)
-		}
+	if src.IsFile(src.KBPath(page)) {
+		t.Errorf("the source still reads %s as standing after update-format removed it", page)
 	}
 }
 
-func TestVerifyLeavesTheSheetAndTheCitationGateAlone(t *testing.T) {
+// TestVerifyLeavesTheSheetAlone: a hand-edited or deleted sheet is no verify
+// finding, and the build's check is the standard one: a bare id in prose is
+// its fault, beside a dead link's.
+func TestVerifyLeavesTheSheetAlone(t *testing.T) {
 	root := smallKB(t)
 	if _, err := Refresh(kb.OnDisk(root), log.Discard()); err != nil {
 		t.Fatal(err)
 	}
-	verify := func(state string) (standard, build []Finding) {
+	verify := func(state string) []Finding {
 		t.Helper()
 		standard, err := Verify(kb.OnDisk(root))
 		if err != nil {
 			t.Fatalf("%s: Verify: %v", state, err)
 		}
-		build, err = BuildVerify(kb.OnDisk(root))
-		if err != nil {
-			t.Fatalf("%s: BuildVerify: %v", state, err)
-		}
-		return standard, build
+		return standard
 	}
 
 	sheetPath := filepath.Join(root, kb.ClaimGraphFile)
@@ -366,44 +317,26 @@ func TestVerifyLeavesTheSheetAndTheCitationGateAlone(t *testing.T) {
 	if err := os.WriteFile(sheetPath, append(placeholder, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if standard, build := verify("hand-edited sheet"); len(standard)+len(build) > 0 {
-		t.Errorf("a hand-edited sheet: Verify found %v, BuildVerify found %v", standard, build)
+	if found := verify("hand-edited sheet"); len(found) > 0 {
+		t.Errorf("a hand-edited sheet: Verify found %v", found)
 	}
 	if err := os.Remove(sheetPath); err != nil {
 		t.Fatal(err)
 	}
-	if standard, build := verify("deleted sheet"); len(standard)+len(build) > 0 {
-		t.Errorf("a deleted sheet: Verify found %v, BuildVerify found %v", standard, build)
+	if found := verify("deleted sheet"); len(found) > 0 {
+		t.Errorf("a deleted sheet: Verify found %v", found)
 	}
 
 	indexPath := filepath.Join(root, "vol/index.md")
-	appendTo := func(text string) {
-		t.Helper()
-		body, err := os.ReadFile(indexPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(indexPath, append(body, text...), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	appendTo("\nThis follows from clm-aaaaaa.\n")
-	standard, build := verify("citation-shaped sentence")
-	if len(standard) > 0 {
-		t.Errorf("a citation-shaped sentence: Verify found %v", standard)
-	}
-	if got := checks(build); !slices.Equal(got, []string{checkChannel}) {
-		t.Errorf("a citation-shaped sentence: BuildVerify checks %q, want %q", got, []string{checkChannel})
-	}
-
-	appendTo("\n[gone](missing.md)\n")
-	standard, build = verify("citation and dead link")
-	cites, err := CitationFindings(kb.OnDisk(root))
+	body, err := os.ReadFile(indexPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(standard) == 0 || len(cites) == 0 || !slices.Equal(build, slices.Concat(standard, cites)) {
-		t.Errorf("BuildVerify found %v, want the standard check's %v then the citation gate's %v", build, standard, cites)
+	if err := os.WriteFile(indexPath, append(body, "\nThis follows from clm-aaaaaa.\n\n[gone](missing.md)\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := checks(verify("bare id and dead link")), []string{"dead-link", "bare-id"}; !slices.Equal(got, want) {
+		t.Errorf("a bare id and a dead link: Verify checks %q, want %q", got, want)
 	}
 }
 
@@ -424,7 +357,7 @@ func TestSaveDrainsTheObsoleteButWhatItSaves(t *testing.T) {
 	}
 	src := kb.MigratedSource(root, "1.0.0", map[string][]byte{"kb-root/vol/a.md": []byte(leaf)},
 		[]string{"kb-root/.index/claims.jsonl", "kb-root/vol/a.md", "kb-root/vol/old.md"})
-	_, removed, _, err := RefreshReporting(src, log.Discard())
+	_, removed, _, err := UpdateFormat(src, nil, nil, log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,12 +431,12 @@ func TestSaveRefusesASymlinkedDocument(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	converted := []byte("[↑ Vol](index.md)\n\n# A changed\n\nA claim. <!-- claim-rigor: clm-aaaaaa -->\n")
+	converted := []byte("[↑ Vol](index.md)\n\n# A changed\n\nA claim. <!-- kbase-id: clm-aaaaaa -->\n")
 	src := kb.MigratedSource(root, "1.0.0", map[string][]byte{"kb-root/vol/a.md": converted}, nil)
-	_, _, _, err := RefreshReporting(src, log.Discard())
+	_, _, _, err := UpdateFormat(src, nil, nil, log.Discard())
 	var r result.Refusal
 	if !errors.As(err, &r) || len(r) != 1 || r[0].Check != kb.CheckSymlink || r[0].Path != link {
-		t.Fatalf("refresh over a symlinked document = %v, want one %s refusal naming %s", err, kb.CheckSymlink, link)
+		t.Fatalf("update-format over a symlinked document = %v, want one %s refusal naming %s", err, kb.CheckSymlink, link)
 	}
 	if got := read(t, filepath.Join(root, kb.EntryPointFile)); got != entry {
 		t.Errorf("the entry point after a refused save =\n%s\nwant it unstamped", got)
@@ -514,24 +447,31 @@ func TestSaveRefusesASymlinkedDocument(t *testing.T) {
 }
 
 // TestMetadataFindings: a frontmatter block on a leaf, a claim with no
-// statement marker and one with two, an axiom record with no heading and a
-// heading with no record, an edge naming no node and a register page called
-// for and missing are each one finding, in that order; the frontmatter block
-// carries its remedy, the degraded load's fault and the page refresh's, and
-// the markers and the axioms none. Refreshed, and with the block, the markers
-// and the axioms put right, verify finds nothing.
+// statement marker and one with two; an axiom record with no heading carrying
+// its marker, one whose marker ends two headings, a marked heading whose text
+// is not its record's label and title, and a marked heading naming no axiom
+// record; and a register page called for and missing are each one finding, in
+// that order, after the link gate's unknown-id for the orphan marker, and an
+// unmarked axiom heading none, each check named as the result table names it;
+// the frontmatter block
+// carries its remedy, the page the empty batch, and the markers and the axioms
+// none. Refreshed, and with the block, the markers and the axioms put right,
+// verify finds nothing.
 func TestMetadataFindings(t *testing.T) {
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A", Rigor: f(0.7)}, {ID: "clm-bbbbbb", Title: "B"}, {ID: "clm-cccccc", Title: "C"}},
-		Axioms: []kb.AxiomNode{{ID: "axm-S1", Title: "The rule"}, {ID: "axm-S2", Title: "Second"}},
-		Founds: []kb.BearingEdge{founds("wrk-gone", "clm-aaaaaa", kb.Bearing{Value: 1})},
+		Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "The rule"}, {ID: "axm-s20000", Label: "S2", Title: "Second"},
+			{ID: "axm-s30000", Label: "S3", Title: "Third"}, {ID: "axm-s40000", Label: "S4", Title: "Fourth"}},
 	}
-	leaf := "[↑ V](index.md)\n\n# Leaf\n\nA. <!-- claim-rigor: clm-aaaaaa -->\n\nC. <!-- claim-rigor: clm-cccccc -->\n"
+	axiom := kb.AxiomHeadingLine
+	leaf := "[↑ V](index.md)\n\n# Leaf\n\nA. <!-- kbase-id: clm-aaaaaa -->\n\nC. <!-- kbase-id: clm-cccccc -->\n"
 	root := kbWith(t, g, []string{"v"}, map[string]string{
-		"v/index.md":  "[↑ KB](../entry-point.md)\n\n# V\n\n- [leaf](leaf.md)\n- [other](other.md)\n",
-		"v/leaf.md":   "---\nkind: leaf\n---\n" + leaf,
-		"v/other.md":  "[↑ V](index.md)\n\n# Other\n\nC again. <!-- claim-rigor: clm-cccccc -->\n",
-		kb.AxiomsFile: "# Axioms\n\n### Axiom S1: The rule\n\nBody.\n\n### Axiom S3: Stray\n",
+		"v/index.md": "[↑ KB](../entry-point.md)\n\n# V\n\n- [leaf](leaf.md)\n- [other](other.md)\n",
+		"v/leaf.md":  "---\nkind: leaf\n---\n" + leaf,
+		"v/other.md": "[↑ V](index.md)\n\n# Other\n\nC again. <!-- kbase-id: clm-cccccc -->\n",
+		kb.AxiomsFile: "# Axioms\n\n" + axiom("S1", "The rule", "axm-s10000") + "\n\nBody.\n\n### Axiom S5: Stray\n\n" +
+			axiom("S3", "Third", "axm-s30000") + "\n\n" + axiom("S3", "Third", "axm-s30000") + "\n\n" +
+			axiom("S4", "Wrong", "axm-s40000") + "\n\n" + axiom("S9", "Orphan", "axm-s90000") + "\n",
 	})
 	findings, err := Verify(kb.OnDisk(root))
 	if err != nil {
@@ -543,13 +483,15 @@ func TestMetadataFindings(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s %s:%d %s", it.Check, it.Path, it.Line, it.Remedy))
 	}
 	want := []string{
-		CheckFrontmatterPresence + " v/leaf.md:1 " + frontmatterRemedy,
-		CheckStatementMarker + " :0 ",
-		CheckStatementMarker + " v/leaf.md:10 ",
-		CheckAxiomHeading + " axioms.md:0 ",
-		CheckAxiomHeading + " axioms.md:7 ",
-		kb.CheckDegraded + " " + kb.GraphEdgesFile + ":0 " + RefreshRemedy,
-		CheckRegisterFreshness + " v/claim-rigor.md:0 " + RefreshRemedy,
+		"unknown-id axioms.md:15 ",
+		"frontmatter v/leaf.md:1 " + frontmatterRemedy,
+		"statement-marker :0 ",
+		"statement-marker v/leaf.md:10 ",
+		"axiom-heading axioms.md:0 ",
+		"axiom-heading axioms.md:9 ",
+		"axiom-heading axioms.md:13 ",
+		"axiom-heading axioms.md:15 ",
+		"register-freshness v/" + kb.RegisterFile + ":0 " + EmptyBatchRemedy,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("findings\n%q\nwant\n%q\n(%+v)", got, want, findings)
@@ -559,9 +501,10 @@ func TestMetadataFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for rel, text := range map[string]string{
-		"v/leaf.md":   leaf + "\nB. <!-- claim-rigor: clm-bbbbbb -->\n",
-		"v/other.md":  "[↑ V](index.md)\n\n# Other\n",
-		kb.AxiomsFile: "# Axioms\n\n### Axiom S1: The rule\n\nBody.\n\n### Axiom S2: Second\n",
+		"v/leaf.md":  leaf + "\nB. <!-- kbase-id: clm-bbbbbb -->\n",
+		"v/other.md": "[↑ V](index.md)\n\n# Other\n",
+		kb.AxiomsFile: "# Axioms\n\n" + axiom("S1", "The rule", "axm-s10000") + "\n\nBody.\n\n### Axiom S5: Stray\n\n" +
+			axiom("S2", "Second", "axm-s20000") + "\n\n" + axiom("S3", "Third", "axm-s30000") + "\n\n" + axiom("S4", "Fourth", "axm-s40000") + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
@@ -586,7 +529,7 @@ func TestDemotedFindings(t *testing.T) {
 			{Source: "clm-aaaaaa", Target: "clm-bbbbbb", ReplacedRelation: kb.RelationSupports, Bearing: one}},
 	}, []string{"v"}, map[string]string{
 		"v/index.md": "[↑ KB](../entry-point.md)\n\n# V\n\n- [leaf](leaf.md)\n",
-		"v/leaf.md":  "[↑ V](index.md)\n\n# Leaf\n\nA. <!-- claim-rigor: clm-aaaaaa -->\n",
+		"v/leaf.md":  "[↑ V](index.md)\n\n# Leaf\n\nA. <!-- kbase-id: clm-aaaaaa -->\n",
 	})
 	items, err := DemotedFindings(kb.OnDisk(root))
 	if err != nil {
@@ -606,14 +549,27 @@ func TestDemotedFindings(t *testing.T) {
 }
 
 // TestRefreshRendersPagesAndSheetsOverTheSheetFixture: over a copy of the
-// sheet fixture with its pages removed and a register standing in gamma,
-// which hosts no node, refresh writes each page the KB calls for, fresh to
-// verify, and the sheets, removes gamma's page and reports it, and writes no
-// file under .index/; a second refresh writes and removes nothing.
+// sheet fixture, converted to the current format by update-format, with its
+// pages and sheets removed and a register standing in gamma, which hosts no node,
+// refresh writes each page the KB calls for, fresh to verify, and the sheets,
+// removes gamma's page and reports it, and writes no file under .index/; a
+// second refresh writes and removes nothing.
 func TestRefreshRendersPagesAndSheetsOverTheSheetFixture(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "repo", kb.KBDir)
 	if err := os.CopyFS(root, os.DirFS(sheetFixtureKB)); err != nil {
 		t.Fatal(err)
+	}
+	converted, err := kbload.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := UpdateFormat(converted, nil, nil, log.Discard()); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{kb.ClaimGraphFile, kb.ClaimGraphDigestFile, "alpha/" + kb.ClaimGraphFile, "beta/" + kb.ClaimGraphFile} {
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(rel))); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
 	}
 	pages := []string{"alpha/" + kb.RegisterFile, "beta/" + kb.RegisterFile, kb.RegisterFile}
 	for _, rel := range pages {
@@ -631,22 +587,19 @@ func TestRefreshRendersPagesAndSheetsOverTheSheetFixture(t *testing.T) {
 		records[rel] = read(t, filepath.Join(root, filepath.FromSlash(rel)))
 	}
 
-	r, err := RefreshWithWarnings(kb.OnDisk(root), log.Discard())
+	written, removed, noDot, err := RefreshReporting(kb.OnDisk(root), log.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
 	sheets := []string{kb.ClaimGraphFile}
-	if !r.NoDot {
+	if !noDot {
 		sheets = append(sheets, kb.ClaimGraphDigestFile, "alpha/"+kb.ClaimGraphFile, "beta/"+kb.ClaimGraphFile)
 	}
-	if want := slices.Concat(pages, sheets); !slices.Equal(slices.Sorted(slices.Values(r.Written)), slices.Sorted(slices.Values(want))) {
-		t.Errorf("refresh wrote %q, want the pages and the sheets %q", r.Written, want)
+	if want := slices.Concat(pages, sheets); !slices.Equal(slices.Sorted(slices.Values(written)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("refresh wrote %q, want the pages and the sheets %q", written, want)
 	}
-	if !slices.Equal(r.Removed, []string{stale}) || kb.IsFile(filepath.Join(root, filepath.FromSlash(stale))) {
-		t.Errorf("refresh removed %q, want %s gone and reported", r.Removed, stale)
-	}
-	if len(r.Warnings) != 0 {
-		t.Errorf("the fixture's load is not degraded, and refresh warned %+v", r.Warnings)
+	if !slices.Equal(removed, []string{stale}) || kb.IsFile(filepath.Join(root, filepath.FromSlash(stale))) {
+		t.Errorf("refresh removed %q, want %s gone and reported", removed, stale)
 	}
 	if fresh, err := RegisterFreshness(kb.OnDisk(root)); err != nil || len(fresh) != 0 {
 		t.Errorf("the pages refresh wrote are not fresh: %+v (%v)", fresh, err)
@@ -664,109 +617,37 @@ func TestRefreshRendersPagesAndSheetsOverTheSheetFixture(t *testing.T) {
 		}
 	}
 
-	again, err := RefreshWithWarnings(kb.OnDisk(root), log.Discard())
-	if err != nil || len(again.Written)+len(again.Removed) > 0 {
-		t.Errorf("second refresh wrote %q and removed %q (%v), want nothing", again.Written, again.Removed, err)
+	again, removedAgain, _, err := RefreshReporting(kb.OnDisk(root), log.Discard())
+	if err != nil || len(again)+len(removedAgain) > 0 {
+		t.Errorf("second refresh wrote %q and removed %q (%v), want nothing", again, removedAgain, err)
 	}
 }
 
-// TestRefreshRepairsADegradedLoad: a KB whose records hold an edge naming no
-// node, an edge identity authored twice and a supports cycle is written back
-// as the walk resolves it — the dangling edge and the second record gone, the
-// cycle cut into a demoted record — with a warning per loss or cut; the
-// records then load clean, and a second refresh writes nothing and warns of
-// nothing.
-func TestRefreshRepairsADegradedLoad(t *testing.T) {
+// TestRefreshRefusesALoadError: a KB whose records hold a supports cycle is
+// refused, a load error naming the edge file, and refresh writes nothing.
+func TestRefreshRefusesALoadError(t *testing.T) {
 	one := kb.Bearing{Value: 1}
 	g := kb.Graph{
 		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A", Rigor: f(0.9)}, {ID: "clm-bbbbbb", Title: "B", Rigor: f(0.8)}},
 		Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: one},
 			{Relation: kb.RelationSupports, Source: "clm-bbbbbb", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.5}}},
-		Founds: []kb.BearingEdge{{Source: "wrk-gone", Target: "clm-aaaaaa", Bearing: one}},
-		References: []kb.UnscoredEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Context: "first"},
-			{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Context: "second"}},
 	}
 	files := graphFiles(g)
 	for rel, text := range map[string]string{
 		kb.EntryPointFile: "# KB\n\n- [v](v/index.md)\n",
 		"v/index.md":      "[↑ KB](../entry-point.md)\n\n# V\n\n- [leaf](leaf.md)\n",
-		"v/leaf.md":       "[↑ V](index.md)\n\n# Leaf\n\nA. <!-- claim-rigor: clm-aaaaaa -->\n\nB. <!-- claim-rigor: clm-bbbbbb -->\n",
+		"v/leaf.md":       "[↑ V](index.md)\n\n# Leaf\n\nA. <!-- kbase-id: clm-aaaaaa -->\n\nB. <!-- kbase-id: clm-bbbbbb -->\n",
 	} {
 		files[rel] = text
 	}
 	root := writeKB(t, files)
-	degraded, err := Derive(kb.OnDisk(root))
-	if err != nil {
-		t.Fatal(err)
+	written, removed, _, err := RefreshReporting(kb.OnDisk(root), log.Discard())
+	var refused result.Refusal
+	if !errors.As(err, &refused) || len(refused) != 1 || refused[0].Check != kb.CheckMetadata || refused[0].Path != kb.GraphEdgesFile {
+		t.Errorf("refresh over a cycle = %v, want the load error naming %s", err, kb.GraphEdgesFile)
 	}
-	if len(degraded.Degraded) != 3 {
-		t.Fatalf("the fixture loads with warnings %+v, want the dangling edge, the second record and the cut", degraded.Degraded)
-	}
-
-	r, err := RefreshWithWarnings(kb.OnDisk(root), log.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(r.Written, kb.GraphEdgesFile) || !slices.Contains(r.Written, "v/"+kb.RegisterFile) {
-		t.Errorf("refresh wrote %q, want the edge records and v's page", r.Written)
-	}
-	var warned, want []string
-	for _, w := range r.Warnings {
-		warned = append(warned, w.Path+": "+w.Detail)
-	}
-	for _, w := range degraded.Degraded {
-		want = append(want, w.Path+": "+w.Detail)
-	}
-	if !slices.Equal(warned, want) {
-		t.Errorf("refresh warned %q, want a warning per loss or cut %q", warned, want)
-	}
-	repaired, err := kb.LoadGraph(kb.OnDisk(root))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cut := kb.DemotedEdge{Source: "clm-bbbbbb", Target: "clm-aaaaaa", ReplacedRelation: kb.RelationSupports, Bearing: kb.Bearing{Value: 0.5}}
-	if len(repaired.Founds) != 0 || !slices.Equal(repaired.References, g.References[:1]) ||
-		!slices.Equal(repaired.Scorable, g.Scorable[:1]) || !slices.Equal(repaired.Demoted, []kb.DemotedEdge{cut}) {
-		t.Errorf("the repaired records are %+v, want the dangling founds gone, the first references kept and the cycle cut", repaired)
-	}
-	if rows, err := Derive(kb.OnDisk(root)); err != nil || len(rows.Degraded) != 0 {
-		t.Errorf("the repaired KB loads with warnings %+v (%v), want none", rows.Degraded, err)
-	}
-
-	again, err := RefreshWithWarnings(kb.OnDisk(root), log.Discard())
-	if err != nil || len(again.Written)+len(again.Removed)+len(again.Warnings) > 0 {
-		t.Errorf("second refresh wrote %q, removed %q and warned %+v (%v), want nothing", again.Written, again.Removed, again.Warnings, err)
-	}
-}
-
-// TestARepairBesideAStandingDemotedRecordLoadsClean: over the cycle
-// clm-aaaaaa ⇄ clm-bbbbbb, each edge already standing beside its demoted
-// record, one repair cuts an edge and writes no second demoted record of its
-// identity, so the repaired KB loads clean with both demoted records as they
-// stood.
-func TestARepairBesideAStandingDemotedRecordLoadsClean(t *testing.T) {
-	half, third := kb.Bearing{Value: 0.5}, kb.Bearing{Value: 0.3}
-	g := kb.Graph{
-		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A"}, {ID: "clm-bbbbbb", Title: "B"}},
-		Scorable: []kb.ScorableEdge{{Relation: kb.RelationSupports, Source: "clm-aaaaaa", Target: "clm-bbbbbb", Bearing: half},
-			{Relation: kb.RelationSupports, Source: "clm-bbbbbb", Target: "clm-aaaaaa", Bearing: half}},
-		Demoted: []kb.DemotedEdge{{Source: "clm-aaaaaa", Target: "clm-bbbbbb", ReplacedRelation: kb.RelationSupports, Bearing: third},
-			{Source: "clm-bbbbbb", Target: "clm-aaaaaa", ReplacedRelation: kb.RelationSupports, Bearing: third}},
-	}
-	root := kbWith(t, g, nil, nil)
-	r, err := RefreshWithWarnings(kb.OnDisk(root), log.Discard())
-	if err != nil || len(r.Warnings) != 1 {
-		t.Fatalf("refresh warned %+v (%v), want the one cut", r.Warnings, err)
-	}
-	if rows, err := Derive(kb.OnDisk(root)); err != nil || len(rows.Degraded) != 0 {
-		t.Errorf("the repaired KB loads with warnings %+v (%v), want none", rows.Degraded, err)
-	}
-	repaired, err := kb.LoadGraph(kb.OnDisk(root))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(repaired.Scorable) != 1 || !slices.Equal(repaired.Demoted, g.Demoted) {
-		t.Errorf("the repaired records are %+v and %+v, want one edge left and the demoted records as they stood", repaired.Scorable, repaired.Demoted)
+	if len(written)+len(removed) > 0 {
+		t.Errorf("refresh over a cycle wrote %q and removed %q, want nothing", written, removed)
 	}
 }
 

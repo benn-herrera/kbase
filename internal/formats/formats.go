@@ -2,7 +2,7 @@
 // to the current one in memory: the files as bytes in, the next form's files
 // as bytes out, plus the paths the conversion made obsolete. It touches no file.
 // Each format and each conversion step is a package beneath it — the live
-// format, format300, among them — and the tree imports nothing of kbase outside
+// format, format400, among them — and the tree imports nothing of kbase outside
 // itself, so maintaining a live package never changes what an old KB converts
 // to.
 package formats
@@ -18,8 +18,10 @@ import (
 	"kbase/internal/formats/format100"
 	"kbase/internal/formats/format200"
 	"kbase/internal/formats/format300"
+	"kbase/internal/formats/format400"
 	"kbase/internal/formats/from100to200"
 	"kbase/internal/formats/from200to300"
+	"kbase/internal/formats/from300to400"
 )
 
 type (
@@ -30,6 +32,18 @@ type (
 	// a conversion from 2.0.x returns unchanged.
 	AnnotationError = format200.AnnotationError
 	MalformedError  = format200.MalformedError
+	// GraphLoadError is the 3.0.0 load's refusal, which a conversion from
+	// 3.0.0 returns unchanged.
+	GraphLoadError = format300.GraphLoadError
+)
+
+// The lists a conversion's warnings are grouped under (Warning.List).
+const (
+	ListIDs                 = common.ListIDs
+	ListBareIDs             = common.ListBareIDs
+	ListUnresolvedCitations = common.ListUnresolvedCitations
+	ListNoEdge              = common.ListNoEdge
+	ListStrengthenBy        = common.ListStrengthenBy
 )
 
 // converter is one step from format version From to To. Convert returns the
@@ -44,6 +58,7 @@ type converter struct {
 var converters = []converter{
 	{From: format100.Version100, To: format200.Version200, Convert: unwarned(from100to200.Convert100To200)},
 	{From: format200.Version200, To: format300.Version300, Convert: from200to300.Convert200To300},
+	{From: format300.Version300, To: format400.Version400, Convert: from300to400.Convert300To400},
 }
 
 // unwarned is a step that reports no warnings.

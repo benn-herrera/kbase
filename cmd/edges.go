@@ -1,42 +1,55 @@
 package main
 
 import (
-	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 )
 
 func edgesCommand() *cobra.Command {
-	var relations []string
-	cmd := queryCommand(&cobra.Command{
+	var id string
+	var sel query.EdgesSelection
+	var cmd *cobra.Command
+	cmd = completeListCommand(&cobra.Command{
 		Use:   "edges",
-		Short: "the edges of the named relations, or of every relation, with their bearings",
-		Long: `edges lists the index's edge rows — source, relation, target, bearing,
-context, and whether a score run's bearing pass asks about the edge — ordered
-by relation, source and target. --relation narrows the list to the named
-relations; it repeats.`,
+		Short: "the edge records, of the named relations or at one node, in a fixed order",
+		Long: `edges lists edge records, ordered by relation, source and target. Each row is
+the edge's source, target, relation, bearing (as the record holds it; null
+where the relation carries none), context (null for none), manually_scored
+(null where the relation carries no mark) and replaced_relation (null except
+on a demoted row: an edge the build set aside to break a cycle, kept whole in
+the replaced edge's direction; it bears on no strength until restore-demoted,
+or an add-edge of that edge, puts it back).
+
+` + argmark.Flag("relation") + ` narrows the list to the named relations; it repeats. With no ` + argmark.Flag("id") + `
+every edge is listed. ` + argmark.Flag("id") + ` names a node, and ` + argmark.Flag("direction") + ` keeps its edges in
+(the node is the target), out (it is the source) or both, the default;
+` + argmark.Flag("direction") + ` without ` + argmark.Flag("id") + ` is refused, and so is an ` + argmark.Flag("id") + ` no node carries. A
+node's dependents are the targets of its edges with ` + argmark.FlagValue("direction", "out") + ` over
+` + proseSeries(kb.ScoringRelations, "and") + `.
+
+A manually scored bearing is rescored only under score's ` + argmark.Flag("rescore-manual") + `;
+` + argmark.Call("score", map[string]any{"dry-run": true}) + ` answers whether an edge is dirty.`,
 		Args: cobra.NoArgs,
-	}, true, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
-		var unknown []string
-		var usage []toolresult.Item
-		for _, r := range relations {
-			if !slices.Contains(kb.Relations, r) && !slices.Contains(unknown, r) {
-				unknown = append(unknown, r)
-				usage = append(usage, toolresult.Item{Check: checkUsage, Key: "--relation", Allowed: kb.Relations,
-					Detail: fmt.Sprintf("--relation %q names no relation", r)})
-			}
+	}, func(ix *query.Index, args []string) (any, []toolresult.Item, error) {
+		sel.ID = nil
+		if cmd.Flags().Changed("id") {
+			sel.ID = &id
 		}
-		if usage != nil {
-			return nil, usage, nil
+		if !cmd.Flags().Changed("direction") {
+			sel.Direction = ""
 		}
-		return answered(query.EdgesPayload(ix, relations))
+		rows, usage := query.EdgesPayload(ix, sel)
+		return rows, usage, nil
 	})
-	cmd.Flags().StringArrayVar(&relations, "relation", nil, "only edges of this relation, one of "+strings.Join(kb.Relations, ", ")+"; repeatable")
+	cmd.Flags().StringArrayVar(&sel.Relations, "relation", nil, "only edges of this relation, one of "+strings.Join(kb.Relations, ", "))
+	cmd.Flags().StringVar(&id, "id", "", "only edges at this node")
+	cmd.Flags().StringVar(&sel.Direction, "direction", query.DirectionBoth,
+		"with "+argmark.Flag("id")+", which of its edges: in (the node is the target), out (it is the source) or both")
 	return cmd
 }

@@ -2,9 +2,7 @@ package write
 
 import (
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -14,7 +12,6 @@ import (
 
 	"kbase/internal/index"
 	"kbase/internal/kb"
-	"kbase/internal/result"
 )
 
 // The search a locator is resolved by. Stripping and folding are
@@ -159,9 +156,8 @@ func excerptLines(document, excerpt string) []int {
 	return lines
 }
 
-// ExcerptLines is every document line excerpt begins on, by the matching
-// mark-claim-in-leaf locates a marker with — so a caller pre-checking a
-// locator asks the op's own question.
+// ExcerptLines is excerptLines, for the build's placement of the markers it
+// writes.
 func ExcerptLines(document, excerpt string) []int { return excerptLines(document, excerpt) }
 
 // CanonicalForm is text as the folded search reduces it: markup-free,
@@ -171,144 +167,196 @@ func CanonicalForm(text string) string {
 	return folded
 }
 
-// locateExcerpt is the one line locator names; absent and ambiguous are two
-// refusals, since a marker at the wrong one of two matches binds silently. A
-// fence's opening or closing line is refused too: a marker appended there
-// leaves a line that no longer opens or closes the block.
-func locateExcerpt(document, locator string) (int, error) {
-	hits := excerptLines(document, locator)
+// readsAsOneLink is whether citation is, whole, the one link the toolchain's
+// link reader sees in it, to dest: an unbalanced [ or ] in its text, or
+// whitespace or ) in dest, hides the citation or reads a shorter link inside
+// it.
+func readsAsOneLink(citation, dest string) bool {
+	m := kb.LinkRE.FindAllStringSubmatchIndex(citation, -1)
+	return len(m) == 1 && m[0][0] == 0 && m[0][1] == len(citation) && citation[m[0][2]:m[0][3]] == dest
+}
+
+// addCitation replaces the one span of the named line that its snippet names
+// with a citation of the node its id names, linked to the node's target
+// relative to the citing document: the quote form where the snippet is quoted
+// from the node's statement, the paraphrase form where quote is, and the
+// naming form, the node's title its link text, where the snippet is the id
+// itself — the one form a work or an axiom takes.
+func addCitation(b *recordBatch, e entry) error {
+	id, snippet, line := e.str(editID.name), e.str("snippet"), e.count("line")
+	kind, ok := index.GraphKinds(b.g)[id]
+	if !ok {
+		return noNode(e.Op, editID.name, id)
+	}
+	subject, l, err := b.citingDocument(e.str("document"))
+	if err != nil {
+		return err
+	}
+	at, err := citedSpan(subject, l.text, line, snippet)
+	if err != nil {
+		return err
+	}
+	naming := snippet == id
+	if !naming && (kind == kb.NodeKindWork || kind == kb.NodeKindAxiom) {
+		return opRefusal("snippet", fmt.Sprintf("%s is a %s, which has no statement to quote or paraphrase", id, kind),
+			"restore: write "+id+" where the reference belongs and give it as snippet, for the naming form, then re-run")
+	}
+	to, err := b.targetOf(id)
+	if err != nil {
+		return err
+	}
+	if to.path == "" {
+		return noStatementMarker(id, "a citation of it has nowhere to link")
+	}
+	dest := index.RelPosix(to.path, path.Dir(subject))
+	if to.anchor != "" {
+		dest += "#" + to.anchor
+	}
+	text := `"` + snippet + `"`
+	switch {
+	case naming:
+		text = b.titleOf(kind, id)
+	case e.has("quote"):
+		text = snippet
+		err = b.checkQuote(to.path, id, "quote", e.str("quote"))
+	default:
+		err = b.checkQuote(to.path, id, "snippet", snippet)
+	}
+	if err != nil {
+		return err
+	}
+	link := kb.Citation(text, dest, id)
+	if !readsAsOneLink(link, dest) {
+		key, what, restore := "snippet", "snippet", "restore: name a span without an unbalanced bracket, then re-run"
+		if naming {
+			key, what, restore = editID.name, id+"'s title", "restore: balance the brackets of "+id+"'s title with "+editOps[kind]+", then re-run"
+		}
+		return opRefusal(key, fmt.Sprintf("composes %s, which the toolchain's link reader does not see as one link to %s — an "+
+			"unbalanced '[' or ']' in the %s hides the citation from every gate that reads links", link, dest, what), restore)
+	}
+	before := b.leafTexts()
+	raw := kb.SplitLines(l.text)[line-1]
+	l.text = spliceLines(l.text, line-1, line, []string{raw[:at] + link + raw[at+len(snippet):]})
+	moved := b.movedHeadings(before)
+	b.report = entryReport{ID: id, Document: subject, Line: line, Link: kb.Citation(text, moved.dest(subject, dest), id)}
+	if len(moved) == 0 {
+		return nil
+	}
+	return b.repoint(func(rel string, l kb.TextLink) string { return moved.dest(rel, l.Destination) })
+}
+
+// titleOf is the title of node id, of kind.
+func (b *recordBatch) titleOf(kind, id string) string {
+	for _, n := range b.nodesOf(kind) {
+		if n.id == id {
+			return *n.title
+		}
+	}
+	return ""
+}
+
+// citingDocument is the document of the KB document names, as the batch
+// edits it: refused where it is none, a summary page among them.
+func (b *recordBatch) citingDocument(document string) (string, *leafEdit, error) {
+	subject, err := b.subject(document)
+	if err != nil {
+		return "", nil, err
+	}
+	documents, err := b.knownDocuments()
+	if err != nil {
+		return "", nil, err
+	}
+	if !slices.Contains(documents, subject) {
+		return "", nil, opRefusal("document", fmt.Sprintf("%q is not a document of the KB, and a citation is written into "+
+			"one; a summary page, which kbase renders, is none", subject),
+			"restore: correct document to the kb-root-relative path of the document holding the citing text, then re-run")
+	}
+	l, opened := b.leaves[subject]
+	if !opened {
+		if l, err = b.open(subject); err != nil {
+			return "", nil, err
+		}
+		b.edits(subject, l)
+	}
+	return subject, l, nil
+}
+
+// citedSpan is the byte offset of the one span of the 1-based line of text,
+// the document at subject, that snippet names. It is refused where the line
+// lies past the end, where no span outside code, links and statement markers
+// matches, naming the nearby lines where one does, and where more than one
+// does, naming each column.
+func citedSpan(subject, text string, line int, snippet string) (int, error) {
+	lines, views := kb.SplitLines(text), kb.SplitLines(kb.StripCodeSplitLines(text))
+	if line > len(lines) {
+		return 0, lineOutOfRange(subject, line, len(lines))
+	}
+	spans := func(i int) []int { return citableSpans(lines[i], views[i], snippet) }
+	hits := spans(line - 1)
 	switch {
 	case len(hits) == 0:
-		return 0, opRefusal("locator", fmt.Sprintf("%q does not appear in the document body. The locator is matched against "+
-			"the body's whitespace-collapsed text, and where that finds nothing against a folded form of it — so wrapping, "+
-			"markup, case and punctuation do not matter, but the words themselves do, and so does the paragraph they sit in", locator),
-			"restore: quote the locator text verbatim from one paragraph of the document body and re-run")
+		return 0, snippetAbsent(subject, line, len(lines), snippet, " outside code, links and statement markers",
+			func(i int) bool { return len(spans(i)) > 0 })
 	case len(hits) > 1:
-		return 0, opRefusal("locator", fmt.Sprintf("%q matches %d places in the document body, so the marker's position "+
-			"would be chosen arbitrarily", locator, len(hits)),
-			"restore: extend the locator until it names exactly one place, then re-run")
-	}
-	at := hits[0]
-	for _, f := range kb.Fences(kb.SplitLines(document)) {
-		if at == f.Start || f.Closed && at == f.End-1 {
-			return 0, opRefusal("locator", fmt.Sprintf("%q names line %d, a fenced block's opening or closing line, and a "+
-				"marker appended there leaves a line that no longer opens or closes the block", locator, at+1),
-				"restore: quote a line of the prose the statement stands in, outside the fence lines, then re-run")
+		columns := make([]int, len(hits))
+		for i, at := range hits {
+			columns[i] = utf8.RuneCountInString(lines[line-1][:at]) + 1
 		}
+		return 0, opRefusal("snippet", fmt.Sprintf("%q occurs %d times on line %d of %s, at columns %s, and the citation "+
+			"replaces one span, which kbase does not guess", snippet, len(hits), line, subject, joinInts(columns)),
+			"restore: extend snippet until it names one span of the line, then re-run")
 	}
-	return at, nil
+	return hits[0], nil
 }
 
-// nearestWindow is the window of haystack a failed match came closest to,
-// anchored on the longest run the two share, or "" where that run is too
-// short to be a quotation of anything.
-func nearestWindow(needle, haystack string) string {
-	a, b := []rune(needle), []rune(haystack)
-	bestLen, bestA, bestB := 0, 0, 0
-	prev := make([]int, len(b)+1)
-	for i := 1; i <= len(a); i++ {
-		cur := make([]int, len(b)+1)
-		for j := 1; j <= len(b); j++ {
-			if a[i-1] != b[j-1] {
-				continue
-			}
-			cur[j] = prev[j-1] + 1
-			sa, sb := i-cur[j], j-cur[j]
-			if cur[j] > bestLen || (cur[j] == bestLen && (sa < bestA || (sa == bestA && sb < bestB))) {
-				bestLen, bestA, bestB = cur[j], sa, sb
-			}
-		}
-		prev = cur
+// citableSpans is the byte offset of every occurrence of snippet in raw, a
+// line whose code is blanked in view, that lies outside code, outside every
+// link and outside every statement marker.
+func citableSpans(raw, view, snippet string) []int {
+	var spans [][2]int
+	for _, l := range kb.Links(view) {
+		spans = append(spans, [2]int{l.Start, l.End})
 	}
-	if bestLen < max(12, len(a)/3) {
-		return ""
+	for _, m := range kb.LineMarkers(raw) {
+		spans = append(spans, [2]int{m.Start, m.End})
 	}
-	start := max(0, bestB-bestA)
-	return string(b[start:min(len(b), start+len(a))])
-}
-
-// renderCitations composes each entry's citation after checking what the
-// citation gate will check of it, all or none: a refusal names every entry
-// refused.
-func renderCitations(src *kb.Source, entries []entry) Result {
-	res := Result{Outcome: result.Done}
-	var refusals result.Refusal
-	for _, e := range entries {
-		citation, err := composeCitation(src, e)
-		if err == nil {
-			res.Citations = append(res.Citations, citation)
+	var out []int
+	for _, at := range occurrences(raw, snippet) {
+		end := at + len(snippet)
+		if view[at:end] != raw[at:end] || slices.ContainsFunc(spans, func(s [2]int) bool { return at < s[1] && s[0] < end }) {
 			continue
 		}
-		items, refused := entryRefusal(err, e.Index)
-		if !refused {
-			return errorResult(err)
-		}
-		refusals = append(refusals, items...)
+		out = append(out, at)
 	}
-	if len(refusals) > 0 {
-		return errorResult(refusals)
-	}
-	return res
+	return out
 }
 
-func composeCitation(src *kb.Source, e entry) (string, error) {
-	root := kb.ResolvePath(src.Root())
-	citingRel, citedRel := e.str("citing-document"), e.str("cited-document")
-	anchor, excerpt := collapse(e.str("anchor")), e.str("excerpt")
-	citing, err := containedIn(root, citingRel, "citing-document")
+// quoteRemedy is how a quote given at key that is not verbatim from the
+// statement of id in host is put right: quote is re-read and given verbatim;
+// a snippet given without quote, which must already stand on the line, takes
+// a quote, the naming form or a rewritten line.
+func quoteRemedy(key, id, host string) string {
+	if key == "quote" {
+		return "restore: re-read the statement of " + id + " in " + host + " and give quote verbatim from it, then re-run"
+	}
+	return "restore: give quote, the passage of the statement of " + id + " in " + host + " your snippet paraphrases; or write " + id +
+		" in the line and give it as snippet, for the naming form; or rewrite the line so snippet quotes the statement verbatim; then re-run"
+}
+
+// checkQuote refuses, at key, a quote that does not appear verbatim, whitespace
+// collapsed, in the statement of node id in its host leaf.
+func (b *recordBatch) checkQuote(host, id, key, quote string) error {
+	l, err := b.leafAt(host)
 	if err != nil {
-		return "", err
+		return err
 	}
-	cited, err := containedIn(root, citedRel, "cited-document")
-	if err != nil {
-		return "", err
+	if strings.Contains(collapse(kb.Statement(l.text, id, b.lifts)), collapse(quote)) {
+		return nil
 	}
-	if info, err := os.Stat(filepath.Dir(citing)); err != nil || !info.IsDir() {
-		return "", opRefusal("citing-document", fmt.Sprintf("%q names a directory that does not exist under kb-root/. The "+
-			"link is rendered relative to the citing document, so its directory decides the target's spelling — the file "+
-			"itself may still be unwritten", citingRel),
-			"restore: correct citing-document to the path this citation will be written into, then re-run")
+	detail := fmt.Sprintf("%q does not appear in the statement of %s in %s, and a quote is verbatim from the cited statement", quote, id, host)
+	if key == "snippet" {
+		detail = fmt.Sprintf("%q does not appear in the statement of %s in %s, and a snippet given without quote is quoted verbatim from the statement",
+			quote, id, host)
 	}
-	if !src.IsFile(cited) {
-		return "", opRefusal("cited-document", fmt.Sprintf("%q does not resolve to a file. A citation names a durable KB "+
-			"path that exists at the moment it is written", citedRel),
-			"restore: correct cited-document, or cite a document that has been written, then re-run")
-	}
-	data, err := src.ReadFile(cited)
-	if err != nil {
-		return "", fmt.Errorf("cited-document %q exists but could not be read: %w", citedRel, err)
-	}
-	if !utf8.Valid(data) {
-		return "", opRefusal("cited-document", fmt.Sprintf("%q is not valid UTF-8, so the excerpt cannot be checked against it", citedRel),
-			"restore: cite a document that decodes as UTF-8, or re-encode "+citedRel+", then re-run")
-	}
-	body, ok := kb.AnchorSection(kb.TranslateNewlines(string(data)), anchor)
-	if !ok {
-		return "", opRefusal("anchor", fmt.Sprintf("%q names no section of %s. An anchor is a heading's slug, and a "+
-			"heading that exists only inside a fenced example is not a section", anchor, citedRel),
-			"restore: correct anchor to the slug of a heading in "+citedRel+", then re-run")
-	}
-	needle, haystack := collapse(excerpt), collapse(body)
-	if !strings.Contains(haystack, needle) {
-		found := "no comparable text appears there"
-		if window := nearestWindow(needle, haystack); window != "" {
-			found = fmt.Sprintf("the nearest text there reads %q", window)
-		}
-		return "", opRefusal("excerpt", fmt.Sprintf("does not appear at %s#%s — %s. An excerpt is quoted verbatim from "+
-			"the section it cites, compared with whitespace collapsed and fenced examples removed", citedRel, anchor, found),
-			fmt.Sprintf("restore: quote the clause verbatim from %s's %q section, then re-run", citedRel, anchor))
-	}
-	linkTarget := index.RelPosix(citedRel, path.Dir(citingRel))
-	citation := renderCitation(excerpt, linkTarget, anchor)
-	var targets []string
-	for _, m := range kb.LinkRE.FindAllStringSubmatch(citation, -1) {
-		targets = append(targets, m[1])
-	}
-	if !slices.Equal(targets, []string{linkTarget + "#" + anchor}) {
-		return "", opRefusal("excerpt", fmt.Sprintf("composes a citation the toolchain's link reader does not see as one "+
-			"link to %s#%s — an unbalanced '[' or ']' in the excerpt, or whitespace or ')' in the anchor, hides the whole "+
-			"citation from every gate that reads links", linkTarget, anchor),
-			"restore: re-quote the excerpt without an unbalanced bracket, correct the anchor, then re-run")
-	}
-	return citation, nil
+	return opRefusal(key, detail, quoteRemedy(key, id, host))
 }

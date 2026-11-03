@@ -10,22 +10,25 @@ import (
 
 	"kbase/internal/index"
 	"kbase/internal/kb"
-	"kbase/internal/result"
 )
 
 // Index is a KB's derived index as loaded. Nodes are sorted by id, kinds in
 // kb.NodeKinds order where ids tie; every other list is in file order.
 type Index struct {
-	src          *kb.Source
-	nodes        []kb.NodeRow
-	edges        []kb.EdgeRow
-	strengthenBy []kb.StrengthenByRow
-	cites        []kb.CiteRow
-	aggregates   []kb.AggregateRow
+	src   *kb.Source
+	nodes []kb.NodeRow
+	edges []kb.EdgeRow
+	cites []kb.CiteRow
 	// documentKinds is every document's kind, by kb-root-relative path.
 	documentKinds map[string]string
-	// hosts is the leaf hosting each node that carries a statement marker.
-	hosts map[string]string
+	// hosts is the leaf hosting each node that carries a statement marker,
+	// and hostAnchors the anchor of the section its marker stands in.
+	hosts, hostAnchors map[string]string
+	// registerPages is the summary page rendering each node, and
+	// registerAnchors its entry's anchor there.
+	registerPages, registerAnchors map[string]string
+	// rationales is the rationale of each claim, analysis and work, by id.
+	rationales map[string]string
 	// nodeManual is the manually-scored value of each node whose record
 	// carries one, by id.
 	nodeManual map[string]bool
@@ -36,16 +39,12 @@ type Index struct {
 type flagCounts struct{ model, manual int }
 
 // Load is the derived index of the KB src reads, the rows index.Derive yields
-// from its sources: Derive's refusals are Load's, and a degraded load is
-// refused with a check: degraded item per fault it resolved. A KB loaded at an
-// older format answers as converted.
+// from its sources: Derive's refusals are Load's. A KB loaded at an older
+// format answers as converted.
 func Load(src *kb.Source) (*Index, error) {
 	rows, err := index.Derive(src)
 	if err != nil {
 		return nil, err
-	}
-	if items := rows.DegradedItems(); items != nil {
-		return nil, result.Refusal(items)
 	}
 	return fromRows(src, rows), nil
 }
@@ -53,12 +52,12 @@ func Load(src *kb.Source) (*Index, error) {
 // fromRows is the index of rows over src: an analysis's band is priced from
 // its strength, and the nodes are sorted.
 func fromRows(src *kb.Source, rows index.Rows) *Index {
-	ix := &Index{src: src, nodes: rows.Nodes, edges: rows.Edges, strengthenBy: rows.StrengthenBy,
-		cites: rows.Cites, aggregates: rows.Aggregates, documentKinds: rows.DocumentKinds, hosts: rows.Hosts}
+	ix := &Index{src: src, nodes: rows.Nodes, edges: rows.Edges, cites: rows.Cites, documentKinds: rows.DocumentKinds,
+		hosts: rows.Hosts, hostAnchors: rows.HostAnchors, registerPages: rows.RegisterPages, registerAnchors: rows.RegisterAnchors, rationales: nodeRationales(rows.Resolved)}
 	ix.nodeManual = nodeManualFlags(rows.Resolved)
 	for i := range ix.nodes {
 		if n := &ix.nodes[i]; n.NodeType == kb.NodeKindAnalysis {
-			n.BuildBand = index.BuildBand(n.Strength)
+			n.StrengthBand = index.StrengthBand(n.Strength)
 		}
 	}
 	slices.SortStableFunc(ix.nodes, func(a, b kb.NodeRow) int {
@@ -97,6 +96,22 @@ func nodeManualFlags(g kb.Graph) map[string]bool {
 		nodes[n.ID] = n.ManuallyScored
 	}
 	return nodes
+}
+
+// nodeRationales is the rationale of each claim, analysis and work record of
+// g, by id.
+func nodeRationales(g kb.Graph) map[string]string {
+	out := map[string]string{}
+	for _, n := range g.Claims {
+		out[n.ID] = n.Rationale
+	}
+	for _, n := range g.Analyses {
+		out[n.ID] = n.Rationale
+	}
+	for _, n := range g.Works {
+		out[n.ID] = n.Rationale
+	}
+	return out
 }
 
 // add is c counting one more record, manually scored where manual.

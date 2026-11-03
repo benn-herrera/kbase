@@ -11,6 +11,7 @@ import (
 	"kbase/internal/config"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
+	"kbase/internal/secret"
 )
 
 // testAPIKey is the credential every fixture provider carries. Tests assert
@@ -22,7 +23,7 @@ const testAPIKey = "sk-MUST-NOT-APPEAR-0001"
 // it. A test hands the pool to a verb directly, so it sets the layer the
 // merge would have.
 func provider(name, baseURL string) config.Provider {
-	return config.Provider{Name: name, BaseURL: baseURL, APIKey: testAPIKey, Layer: config.LayerSourceRepository}
+	return config.Provider{Name: name, BaseURL: baseURL, APIKey: secret.NewKey(testAPIKey), Layer: config.LayerSourceRepository}
 }
 
 // catalogue builds the ModelInfo slice a mock client serves from ListModels.
@@ -43,6 +44,16 @@ type result struct {
 	stderr    string
 	code      int
 	endpoints []model.Endpoint
+}
+
+// shownEndpoints is endpoints, each with its key left out, for a failure
+// message.
+func shownEndpoints(endpoints []model.Endpoint) []model.Endpoint {
+	shown := slices.Clone(endpoints)
+	for i := range shown {
+		shown[i].APIKey = secret.Key{}
+	}
+	return shown
 }
 
 // ids is the result's model ids.
@@ -81,8 +92,12 @@ func TestVerbStreamGuard(t *testing.T) {
 			_, err := runModels(context.Background(), modelsOptions{})
 			return err
 		}},
-		{"configure", func() error {
-			_, err := runConfigure(context.Background(), configureOptions{})
+		{"configure-providers", func() error {
+			_, err := runConfigureProviders(context.Background(), configureProvidersOptions{})
+			return err
+		}},
+		{"configure-models", func() error {
+			_, err := runConfigureModels(context.Background(), configureModelsOptions{})
 			return err
 		}},
 		{"build", func() error {
@@ -128,7 +143,7 @@ func TestRunModelsSortedOutput(t *testing.T) {
 		t.Fatalf("client constructions: got %d, want 1", len(got.endpoints))
 	}
 	e := got.endpoints[0]
-	if e.Name != "solo" || e.BaseURL != "http://provider.example/v1" || e.APIKey != testAPIKey {
+	if e.Name != "solo" || e.BaseURL != "http://provider.example/v1" || e.APIKey.Reveal() != testAPIKey {
 		t.Errorf("endpoint: got %+v, want name/baseURL/key from the pool entry", model.Endpoint{Name: e.Name, BaseURL: e.BaseURL})
 	}
 	if strings.Contains(got.stdout, testAPIKey) || strings.Contains(got.stderr, testAPIKey) {
@@ -149,7 +164,7 @@ func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
 	}}, modeltest.NewScriptedMock(nil, catalogue("only")))
 
 	if len(got.endpoints) != 1 || !got.endpoints[0].Decisions {
-		t.Fatalf("endpoints = %+v, want one carrying the entry's decision surface", got.endpoints)
+		t.Fatalf("endpoints = %+v, want one carrying the entry's decision surface", shownEndpoints(got.endpoints))
 	}
 }
 
@@ -171,7 +186,7 @@ func TestRunModelsDialsTheEntrysProtocol(t *testing.T) {
 			Provider:  tc.entry.Name,
 		}}, modeltest.NewScriptedMock(nil, catalogue("only")))
 		if len(got.endpoints) != 1 || got.endpoints[0].Protocol != tc.want {
-			t.Errorf("%s: endpoints = %+v, want one speaking protocol %v", tc.entry.Name, got.endpoints, tc.want)
+			t.Errorf("%s: endpoints = %+v, want one speaking protocol %v", tc.entry.Name, shownEndpoints(got.endpoints), tc.want)
 		}
 	}
 }
@@ -193,17 +208,21 @@ func TestRunModelsEmptyCatalogue(t *testing.T) {
 }
 
 // TestRunModelsFaultsAreWarnings: an entry dropped from the pool must be
-// named on stderr — not vanish silently — while a healthy provider still
-// lists.
+// named on stderr and among the result's warnings — not vanish silently —
+// while a healthy provider still lists.
 func TestRunModelsFaultsAreWarnings(t *testing.T) {
+	const reason = "read the key file providers.toml names: open missing.key: no such file or directory"
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"good": provider("good", "http://provider.example/v1")},
-		Faults:    []config.ProviderFault{{Name: "bad", Reason: "read apiKeyFile: open missing.key: no such file or directory"}},
+		Faults:    []config.ProviderFault{{Name: "bad", Path: "providers.toml", Reason: reason}},
 		Provider:  "good",
 	}}, modeltest.NewScriptedMock(nil, catalogue("m1")))
 
-	if !strings.Contains(got.stderr, `provider "bad" unavailable: read apiKeyFile:`) {
+	if !strings.Contains(got.stderr, `provider "bad" unavailable: read the key file providers.toml names:`) {
 		t.Errorf("stderr should warn about the faulted provider; got %q", got.stderr)
+	}
+	if w := got.doc.items("warnings"); len(w) != 1 || w[0]["path"] != "providers.toml" || w[0]["detail"] != `provider "bad" unavailable: `+reason {
+		t.Errorf("warnings = %v, want the one fault against providers.toml", w)
 	}
 	if got.code != 0 || !slices.Equal(got.ids(), []string{"m1"}) {
 		t.Errorf("models: exit %d, ids %q; want m1", got.code, got.ids())
@@ -217,14 +236,14 @@ func TestRunModelsWarningFaultKeepsProvider(t *testing.T) {
 	const reason = "key file is readable by group or other"
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"solo": provider("solo", "http://provider.example/v1")},
-		Faults:    []config.ProviderFault{{Name: "solo", Reason: reason, Warning: true}},
+		Faults:    []config.ProviderFault{{Name: "solo", Path: "providers.toml", Reason: reason, Warning: true}},
 	}}, modeltest.NewScriptedMock(nil, catalogue("m1")))
 
 	if !strings.Contains(got.stderr, `provider "solo": `+reason) {
 		t.Errorf("stderr should carry the warning; got %q", got.stderr)
 	}
-	if strings.Contains(got.stderr, "unavailable") {
-		t.Errorf("a survived fault must not be reported as unavailable; got %q", got.stderr)
+	if strings.Contains(got.stderr, "unavailable") || strings.Contains(got.stdout, "unavailable") {
+		t.Errorf("a survived fault must not be reported as unavailable; got %q and %q", got.stderr, got.stdout)
 	}
 	if got.code != 0 || !slices.Equal(got.ids(), []string{"m1"}) {
 		t.Errorf("models: exit %d, ids %q; want m1", got.code, got.ids())
@@ -250,19 +269,20 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		wantRule   string // the rule the result names for that choice
 		wantErr    string // substring of the expected error
 	}{{
-		name:       "flag beats config",
-		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}, Provider: "alpha"}},
+		name:       "the flag names one of several entries",
+		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Provider: "alpha"}},
 		wantChosen: "alpha",
 		wantRule:   "flag",
 	}, {
-		name:    "the superseded provider key chooses nothing",
-		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Config: config.Config{Provider: "beta"}}},
-		wantErr: "no provider selected",
+		name:       "the flag names an entry in another case",
+		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha", "beta"), Provider: "ALPHA"}},
+		wantChosen: "alpha",
+		wantRule:   "flag",
 	}, {
 		name:       "sole entry needs no choice",
 		opts:       modelsOptions{providerOptions: providerOptions{Providers: pool("alpha")}},
 		wantChosen: "alpha",
-		wantRule:   "sole-entry",
+		wantRule:   "sole-provider",
 	}, {
 		name:    "several entries, none chosen",
 		opts:    modelsOptions{providerOptions: providerOptions{Providers: pool("beta", "alpha")}},
@@ -275,7 +295,7 @@ func TestRunModelsProviderSelection(t *testing.T) {
 		name: "named provider faulted out",
 		opts: modelsOptions{providerOptions: providerOptions{
 			Providers: pool("good"),
-			Faults:    []config.ProviderFault{{Name: "bad", Reason: "no baseUrl declared"}},
+			Faults:    []config.ProviderFault{{Name: "bad", Path: "providers.toml", Reason: "no baseUrl declared"}},
 			Provider:  "bad",
 		}},
 		wantErr: `provider "bad" failed to load: no baseUrl declared`,

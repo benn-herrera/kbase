@@ -10,8 +10,8 @@ import (
 	"kbase/internal/result"
 )
 
-// LockWait bounds the wait for another writer — its read, its write,
-// its trailing refresh and sheets — so a stopped peer turns a write, or a
+// LockWait bounds the wait for another writer — its read, its derivation and
+// its write — so a stopped peer turns a write, or a
 // starting build, into a retry rather than a hang.
 const LockWait = 30 * time.Second
 
@@ -35,7 +35,7 @@ func HeldLockItem(err error, kbRoot, remedy string) (item result.Item, held bool
 		return result.Item{}, false
 	}
 	return result.Item{Check: kb.CheckLock, Path: filepath.Dir(kbRoot), Remedy: remedy,
-		Detail: "another write op or refresh held the KB's write lock past the wait; nothing was written"}, true
+		Detail: "another write op or update-format held the KB's write lock past the wait; nothing was written"}, true
 }
 
 // RetryRemedy is the remedy of op turned away by a concurrent writer.

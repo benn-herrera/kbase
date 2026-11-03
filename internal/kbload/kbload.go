@@ -27,6 +27,16 @@ const (
 	UpdateRemedy    = "update kbase"
 )
 
+// The lists a migration's warnings are grouped under (kb.MigrationWarning's
+// List).
+const (
+	ListIDs                 = formats.ListIDs
+	ListBareIDs             = formats.ListBareIDs
+	ListUnresolvedCitations = formats.ListUnresolvedCitations
+	ListNoEdge              = formats.ListNoEdge
+	ListStrengthenBy        = formats.ListStrengthenBy
+)
+
 // Open is the KB at kbRoot as this kbase reads it. Its metadata-format stamp
 // stands in kb.FormatFile, or, where that file does not stand, in the entry
 // point's frontmatter. A KB stamped at the current major and minor version is
@@ -55,7 +65,7 @@ func Open(kbRoot string) (*kb.Source, error) {
 	}
 	switch {
 	case formats.CompareMinor(have, current) > 0:
-		return nil, formatRefusal(kbRoot, at, UpdateRemedy, fmt.Sprintf("the KB's metadata format is %s and this kbase reads and writes %s", stamp, kb.FormatVersion))
+		return nil, formatRefusal(kbRoot, at, UpdateRemedy, fmt.Sprintf("the KB's format is %s and this kbase reads and writes %s", stamp, kb.FormatVersion))
 	case formats.CompareMinor(have, current) == 0:
 		return kb.OnDisk(kbRoot), nil
 	}
@@ -79,13 +89,20 @@ func migrated(kbRoot, stamp string) (*kb.Source, error) {
 }
 
 // conversionRefusal is the refusal of a conversion that err stopped on what a
-// KB holds — bytes the conversion cannot carry, or the 2.0.x load's refusal as
-// that load reported it — and nil for any other err.
+// KB holds — bytes the conversion cannot carry, or the 2.0.x or the 3.0.0
+// load's refusal as that load reported it — and nil for any other err.
 func conversionRefusal(kbRoot string, err error) result.Refusal {
 	var surplus *formats.ConversionError
 	var ann *formats.AnnotationError
 	var bad formats.MalformedError
+	var load *formats.GraphLoadError
 	switch {
+	case errors.As(err, &load):
+		items := make(result.Refusal, len(load.Faults))
+		for i, f := range load.Faults {
+			items[i] = result.Item{Check: f.Check, Key: f.Key, Path: f.Path, Line: f.Line, Allowed: f.Allowed, Remedy: f.Remedy, Detail: f.Detail}
+		}
+		return items
 	case errors.As(err, &surplus):
 		return result.Refusal{{Check: CheckConversion, Path: filepath.Join(filepath.Dir(kbRoot), filepath.FromSlash(surplus.Path)),
 			Line: surplus.Line, Detail: err.Error()}}
@@ -93,9 +110,6 @@ func conversionRefusal(kbRoot string, err error) result.Refusal {
 		items := make(result.Refusal, len(ann.Faults))
 		for i, f := range ann.Faults {
 			items[i] = result.Item{Check: kb.CheckMetadata, Key: f.Field, Path: f.Path, Line: f.Line, Remedy: f.Remedy, Detail: f.Detail}
-			if f.Allowed != "" {
-				items[i].Allowed = []string{f.Allowed}
-			}
 		}
 		return items
 	case errors.As(err, &bad):
@@ -184,11 +198,15 @@ func HasFormatStamp(kbRoot string) bool {
 }
 
 // coveredFiles is every file a format covers, under its repository-relative
-// slash path: kb-root's documents, its index, and the build records beside
-// it. It is the reader's file set: a
+// slash path: kb-root's documents, its index, and the build records a KB
+// before 4.0.0 keeps beside it, which the conversion moves into kb-root/.build/.
+// It is the reader's file set: a
 // directory leaf discovery never descends into holds no document the
 // conversion reads or makes obsolete, and the index is the one excluded
-// directory a format covers, since a migration drains and rewrites it.
+// directory a format covers, since a migration drains and rewrites it. The walk
+// descends into kb-root/.build/ as leaf discovery does, and reads nothing
+// there: the build records are YAML, and neither reads a .yaml file outside
+// the index as a document.
 func coveredFiles(kbRoot string) (formats.Files, error) {
 	repo := filepath.Dir(kbRoot)
 	files := formats.Files{}
@@ -236,7 +254,7 @@ func coveredFiles(kbRoot string) (formats.Files, error) {
 		return nil, err
 	}
 	for _, rel := range buildrecords.RecordFiles {
-		p := filepath.Join(repo, rel)
+		p := filepath.Join(repo, buildrecords.RootRecordFile(rel))
 		if !kb.IsFile(p) {
 			continue
 		}

@@ -20,8 +20,8 @@ func seedRingKB(t *testing.T) (string, map[string]string) {
 	t.Helper()
 	root := seedKB(t, "# Entry\n\n- [V](v/index.md)\n", map[string]string{
 		"v/index.md": "[↑ Entry](../entry-point.md)\n\n# V\n\n- [Leaf](leaf.md)\n",
-		"v/leaf.md": "[↑ V](index.md)\n\n# Leaf\n\nA holds here. <!-- claim-rigor: " + aID + " -->\n\nB holds here. <!-- claim-rigor: " + bID +
-			" -->\n\nC holds here. <!-- claim-rigor: " + cID + " -->\n",
+		"v/leaf.md": "[↑ V](index.md)\n\n# Leaf\n\nA holds here." + kb.StatementMarker(aID) + "\n\nB holds here." + kb.StatementMarker(bID) +
+			"\n\nC holds here." + kb.StatementMarker(cID) + "\n",
 	}, kb.Graph{Claims: claimRecords(map[string]string{aID: "Result A", bID: "Result B", cID: "Result C"})})
 	w := writer{kbRoot: root, lg: log.Discard()}
 	wires := values{

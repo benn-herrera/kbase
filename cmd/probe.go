@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,8 +11,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/mcp"
 	"kbase/internal/model"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
@@ -35,7 +36,7 @@ const probeDecisionQuestion = "probe"
 
 // probeSelections is what a probe may be told to ask — one selection per
 // invocation — in the order a refusal that lists them offers them.
-var probeSelections = []string{"--model", "--decision", "--text", "--scoring"}
+var probeSelections = []string{argmark.Flag("model"), argmark.Flag("decision"), argmark.Flag("text"), argmark.Flag("scoring")}
 
 // probeOptions is the probe verb's input: the shared provider-reaching options,
 // the reference and the prompt the flags name, and the stream its result
@@ -89,11 +90,8 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 	// the registry gives the selection's role.
 	reg := modelclient.New(opts.NewClient, opts.Logger, "", probeAskConcurrency)
 	defer reg.CloseAll()
-	client, err := reg.Get(ep)
-	if outcome, f, stop := refusalOrFailure(fields, err); stop {
-		return outcome, f
-	}
-	warnCleartextKey(opts.Stderr, reg, ep)
+	client := reg.Get(ep)
+	warnCleartextKey(opts.Stderr, ep)
 	if !opts.Decision {
 		// The effective sampling is stated whether or not the call is
 		// answered: a failure is read against the sampling that met it.
@@ -123,7 +121,7 @@ func probeCall(ctx context.Context, opts probeOptions) (string, []toolresult.Fie
 	}
 	wg.Wait()
 	if callErr != nil {
-		return failed(fields, callErr)
+		return failed(fields, modelclient.KeyRefused(callErr, ep.Provider))
 	}
 	return toolresult.Done, append(fields, answer...)
 }
@@ -184,24 +182,11 @@ func probeDecisionRequest(modelID, prompt string) model.DecisionRequest {
 
 // probeEndpoint is the selection the probe asks: --model's reference where the
 // flag names one, and otherwise the role a role flag names — the scoring role
-// where none did, which is the selection a run would make, in either mode. An
-// explicit reference is a pool reference, so it is resolved in file mode
-// whatever the environment supplies; absent one, the modes are exclusive and
-// the mode decides.
+// where none did, which is the selection a run would make.
 func probeEndpoint(opts probeOptions) (config.Endpoint, error) {
 	role, roleFlag, err := probeRole(opts)
 	if err != nil {
 		return config.Endpoint{}, err
-	}
-	env := config.EnvOverrides(os.Getenv)
-	s := opts.inputs(env)
-	mode, err := config.ModeOf(s)
-	if err != nil {
-		return config.Endpoint{}, err
-	}
-	resolution := mode
-	if opts.Model != "" {
-		resolution = config.ModeFile
 	}
 	// The flag a refusal names where a flag supplied the model: --model where
 	// the probe asks a reference, and none where a role flag named the role — a
@@ -210,20 +195,16 @@ func probeEndpoint(opts probeOptions) (config.Endpoint, error) {
 	// the probe asks the scoring role because that is the selection a run would
 	// make, and its refusal says so rather than naming a flag nobody passed.
 	defaulted := roleFlag == "" && opts.Model == ""
-	flagKey := "--model"
+	flagKey := argmark.Flag("model")
 	if roleFlag != "" {
 		flagKey = ""
 	}
-	ep, err := config.ResolveFlag(s, resolution, role, opts.Model, flagKey, defaulted)
+	ep, err := config.ResolveFlag(opts.inputs(), role, opts.Model, flagKey, defaulted)
 	if err != nil {
 		return config.Endpoint{}, err
 	}
-	if resolution == config.ModeFile {
-		// This resolution read the pool, and a faulted entry is what a probe
-		// is asking about.
-		supersededProvider(opts.Stderr, opts.Config)
-		warnFaults(opts.Stderr, opts.Faults)
-	}
+	// A faulted entry is what a probe is asking about.
+	warnFaults(opts.Stderr, opts.Faults)
 	return ep, nil
 }
 
@@ -236,26 +217,26 @@ func probeEndpoint(opts probeOptions) (config.Endpoint, error) {
 func probeRole(opts probeOptions) (config.Role, string, error) {
 	var named []string
 	if opts.Model != "" {
-		named = append(named, "--model")
+		named = append(named, argmark.Flag("model"))
 	}
 	role, roleFlag := config.RoleScoring, ""
 	for _, f := range []struct {
-		flag  string
 		role  config.Role
 		given bool
 	}{
-		{"--decision", config.RoleDecision, opts.Decision},
-		{"--text", config.RoleText, opts.Text},
-		{"--scoring", config.RoleScoring, opts.Scoring},
+		{config.RoleDecision, opts.Decision},
+		{config.RoleText, opts.Text},
+		{config.RoleScoring, opts.Scoring},
 	} {
 		if !f.given {
 			continue
 		}
-		named = append(named, f.flag)
-		role, roleFlag = f.role, f.flag
+		flag := argmark.Flag(string(f.role))
+		named = append(named, flag)
+		role, roleFlag = f.role, flag
 	}
 	if len(named) > 1 {
-		return "", "", toolresult.Refusal{{Check: config.CheckUsage, Allowed: probeSelections,
+		return "", "", toolresult.Refusal{{Check: toolresult.CheckUsage, Allowed: probeSelections,
 			Detail: fmt.Sprintf("a probe asks one selection, and more than one was named (%s): pass one of %s",
 				strings.Join(named, ", "), strings.Join(probeSelections, ", "))}}
 	}
@@ -343,38 +324,57 @@ var (
 	probeFlagTimeout  time.Duration
 )
 
-var probeCmd = &cobra.Command{
+// probeMCPNote is probe's MCP note: a tool call spends money, so an agent makes
+// one only at the user's direction.
+const probeMCPNote = "Each call is a paid model call: run it only when the user directs it, one call per direction, never on your own initiative or to retry."
+
+var probeCmd = mcp.Notes(&cobra.Command{
 	Use:   "probe",
-	Short: "ask one model one question, as a heartbeat of a model selection",
+	Short: "ask one model one question and report what came back",
 	Long: `Ask one model one question and report what came back: the outcome, the
 selection and model asked, the temperature and thinking a chat call sent (its
-role's sampling, the scoring role's for --model), the time to the first
+role's sampling, the scoring role's for ` + argmark.Flag("model") + `), the time to the first
 token, the call's wall time, the finish reason, the reply, and the tokens the
-provider reported. An answer cut off at the completion cap before any text is
-reported as done, with finish reason length and an empty reply. One call, one
-turn: no tools, no history, no system prompt of its own, and no KB.
+provider reported. Each call is a paid model call. An answer cut off at the
+completion cap before any text is reported as done, with finish reason length
+and an empty reply. One call, one turn: no tools, no history, no system prompt
+of its own, and no KB.
 
-A probe asks one selection. Without any of --model, --decision, --text or
---scoring it asks the configured scoring role — the selection a run would make,
-in file mode or in the environment's — so a probe with no arguments is the
-heartbeat. --decision, --text and --scoring each ask the selection the
-configuration resolves for that role: the file's models.<role> reference, or
-the role's own environment variable. --model names a <provider>/<model>
-reference to probe instead, resolved against the same pool. The four are
-exclusive, and more than one is a usage refusal naming them. A selection that
-does not resolve is refused, naming the role's own key or the flag, and what is
-missing. --prompt replaces the default check: a word to reply with on the chat
-path, a predicate to answer on the decision one.
+A probe asks one selection. Without any of ` + argmark.Flag("model") + `, ` + argmark.Flag("decision") + `, ` + argmark.Flag("text") + ` or
+` + argmark.Flag("scoring") + ` it asks the configured scoring role — the selection a run would
+make — so a probe with no arguments asks the selection a run would use. ` + argmark.Flag("decision") + `, ` + argmark.Flag("text") + ` and
+` + argmark.Flag("scoring") + ` each ask the selection the configuration resolves for that role:
+models.<role> in config.toml. ` + argmark.Flag("model") + ` names a <provider>/<model> reference to
+probe instead, its provider part in any case, resolved against the same
+providers. The four are exclusive, and more than one is refused (check:
+usage), naming them.
+
+A selection that does not resolve is refused, naming the key or flag at fault
+and what is missing:
+- the role's key is unset or holds no <provider>/<model> reference — check:
+  provider; step: ` + argmark.Call("configure-models", map[string]any{string(config.RoleScoring): "<provider>/<model>"}) + `, with the flag of the role asked;
+- the reference's provider is declared in no layer's providers.toml — check:
+  provider; step: ` + argmark.Call("configure-providers", map[string]any{"provider": "<provider>", "base-url": "<url>"}) + `;
+- the reference's provider failed to load — check: provider; no step, and the
+  detail gives the fault's reason;
+- a text or scoring selection's sampling.<role>.temperature lies outside what
+  its provider's chat protocol accepts (0 to 1 for anthropic, 0 to 2
+  otherwise) — check: provider, keyed by that setting; step: set it within the
+  range, or remove it from the layer that states it;
+- ` + argmark.Flag("model") + ` holds no reference — check: usage; no remedy.
+Each check: provider remedy is its step, where there is one, then ` + argmark.Call("show-config", nil) + `.
+
+` + argmark.Flag("prompt") + ` replaces the default check: a word to reply with on the chat path, a
+predicate to answer on the decision one.
 
 The call goes through the same registry a scoring run's asks go through, so the
-endpoint is reached over the wire shape its pool entry names. A decision
-selection is asked a decision call on the surface its entry declares, as a
+endpoint is reached over the wire shape its provider names. A decision
+selection is asked a decision call on the surface its provider declares, as a
 run's multichoice asks are: a surface that reports no first token and no finish
 reason, which the document states as zero and null. A decision selection
-always asks the OpenAI-shaped decision surface on its entry's base URL,
-whatever the entry's api. Nothing is read from a KB and no state directory is
-read or written: the probe prints its document and exits. Its result is one YAML document on
-stdout.`,
+always asks the OpenAI-shaped decision surface on its provider's base URL,
+whatever the provider's api. Nothing is read from a KB and no state directory
+is read or written.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)
@@ -397,17 +397,17 @@ stdout.`,
 		}
 		return nil
 	},
-}
+}, probeMCPNote, "")
 
 func init() {
 	probeCmd.Flags().StringVar(&probeFlagModel, "model", "",
 		"a <provider>/<model> reference to probe instead of a role's selection")
 	probeCmd.Flags().BoolVar(&probeFlagDecision, "decision", false,
-		"probe the selection the configuration resolves for the decision role (models.decision, or $"+config.EnvDecision+")")
+		"probe the selection the configuration resolves for the decision role (models.decision)")
 	probeCmd.Flags().BoolVar(&probeFlagText, "text", false,
-		"probe the selection the configuration resolves for the text role (models.text, or $"+config.EnvText+")")
+		"probe the selection the configuration resolves for the text role (models.text)")
 	probeCmd.Flags().BoolVar(&probeFlagScoring, "scoring", false,
-		"probe the selection the configuration resolves for the scoring role, the default (models.scoring, or $"+config.EnvScoring+")")
-	probeCmd.Flags().StringVar(&probeFlagPrompt, "prompt", "", "the check to send (default: "+probePrompt+", or "+probeDecisionPrompt+" for --decision)")
+		"probe the selection the configuration resolves for the scoring role, the default (models.scoring)")
+	probeCmd.Flags().StringVar(&probeFlagPrompt, "prompt", "", fmt.Sprintf("the check to send (default: %q, or %q for %s)", probePrompt, probeDecisionPrompt, argmark.Flag("decision")))
 	registerTimeoutFlag(probeCmd, &probeFlagTimeout, "deadline for the probe's call")
 }

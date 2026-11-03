@@ -67,7 +67,8 @@ func TestInitRefusesOutsideAWorktree(t *testing.T) {
 }
 
 // TestInitRefusesAnyExistingKBRoot: creation is birth-once and the refusal
-// fires at every state an existing kb-root can be in — empty included.
+// fires at every state an existing kb-root can be in — empty and spine-only
+// included.
 func TestInitRefusesAnyExistingKBRoot(t *testing.T) {
 	t.Run("empty tree", func(t *testing.T) {
 		repo := gitWorktree(t)
@@ -83,15 +84,20 @@ func TestInitRefusesAnyExistingKBRoot(t *testing.T) {
 			t.Errorf("empty kb-root refused under no kb-root check:\n%s", out)
 		}
 	})
-	for _, name := range []string{"file", "populated"} {
+	for _, name := range []string{"file", "spine-only", "populated"} {
 		t.Run(name, func(t *testing.T) {
 			repo := gitWorktree(t)
 			p := filepath.Join(repo, "kb-root")
-			if name == "file" {
+			switch name {
+			case "file":
 				if err := os.WriteFile(p, []byte("not a KB\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-			} else {
+			case "spine-only":
+				if err := os.MkdirAll(filepath.Join(p, kb.IndexDir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			default:
 				if err := os.MkdirAll(filepath.Join(p, "docs"), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -237,6 +243,48 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	}
 }
 
+// TestStampedDocumentsNameNoCommand: the stamped AGENTS.md, for an authored and
+// for a corpus KB, carries the .index/ rule and the session rule verbatim; it,
+// outside them and the scope pin, and the stamped CONVENTIONS.md name no
+// command, as `<name>` or as kbase <name>: the served surface states those.
+// The project name the test stamps names no command.
+func TestStampedDocumentsNameNoCommand(t *testing.T) {
+	var names []string
+	for _, c := range rootCmd.Commands() {
+		names = append(names, c.Name())
+	}
+	for _, pin := range []string{kbdocs.AuthoredKBPin, ""} {
+		root := t.TempDir()
+		if _, _, err := kbdocs.Stamp(kb.OnDisk(root), "proj", pin); err != nil {
+			t.Fatal(err)
+		}
+		carried := map[string][]string{kb.AgentsFile: {kbdocs.IndexRule(), kbdocs.SessionRule(), pin}}
+		for _, doc := range kb.StampedFiles {
+			text, err := os.ReadFile(filepath.Join(root, doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rest := string(text)
+			for _, value := range carried[doc] {
+				if value == "" {
+					continue
+				}
+				if !strings.Contains(rest, value) {
+					t.Errorf("%s (pin %q) does not carry verbatim:\n%s", doc, pin, value)
+				}
+				rest = strings.ReplaceAll(rest, value, "")
+			}
+			for _, name := range names {
+				for _, spelling := range []string{"`" + name + "`", "kbase " + name} {
+					if strings.Contains(rest, spelling) {
+						t.Errorf("%s (pin %q) names %s", doc, pin, spelling)
+					}
+				}
+			}
+		}
+	}
+}
+
 // TestBirthSubjectIsOffTheTrail: gitledger's Trail reads only subjects opening
 // with gitledger.Prefix, so a birth subject that opened with it would put the
 // birth commit on build's trail and lift build's refusal over a created KB.
@@ -286,6 +334,23 @@ func findOnPATH(name string) string {
 	return ""
 }
 
+// gitOnlyPath is a PATH holding git alone, so nothing run under it finds
+// Graphviz dot: dot may share git's directory, so git is linked into a
+// directory of its own. git resolves its core programs off its own real path,
+// not PATH. It skips t where there is no git on PATH.
+func gitOnlyPath(t *testing.T) string {
+	t.Helper()
+	git := findOnPATH("git")
+	if git == "" {
+		t.Skip("no git on PATH")
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(git, filepath.Join(dir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func isExecutable(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
@@ -314,21 +379,7 @@ func TestInitTitleBecomesTheHeading(t *testing.T) {
 // in written, with the lack said on stderr.
 func TestInitWithoutDotWritesThePlaceholder(t *testing.T) {
 	repo := gitWorktree(t)
-	git := findOnPATH("git")
-	if git == "" {
-		t.Skip("no git to serve the birth commit")
-	}
-	// A PATH holding git alone: dot shares git's directory here, so git is
-	// linked into a dir of its own and that becomes the whole PATH. git
-	// resolves its core programs off its own real path, not PATH.
-	bin := filepath.Join(t.TempDir(), "bin")
-	if err := os.Mkdir(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(git, filepath.Join(bin, "git")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
+	t.Setenv("PATH", gitOnlyPath(t))
 	out, code := kbase(t, repo, "init")
 	d := checkDocument(t, "init", out)
 	if d.Outcome != toolresult.Done || code != 0 {

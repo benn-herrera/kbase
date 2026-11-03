@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"kbase/internal/argmark"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
@@ -37,6 +38,27 @@ func TestDirPerKBRoot(t *testing.T) {
 	}
 }
 
+// TestBaseFollowsXDGStateHome: the state base is kbase under $XDG_STATE_HOME,
+// and under ~/.local/state where the variable is empty or not an absolute path.
+func TestBaseFollowsXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir's source on Windows
+	xdg := t.TempDir()
+	fallback := filepath.Join(home, ".local", "state", "kbase")
+	for _, tc := range []struct{ xdg, want string }{
+		{xdg, filepath.Join(xdg, "kbase")},
+		{"", fallback},
+		{"relative/state", fallback},
+		{".", fallback},
+	} {
+		t.Setenv("XDG_STATE_HOME", tc.xdg)
+		if got, err := Base(); err != nil || got != tc.want {
+			t.Errorf("Base with XDG_STATE_HOME=%q = %q, %v; want %q", tc.xdg, got, err, tc.want)
+		}
+	}
+}
+
 // TestOverrideInsideKBRootRefused: an override the user names is used as given,
 // and one inside kb-root/ is refused with the item every state-store refusal
 // names.
@@ -58,8 +80,8 @@ func TestOverrideInsideKBRootRefused(t *testing.T) {
 		t.Fatalf("Dir inside kb-root = %v, want a refusal", err)
 	}
 	detail := fmt.Sprintf("the state directory %s is inside %s; build state is never written there", inside, kbRoot)
-	if len(ref) != 1 || ref[0].Check != checkUsage || ref[0].Key != "--state-dir" || ref[0].Path != inside || ref[0].Detail != detail {
-		t.Errorf("the refusal = %v; want one item, check %s, key --state-dir, detail %q", ref, checkUsage, detail)
+	if len(ref) != 1 || ref[0].Check != result.CheckUsage || ref[0].Key != argmark.Flag("state-dir") || ref[0].Path != inside || ref[0].Detail != detail {
+		t.Errorf("the refusal = %v; want one item, check %s, key --state-dir, detail %q", ref, result.CheckUsage, detail)
 	}
 }
 

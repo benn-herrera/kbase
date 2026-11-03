@@ -2,6 +2,7 @@ package claimgraph
 
 import (
 	"cmp"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -118,13 +119,23 @@ func nodePassBytes(r buildrecords.NodePassRecord) ([]byte, error) {
 	return encodeRecord(buildrecords.NodePassRecord{About: nodePassAbout, Leaves: leaves})
 }
 
-// WriteNodePass lands the node-pass record whole at the repository root.
+// writeRecord lands one build record's bytes at its repository-relative
+// path rel, making the records' directory where none stands.
+func writeRecord(repoRoot, rel string, b []byte) error {
+	p := filepath.Join(repoRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return atomicfile.Write(p, b, nil)
+}
+
+// WriteNodePass lands the node-pass record whole in kb-root/.build/.
 func WriteNodePass(repoRoot string, r buildrecords.NodePassRecord) error {
 	b, err := nodePassBytes(r)
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.NodePassFile), b, nil)
+	return writeRecord(repoRoot, buildrecords.NodePassFile, b)
 }
 
 // classificationBytes is the classification record as WriteClassification
@@ -139,7 +150,7 @@ func WriteClassification(repoRoot string, r buildrecords.ClassificationRecord) e
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.ClassificationFile), b, nil)
+	return writeRecord(repoRoot, buildrecords.ClassificationFile, b)
 }
 
 // unmarkedBytes is the unmarked record as WriteUnmarked lands it: the plan in
@@ -154,7 +165,7 @@ func WriteUnmarked(repoRoot string, r buildrecords.UnmarkedRecord) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.UnmarkedFile), b, nil)
+	return writeRecord(repoRoot, buildrecords.UnmarkedFile, b)
 }
 
 const cullAbout = "The claim-graph co-linearity cull's build record: every co-linearity ask, keyed by its two claim ids in " +
@@ -185,5 +196,5 @@ func WriteCull(repoRoot string, r buildrecords.CullRecord) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(repoRoot, buildrecords.CullFile), b, nil)
+	return writeRecord(repoRoot, buildrecords.CullFile, b)
 }

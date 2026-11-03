@@ -8,10 +8,6 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// SupportsKey is a write op's values key, not a frontmatter key: the pair list
-// of an experiment's supports edges, at insert and through add-pairs.
-const SupportsKey = "supports"
-
 const fence = "---"
 
 // fenceAt is whether a line at offset i of text is exactly the frontmatter

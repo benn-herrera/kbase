@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/asks"
 	"kbase/internal/asks/call"
 	"kbase/internal/buildstore"
@@ -24,7 +25,6 @@ import (
 	"kbase/internal/gitledger"
 	"kbase/internal/index"
 	"kbase/internal/kb"
-	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
 	"kbase/internal/log"
 	"kbase/internal/model"
@@ -45,10 +45,16 @@ const (
 	checkSource     = "source"
 	checkInclude    = "include"
 	checkMetadata   = "metadata-key"
-	checkKBRoot     = kb.CheckKBRoot
 	checkInference  = "inference"
 	checkRecords    = "records"
-	checkInputs     = "inputs"
+)
+
+// The remedies a build names: how to start over where a resume has nothing to
+// resume and kb-root/ stands, and what lets a build over dirt no interrupted
+// stage accounts for through.
+const (
+	startOverRemedy  = "remove kb-root/, then run a fresh build, to start over"
+	dirtyPathsRemedy = "commit the change or restore the path to the last commit, then re-run"
 )
 
 // stepRuns is what each step of buildstore.Steps does, keyed by its id.
@@ -66,14 +72,6 @@ var stepRuns = map[string]func(*walk) (result.Record, error){
 	"p3a.gate":          validationGate,
 	"p3a.stamp":         stampReadiness,
 	"ov.docs":           overview,
-}
-
-func stageIDList() []string {
-	ids := make([]string, len(buildstore.Stages))
-	for i, s := range buildstore.Stages {
-		ids[i] = s.ID
-	}
-	return ids
 }
 
 // Options is one build.
@@ -112,17 +110,19 @@ type Options struct {
 	now func() time.Time
 }
 
-// Provider is where a build's model calls go: one client and the model it is
-// asked for, per role — the multichoice asks and the overview passage reach their
-// own endpoints independently — the invocation's one queue every call of
-// every role takes a slot of, and the provenance its result states, one
-// record per role in role order.
+// Provider is where a build's model calls go: one client, the pool entry it
+// dials and the model it is asked for, per role — the multichoice asks and the
+// overview passage reach their own endpoints independently — the invocation's
+// one queue every call of every role takes a slot of, and the provenance its
+// result states, one record per role in role order.
 type Provider struct {
-	MultichoiceClient model.Client
-	Multichoice       string
-	OverviewClient    model.Client
-	Overview          string
-	Queue             *model.Queue
+	MultichoiceClient   model.Client
+	MultichoiceProvider string
+	Multichoice         string
+	OverviewClient      model.Client
+	OverviewProvider    string
+	Overview            string
+	Queue               *model.Queue
 
 	// Roles is the build's result record of where each role's asks went, one
 	// per role the build resolved, in role order.
@@ -187,8 +187,8 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	if opts.Through != "" {
 		var ok bool
 		if through, ok = buildstore.ResolveStage(opts.Through); !ok {
-			return w.result(buildstore.EndingOf("", result.Refusal{{Check: buildstore.CheckUsage, Key: "--through", Allowed: stageIDList(),
-				Detail: fmt.Sprintf("--through %q names no stage, by id or display name", opts.Through)}}))
+			return w.result(buildstore.EndingOf("", result.Refusal{{Check: result.CheckUsage, Key: argmark.Flag("through"), Allowed: buildstore.StageIDs(),
+				Detail: fmt.Sprintf("%s names no stage, by id or display name", argmark.FlagValue("through", strconv.Quote(opts.Through)))}}))
 		}
 	}
 	if items := inputsUsage(opts); len(items) > 0 {
@@ -273,12 +273,16 @@ func (w *walk) result(end buildstore.Ending) (string, []result.Field) {
 	// its own command repeats, and a retry never walks a stage. A cancelled or
 	// failed run is continued wherever it walked a stage; a refusal's only
 	// where it recorded a boundary, since a refusal that recorded none wrote
-	// nothing to continue.
+	// nothing to continue. None continues where kb-root/ does not exist: there
+	// is no KB to resume, and a resume is refused.
 	switch end.Outcome {
 	case result.Cancelled, result.Failed, result.Refused:
 		continues := walked
 		if end.Outcome == result.Refused {
 			continues = w.recordedBoundary
+		}
+		if _, err := os.Lstat(w.kbRoot); err != nil {
+			continues = false
 		}
 		if command, confirmed := buildstore.RecordedCommand(w.resumeCommand()); continues && confirmed {
 			fields = append(fields, result.Field{Key: "resume", Value: command})
@@ -289,11 +293,7 @@ func (w *walk) result(end buildstore.Ending) (string, []result.Field) {
 
 // open finds the repository, kb-root/ and the state store.
 func (w *walk) open() error {
-	repo, err := gitledger.Open(w.opts.WorkDir, buildstore.OwnedPaths, w.opts.Logger)
-	var nw gitledger.NotWorktreeError
-	if errors.As(err, &nw) {
-		return result.Refusal{{Check: buildstore.CheckWorktree, Path: nw.Dir, Remedy: "git init", Detail: err.Error()}}
-	}
+	repo, err := buildstore.OpenRepo(w.opts.WorkDir, buildstore.OwnedPaths, w.opts.Logger)
 	if err != nil {
 		return err
 	}
@@ -308,13 +308,17 @@ func (w *walk) open() error {
 }
 
 // run walks the stages the trail leaves unrecorded, through the bound, and
-// returns the outcome it succeeded with.
+// returns the outcome it succeeded with. A fresh build walks every stage, its
+// own trail starting above any a kb-root/ since removed left; a resume
+// continues the newest build's trail.
 func (w *walk) run(through buildstore.Stage) (string, error) {
 	trail, err := w.repo.Trail()
 	if err != nil {
 		return "", err
 	}
-	w.trail = trail
+	if w.opts.Resume {
+		w.trail = buildstore.CurrentTrail(trail)
+	}
 	w.setTrailDir()
 	if err := w.takeInputs(); err != nil {
 		return "", err
@@ -378,7 +382,7 @@ func (w *walk) launch(remaining []buildstore.Stage) error {
 	var items result.Refusal
 	for _, root := range w.opts.VolumeRoots {
 		if info, err := os.Stat(root); err != nil || !info.Mode().IsRegular() {
-			items = append(items, result.Item{Check: buildstore.CheckUsage, Path: root, Key: "<volume-root>",
+			items = append(items, result.Item{Check: result.CheckUsage, Path: root, Key: argmark.Positional("volume-root"),
 				Detail: fmt.Sprintf("volume root %s is not a file", root)})
 		}
 	}
@@ -398,18 +402,19 @@ func (w *walk) launch(remaining []buildstore.Stage) error {
 			p, err = w.opts.Provider()
 		}
 		if err != nil {
-			it := result.Item{Check: config.CheckProvider,
-				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; run kbase show-config to see the resolved configuration, or run with --no-inference", calling.ID, calling.Stage, err)}
+			it := result.Item{Check: config.CheckProvider, Remedy: config.ShowConfigRemedy(""),
+				Detail: fmt.Sprintf("%s (%s) calls a model, and %v; run with %s to build without model calls", calling.ID, calling.Stage, err, argmark.Flag("no-inference"))}
 			var lack result.Refusal
 			if errors.As(err, &lack) && len(lack) == 1 {
 				it.Key, it.Path = lack[0].Key, lack[0].Path
+				it.Remedy = config.ShowConfigRemedy(lack[0].Remedy)
 			}
 			items = append(items, it)
 		} else {
 			w.roles = p.Roles
 			trail := func() string { return w.trailDir }
-			w.multichoice = call.New(p.MultichoiceClient, trail, w.opts.Logger).Launch(p.Queue, p.Multichoice)
-			w.passage = call.New(p.OverviewClient, trail, w.opts.Logger).PassageLaunch(p.Queue, p.Overview)
+			w.multichoice = call.New(p.MultichoiceClient, p.MultichoiceProvider, trail, w.opts.Logger).Launch(p.Queue, p.Multichoice)
+			w.passage = call.New(p.OverviewClient, p.OverviewProvider, trail, w.opts.Logger).PassageLaunch(p.Queue, p.Overview)
 		}
 	}
 	if len(items) > 0 {
@@ -420,11 +425,13 @@ func (w *walk) launch(remaining []buildstore.Stage) error {
 
 // prepare readies the worktree for the walk: a fresh build refuses a
 // kb-root/ something is in; a lock git left in the repository is refused by
-// name; dirt in the paths the build owns is restored to the last boundary
-// where it is the interrupted stage's own uncommitted work, and refused
-// otherwise; a resume regenerates missing records.
+// name; a resume over a KB whose format is not this kbase's is refused before
+// anything is restored; dirt in the paths the build owns is restored to the
+// last boundary where it is the interrupted stage's own uncommitted work, and
+// refused otherwise; a resume regenerates missing records.
 func (w *walk) prepare(next buildstore.Stage, recorded map[string]string) ([]string, error) {
-	if recorded[buildstore.StageStart] == "" {
+	fresh := recorded[buildstore.StageStart] == ""
+	if fresh {
 		if err := kbRootGuard(w.kbRoot); err != nil {
 			return nil, err
 		}
@@ -435,9 +442,17 @@ func (w *walk) prepare(next buildstore.Stage, recorded map[string]string) ([]str
 		return nil, result.Refusal{{Check: buildstore.CheckLock, Path: lock,
 			Detail: "git's index lock stands, so no boundary can be committed; a git process killed mid-commit leaves it — remove it once no git process is running in this repository"}}
 	}
+	if err := w.loadFormat(recorded); err != nil {
+		return nil, err
+	}
 	dirty, err := w.repo.Dirty()
 	if err != nil {
 		return nil, err
+	}
+	if fresh {
+		// kb-root/ is absent, so every path git reports under it is one an
+		// uncommitted removal deleted; the start boundary commits the removal.
+		dirty = slices.DeleteFunc(dirty, func(p string) bool { return strings.HasPrefix(p, kb.KBDir+"/") })
 	}
 	if len(dirty) > 0 {
 		events, err := buildstore.ReadProgress(w.stateDir)
@@ -447,8 +462,8 @@ func (w *walk) prepare(next buildstore.Stage, recorded map[string]string) ([]str
 		if !uncommittedIn(events, next.ID) {
 			items := make(result.Refusal, len(dirty))
 			for i, p := range dirty {
-				items[i] = result.Item{Check: checkDirtyPaths, Path: p,
-					Detail: "a path this build owns is dirty and no interrupted stage of it accounts for it; commit it, or restore it to the last kb-build: commit"}
+				items[i] = result.Item{Check: checkDirtyPaths, Path: p, Remedy: dirtyPathsRemedy,
+					Detail: "a path this build owns is dirty and no interrupted stage of it accounts for it"}
 			}
 			return nil, items
 		}
@@ -465,7 +480,7 @@ func (w *walk) prepare(next buildstore.Stage, recorded map[string]string) ([]str
 		if err := w.ensureRecords(); err != nil {
 			return nil, err
 		}
-		if err := w.loadFormat(recorded); err != nil {
+		if err := w.loadRestored(recorded); err != nil {
 			return nil, err
 		}
 	}
@@ -473,10 +488,11 @@ func (w *walk) prepare(next buildstore.Stage, recorded map[string]string) ([]str
 }
 
 // loadFormat reads the format of the KB a resume walks on past the stage that
-// seeds the spine: one newer than this kbase or a degraded one is refused, and
-// one older is saved in the current form before any later stage reads it, the
-// save landing with the next boundary. Before that stage the KB carries no
-// stamp, and the seeding stage reads the format itself.
+// seeds the spine, before anything restores the interrupted stage's paths: one
+// newer than this kbase and one older — whose conversion update-format alone
+// writes — are refused. No stage past the seeding one writes the stamp, so the
+// unrestored tree's stamp is the boundary's. Before that stage the KB carries
+// no stamp, and the seeding stage reads the format itself.
 func (w *walk) loadFormat(recorded map[string]string) error {
 	if recorded[buildstore.StageSpineSeed] == "" {
 		return nil
@@ -485,20 +501,25 @@ func (w *walk) loadFormat(recorded map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if err := index.RefuseDegraded(src); err != nil || !src.Migrated() {
+	return index.PendingConversion(src)
+}
+
+// loadRestored loads the restored KB a resume walks on past the stage that
+// seeds the spine, refusing one whose load fails.
+func (w *walk) loadRestored(recorded map[string]string) error {
+	if recorded[buildstore.StageSpineSeed] == "" {
+		return nil
+	}
+	src, err := kbload.Open(w.kbRoot)
+	if err != nil {
 		return err
 	}
-	w.opts.Logger.Info("saving the KB in the current metadata format", "from", src.Version(), "to", kb.FormatVersion)
-	_, err = w.refresh(src)
+	_, err = index.Derive(src)
 	return err
 }
 
-// refresh is index.Refresh over src, the stamped documents a migration save
-// writes put in it first.
+// refresh is index.Refresh over src.
 func (w *walk) refresh(src *kb.Source) ([]string, error) {
-	if err := kbdocs.Restamp(src, filepath.Base(w.repo.Root)); err != nil {
-		return nil, err
-	}
 	return index.Refresh(src, w.opts.Logger)
 }
 
@@ -610,16 +631,16 @@ func inputsUsage(opts Options) result.Refusal {
 	switch {
 	case opts.Resume:
 		if len(opts.VolumeRoots) > 0 {
-			items = append(items, result.Item{Check: buildstore.CheckUsage, Key: "<volume-root>",
-				Detail: "--resume continues with the volume roots the trail records, and takes none"})
+			items = append(items, result.Item{Check: result.CheckUsage, Key: argmark.Positional("volume-root"),
+				Detail: argmark.Flag("resume") + " continues with the volume roots the trail records, and takes none"})
 		}
 		if len(opts.Bibliographies) > 0 {
-			items = append(items, result.Item{Check: buildstore.CheckUsage, Key: "--bibliography",
-				Detail: "--resume continues with the --bibliography files the trail records, and takes none"})
+			items = append(items, result.Item{Check: result.CheckUsage, Key: argmark.Flag("bibliography"),
+				Detail: argmark.Flag("resume") + " continues with the " + argmark.Flag("bibliography") + " files the trail records, and takes none"})
 		}
 	case len(opts.VolumeRoots) == 0:
-		items = append(items, result.Item{Check: buildstore.CheckUsage, Key: "<volume-root>",
-			Detail: "a build names its volume roots, or continues the trail with --resume"})
+		items = append(items, result.Item{Check: result.CheckUsage, Key: argmark.Positional("volume-root"),
+			Detail: "a build names its volume roots, or continues the trail with " + argmark.Flag("resume")})
 	}
 	return items
 }
@@ -640,42 +661,29 @@ func inRepository(root string, paths []string) []string {
 	return out
 }
 
-// takeInputs reads the trail against the invocation: a build given inputs
-// over a standing trail is refused, as is a resume over an empty trail or one
-// whose newest boundary records no inputs; otherwise a resume takes the
-// inputs that boundary records, in the order recorded.
+// takeInputs reads the trail against a resume: one where kb-root/ does not
+// exist has no KB to resume, whatever the trail records, and is refused, its
+// remedy a fresh build; one over an empty trail, or over one whose newest
+// boundary records no inputs, has nothing to resume either; otherwise it takes
+// the inputs that boundary records, in the order recorded. A fresh build takes
+// its own.
 func (w *walk) takeInputs() error {
-	recorded, ok := buildstore.Inputs{}, false
-	if len(w.trail) > 0 {
-		recorded, ok = buildstore.RecordedInputs(w.trail[0].Body)
-	}
-	switch {
-	case !w.opts.Resume && len(w.trail) == 0:
+	if !w.opts.Resume {
 		return nil
-	case !w.opts.Resume:
-		remedy, err := w.startOverRemedy(true, ok)
-		if err != nil {
-			return err
-		}
-		detail := "a kb-build: trail stands, written before boundaries recorded their inputs"
-		if ok {
-			detail = "a kb-build: trail stands, recording volume roots [" + strings.Join(recorded.VolumeRoots, ", ") + "]"
-			if recorded.Bibliographies != nil {
-				detail += " and bibliographies [" + strings.Join(recorded.Bibliographies, ", ") + "]"
-			}
-		}
-		return result.Refusal{{Check: checkInputs, Key: "<volume-root>", Path: w.repo.Root, Remedy: remedy,
-			Detail: detail + "; a build over other inputs starts over"}}
-	case len(w.trail) == 0:
-		return result.Refusal{{Check: buildstore.CheckTrail, Key: "--resume", Path: w.repo.Root,
-			Remedy: "kbase build <volume-root>...", Detail: "no kb-build: trail to resume"}}
-	case !ok:
-		remedy, err := w.startOverRemedy(false, false)
-		if err != nil {
-			return err
-		}
-		return result.Refusal{{Check: checkInputs, Key: "--resume", Path: w.repo.Root, Remedy: remedy,
-			Detail: "the trail's newest boundary records no inputs: it was written before boundaries carried them"}}
+	}
+	if _, err := os.Lstat(w.kbRoot); errors.Is(err, os.ErrNotExist) {
+		return result.Refusal{{Check: result.CheckUsage, Key: argmark.Flag("resume"), Path: w.repo.Root,
+			Detail: "kb-root/ does not exist: there is no build to resume",
+			Remedy: argmark.Call("build", map[string]any{"volume-root": []string{"<volume-root>"}})}}
+	} else if err != nil {
+		return err
+	}
+	if len(w.trail) == 0 {
+		return w.nothingToResume("no kb-build: trail to resume")
+	}
+	recorded, ok := buildstore.RecordedInputs(w.trail[0].Body)
+	if !ok {
+		return w.nothingToResume("the trail's newest boundary records no inputs: it was written before boundaries carried them")
 	}
 	root := kb.ResolvePath(w.repo.Root)
 	w.opts.VolumeRoots = recordedPaths(root, recorded.VolumeRoots)
@@ -697,32 +705,11 @@ func recordedPaths(root string, paths []string) []string {
 	return out
 }
 
-// startOverRemedy is the remedy naming the trail's start-over commit: the
-// started-at its start boundary records; else that boundary's parent; else
-// none, and a fresh clone is the way to start over. rewindable names
-// rewind-build's started-at target beside a recorded started-at, and
-// resumable adds the resume where the trail can be continued.
-func (w *walk) startOverRemedy(rewindable, resumable bool) (string, error) {
-	start, startedAt := buildstore.StartedAt(w.trail)
-	remedy := "rebuild in a fresh clone"
-	switch {
-	case startedAt != "" && rewindable:
-		remedy = "start over: `rewind-build`'s `started-at` target, or `git reset --hard " + startedAt + "`"
-	case startedAt != "":
-		remedy = "start over: `git reset --hard " + startedAt + "`"
-	case start.Commit != "":
-		parent, err := w.repo.Parent(start.Commit)
-		if err != nil {
-			return "", err
-		}
-		if parent != "" {
-			remedy = "start over: `git reset --hard " + parent + "`"
-		}
-	}
-	if resumable {
-		return "continue with `kbase build --resume`, or " + remedy, nil
-	}
-	return remedy, nil
+// nothingToResume is the refusal, detail as given, of a resume with nothing to
+// resume while kb-root/ stands: check kb-root, its remedy to remove kb-root/ to
+// start over — kbase does not inspect half-built state.
+func (w *walk) nothingToResume(detail string) error {
+	return result.Refusal{{Check: kb.CheckKBRoot, Key: argmark.Flag("resume"), Path: w.repo.Root, Detail: detail, Remedy: startOverRemedy}}
 }
 
 // startFrom is where a fresh build begins: the commit HEAD names, or, on a

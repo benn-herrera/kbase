@@ -23,7 +23,7 @@ func seedKB(t *testing.T) string {
 	files := map[string]string{
 		kb.EntryPointFile: "# Entry\n\n- [Leaf](leaf.md)\n",
 		kb.FormatFile:     string(kb.EncodeFormatStamp(kb.FormatVersion)),
-		"leaf.md": "[↑ Entry](entry-point.md)\n\n# Leaf\n\nThe first result holds here. <!-- claim-rigor: " + seedClaim + " -->\n\n" +
+		"leaf.md": "[↑ Entry](entry-point.md)\n\n# Leaf\n\nThe first result holds here. <!-- kbase-id: " + seedClaim + " -->\n\n" +
 			"A second paragraph names a bound.  \n\n## Bounds\n\nThe bound is tight in the limit.\n",
 	}
 	for rel, text := range files {
@@ -57,28 +57,39 @@ func run(t *testing.T, root, op, values string) Result {
 	return Run(op, Options{KBRoot: root, Values: []byte(values)})
 }
 
-// TestIdempotence issues every op twice with the same values: the second
-// call reports unchanged and leaves kb-root byte-identical, an insert
-// adopting the entry the first wrote.
+// TestIdempotence issues a sequence of ops twice each with the same values:
+// a re-issued add or removal is refused and an edit re-issued is unchanged,
+// each leaving kb-root byte-identical, an edit reporting the id the first
+// call did. A marker an add placed on a line ending in whitespace stands
+// once, ahead of that whitespace.
 func TestIdempotence(t *testing.T) {
 	root := seedKB(t)
 	ids := map[string]string{}
+	edge := func(op, source, target, relation string, extra ...string) string {
+		return "entry:\n" + strings.Replace(edgeEntry(op, source, target, relation, extra...), "- operation: "+op+"\n  ", "- ", 1)
+	}
 	steps := []struct {
 		op, values string
 		mints      string
+		again      string
 	}{
-		{"insert-claim-entry", "entry:\n- title: A New Result\n  rigor: 0.5\n  rationale: |\n    Derived from the seed\n    in two steps.\n  rests-on:\n  - id: " + seedClaim + "\n    context: the bound it rests on\n    bearing: 0.5\n  strengthen-by:\n  - Tighten the constant.\n", "claim"},
-		{"set-rigor", "entry:\n- id: {claim}\n  rigor: 0.75\n", ""},
-		{"set-rationale", "entry:\n- id: {claim}\n  rationale: Rewritten whole.\n", ""},
-		{"add-rests-on", "entry:\n- id: {claim}\n  references:\n  - id: " + seedClaim + "\n", ""},
-		{"mark-claim-in-leaf", "entry:\n- document: leaf.md\n  id: {claim}\n  locator: a second paragraph names a bound\n", ""},
-		{"insert-work-entry", "entry:\n- key: Smith2020\n  title: Smith (2020)\n  rigor: \"*pending*\"\n  rationale: Cited for the bound.\n", "work"},
-		{"add-rests-on", "entry:\n- id: {claim}\n  rests-on:\n  - id: wrk-Smith2020\n", ""},
-		{"set-bearing", "entry:\n- id: wrk-Smith2020\n  target: {claim}\n  relation: founds\n  bearing: 0.5\n", ""},
-		{"insert-analysis-entry", "entry:\n- title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Lifts the new result.\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "analysis"},
-		{"set-bearing", "entry:\n- id: {analysis}\n  target: {claim}\n  relation: lifts\n  bearing: 0.25\n", ""},
-		{"add-pairs", "entry:\n- id: {analysis}\n  refutes:\n  - id: " + seedClaim + "\n    context: the bound is loose\n", ""},
-		{"insert-experiment-entry", "entry:\n- document: leaf.md\n  title: A Trial\n  status: run\n  rigor: 0.9\n  lifts:\n  - id: {claim}\n    bearing: 0.5\n", "experiment"},
+		{AddClaim, "entry:\n- title: A New Result\n  rigor: 0.5\n  rationale: Derived from the seed in two steps.\n" +
+			"  document: leaf.md\n  line: 7\n  snippet: names a bound\n", "claim", result.Refused},
+		{AddEdge, edge(AddEdge, seedClaim, "{claim}", kb.RelationSupports, "context: the bound it rests on", "bearing: 0.5"), "", result.Refused},
+		{EditClaim, "entry:\n- id: {claim}\n  rigor: 0.75\n", "", result.Unchanged},
+		{EditClaim, "entry:\n- id: {claim}\n  rationale: Rewritten whole.\n", "", result.Unchanged},
+		{AddEdge, edge(AddEdge, "{claim}", seedClaim, kb.RelationReferences), "", result.Refused},
+		{AddWork, "entry:\n- label: Smith2020\n  title: Smith (2020)\n  rigor: \"*pending*\"\n  rationale: Cited for the bound.\n", "work", result.Refused},
+		{AddEdge, edge(AddEdge, "{work}", "{claim}", kb.RelationFounds), "", result.Refused},
+		{EditEdge, edge(EditEdge, "{work}", "{claim}", kb.RelationFounds, "bearing: 0.5"), "", result.Unchanged},
+		{AddAnalysis, "entry:\n- title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Lifts the new result.\n" +
+			"  document: leaf.md\n  line: 11\n  snippet: bound is tight\n", "analysis", result.Refused},
+		{AddEdge, edge(AddEdge, "{analysis}", "{claim}", kb.RelationLifts, "bearing: 0.5"), "", result.Refused},
+		{EditEdge, edge(EditEdge, "{analysis}", "{claim}", kb.RelationLifts, "bearing: 0.25"), "", result.Unchanged},
+		{AddEdge, edge(AddEdge, "{analysis}", seedClaim, kb.RelationRefutes, "context: the bound is loose"), "", result.Refused},
+		{AddExperiment, "entry:\n- title: A Trial\n  status: run\n  rigor: 0.9\n  document: leaf.md\n  line: 3\n  snippet: Leaf\n", "experiment", result.Refused},
+		{AddEdge, edge(AddEdge, "{experiment}", "{claim}", kb.RelationLifts, "bearing: 0.5"), "", result.Refused},
+		{RemoveEdge, edge(RemoveEdge, "{analysis}", seedClaim, kb.RelationRefutes), "", result.Refused},
 	}
 	for i, s := range steps {
 		values := s.values
@@ -90,22 +101,22 @@ func TestIdempotence(t *testing.T) {
 			t.Fatalf("step %d %s: first call %+v", i, s.op, first)
 		}
 		if s.mints != "" {
-			wantMinted := 1
-			if s.op == "insert-work-entry" {
-				wantMinted = 0
+			if len(first.IDs()) != 1 {
+				t.Fatalf("step %d %s: ids %v, want one minted", i, s.op, first.IDs())
 			}
-			if len(first.IDs) != 1 || len(first.Minted) != wantMinted {
-				t.Fatalf("step %d %s: ids %v minted %v", i, s.op, first.IDs, first.Minted)
-			}
-			ids[s.mints] = first.IDs[0]
+			ids[s.mints] = first.IDs()[0]
 		}
 		before := snapshot(t, root)
 		second := run(t, root, s.op, values)
-		if second.Outcome != result.Unchanged {
-			t.Errorf("step %d %s: second call %+v, want unchanged", i, s.op, second)
-		}
-		if !slices.Equal(second.IDs, first.IDs) || len(second.Minted) != 0 {
-			t.Errorf("step %d %s: second call ids %v minted %v, want %v and none", i, s.op, second.IDs, second.Minted, first.IDs)
+		switch s.again {
+		case result.Refused:
+			if second.Outcome != result.Refused || len(second.Refusals) != 1 {
+				t.Errorf("step %d %s: second call %+v, want one refusal", i, s.op, second)
+			}
+		case result.Unchanged:
+			if second.Outcome != result.Unchanged || !slices.Equal(second.IDs(), first.IDs()) {
+				t.Errorf("step %d %s: second call %+v, want unchanged, ids %v", i, s.op, second, first.IDs())
+			}
 		}
 		if after := snapshot(t, root); !maps.Equal(before, after) {
 			t.Errorf("step %d %s: the second call changed kb-root", i, s.op)
@@ -115,54 +126,68 @@ func TestIdempotence(t *testing.T) {
 	if n := strings.Count(leaf, kb.StatementMarker(ids["claim"])); n != 1 {
 		t.Errorf("leaf.md carries the new claim's marker %d times, want 1:\n%s", n, leaf)
 	}
-	if !strings.Contains(leaf, "names a bound. "+kb.StatementMarker(ids["claim"])+"  \n") {
+	if !strings.Contains(leaf, "names a bound."+kb.StatementMarker(ids["claim"])+"  \n") {
 		t.Errorf("the marker did not land ahead of the line's trailing whitespace:\n%s", leaf)
 	}
 }
 
-// TestValuesRefusalShape: every refusal names its key, its position and the
-// key vocabulary of the table it sits in, and the whole batch is refused.
+// TestValuesRefusalShape: every refusal names its key and position, and
+// carries allowed where the key or the value comes from a closed set (the
+// table's key names for a key, the vocabulary for a closed-set value); the
+// whole batch is refused.
 func TestValuesRefusalShape(t *testing.T) {
-	setRigor := fieldNames(opFields["set-rigor"])
-	insert := fieldNames(opFields["insert-claim-entry"])
+	addWork := fieldNames(opFields[AddWork])
 	premises := fieldNames(restsOnFields)
+	top := []string{commitKey, dryRunKey, entryKey}
+	const work = "entry:\n- label: L\n  title: T\n  rationale: R\n"
 	for _, tc := range []struct {
 		name, op, values string
 		want             []result.Item
 	}{
-		{"unknown key", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.5\n  rigour: 0.5\n",
-			[]result.Item{{Key: "rigour", Entry: 1, Line: 4, Column: 3, Allowed: setRigor}}},
-		{"missing key", "set-rigor", "entry:\n- id: clm-abcdef\n",
-			[]result.Item{{Key: "rigor", Entry: 1, Line: 2, Column: 3, Allowed: setRigor}}},
-		{"out of domain", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 1.5\n",
-			[]result.Item{{Key: "rigor", Entry: 1, Line: 3, Column: 10, Allowed: setRigor}}},
-		{"unreadable number", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.00001\n",
-			[]result.Item{{Key: "rigor", Entry: 1, Line: 3, Column: 10, Allowed: setRigor}}},
-		{"second entry, nested key", "insert-claim-entry",
-			"entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n- title: T\n  rigor: 0.5\n  rationale: R\n  rests-on:\n  - id: clm-abcdef\n    weight: 2\n",
-			[]result.Item{{Key: "rests-on[1].weight", Entry: 2, Line: 10, Column: 5, Allowed: premises}}},
-		{"form feed from JSON", "insert-claim-entry",
-			`{"entry": [{"title": "the \frac rule", "rigor": 0.5, "rationale": "R"}]}`,
-			[]result.Item{{Key: "title", Entry: 1, Line: 1, Column: 22, Allowed: insert}}},
-		{"backspace", "insert-claim-entry",
-			"entry:\n- title: \"\\beta decay\"\n  rigor: 0.5\n  rationale: R\n",
-			[]result.Item{{Key: "title", Entry: 1, Line: 2, Column: 10, Allowed: insert}}},
-		{"blank line names the line", "insert-claim-entry",
-			"entry:\n- title: T\n  rigor: 0.5\n  rationale: |\n    one\n\n    two\n",
-			[]result.Item{{Key: "rationale", Entry: 1, Line: 6, Allowed: insert}}},
-		{"op named in the document", "set-rigor", "op: set-rigor\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
-			[]result.Item{{Key: "op", Line: 1, Column: 1, Allowed: []string{entryKey}}}},
-		{"empty top-level key", "set-rigor", "\"\": 1\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
-			[]result.Item{{Key: `""`, Line: 1, Column: 1, Allowed: []string{entryKey}}}},
-		{"empty entry key", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.5\n  \"\": 1\n",
-			[]result.Item{{Key: `""`, Entry: 1, Line: 4, Column: 3, Allowed: setRigor}}},
-		{"empty key twice", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.5\n  \"\": 1\n  \"\": 2\n",
-			[]result.Item{{Key: `""`, Entry: 1, Line: 5, Column: 3, Allowed: setRigor}}},
+		{"unknown key", AddWork, work + "  rigour: 0.5\n",
+			[]result.Item{{Key: "rigour", Entry: 1, Line: 5, Column: 3, Allowed: addWork}}},
+		{"a key 4.0.0 drops", AddClaim, "entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n  no-edge: cited as contrast\n" +
+			"  document: leaf.md\n  line: 5\n  snippet: S\n",
+			[]result.Item{{Key: "no-edge", Entry: 1, Line: 5, Column: 3, Allowed: fieldNames(opFields[AddClaim])}}},
+		{"missing key", AddWork, "entry:\n- title: T\n  rationale: R\n",
+			[]result.Item{{Key: "label", Entry: 1, Line: 2, Column: 3, Allowed: addWork}}},
+		{"out of domain", EditClaim, "entry:\n- id: clm-abcdef\n  rigor: 1.5\n",
+			[]result.Item{{Key: "rigor", Entry: 1, Line: 3, Column: 10}}},
+		{"unreadable number", EditClaim, "entry:\n- id: clm-abcdef\n  rigor: 0.00001\n",
+			[]result.Item{{Key: "rigor", Entry: 1, Line: 3, Column: 10}}},
+		{"outside a closed vocabulary", EditExperiment, "entry:\n- id: exp-abcdef\n  status: bogus\n",
+			[]result.Item{{Key: "status", Entry: 1, Line: 3, Column: 11, Allowed: kb.ExperimentStatuses}}},
+		{"second entry, nested key", AddBuildEdges,
+			"entry:\n- id: clm-abcdef\n  rests-on:\n  - id: clm-cccccc\n- id: clm-bbbbbb\n  rests-on:\n  - id: clm-cccccc\n    weight: 2\n",
+			[]result.Item{{Key: "rests-on[1].weight", Entry: 2, Line: 8, Column: 5, Allowed: premises}}},
+		{"form feed from JSON", AddWork,
+			`{"entry": [{"title": "the \frac rule", "label": "L", "rationale": "R"}]}`,
+			[]result.Item{{Key: "title", Entry: 1, Line: 1, Column: 22}}},
+		{"backspace", AddWork,
+			"entry:\n- title: \"\\beta decay\"\n  label: L\n  rationale: R\n",
+			[]result.Item{{Key: "title", Entry: 1, Line: 2, Column: 10}}},
+		{"blank line names the line", SplitClaim,
+			"entry:\n- id: clm-abcdef\n  title: T\n  rationale: |\n    one\n\n    two\n  document: leaf.md\n  line: 5\n",
+			[]result.Item{{Key: "rationale", Entry: 1, Line: 6}}},
+		{"op named in the document", EditClaim, "op: edit-claim\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
+			[]result.Item{{Key: "op", Line: 1, Column: 1, Allowed: top}}},
+		{"empty top-level key", EditClaim, "\"\": 1\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
+			[]result.Item{{Key: `""`, Line: 1, Column: 1, Allowed: top}}},
+		{"operation on an op's own entry", AddWork, "entry:\n- operation: add-work\n  label: L\n  title: T\n  rationale: R\n",
+			[]result.Item{{Key: "operation", Entry: 1, Line: 2, Column: 3, Allowed: addWork}}},
+		{"dry-run not a boolean", EditClaim, "dry-run: yes please\nentry: []\n",
+			[]result.Item{{Key: dryRunKey, Line: 1, Column: 10}}},
+		{"commit not a boolean", EditClaim, "commit: 1\nentry: []\n",
+			[]result.Item{{Key: commitKey, Line: 1, Column: 9}}},
+		{"empty entry key", AddWork, work + "  \"\": 1\n",
+			[]result.Item{{Key: `""`, Entry: 1, Line: 5, Column: 3, Allowed: addWork}}},
+		{"empty key twice", AddWork, work + "  \"\": 1\n  \"\": 2\n",
+			[]result.Item{{Key: `""`, Entry: 1, Line: 6, Column: 3, Allowed: addWork}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			entries, got := parseValues([]byte(tc.values), tc.op)
-			if entries != nil {
-				t.Errorf("a refused batch returned entries %v", entries)
+			b, got := parseValues([]byte(tc.values), tc.op)
+			if b.entries != nil {
+				t.Errorf("a refused batch returned entries %v", b.entries)
 			}
 			for i := range got {
 				got[i].Detail = ""
@@ -180,14 +205,15 @@ func TestValuesRefusalShape(t *testing.T) {
 // number, and the pending literal is nil.
 func TestValuesAccepted(t *testing.T) {
 	for _, doc := range []string{
-		"entry:\n- id: clm-abcdef\n  rigor: 0\n- id: ana-abcdef\n  rigor: \"*pending*\"\n",
-		`{"entry": [{"id": "clm-abcdef", "rigor": 0}, {"id": "ana-abcdef", "rigor": "*pending*"}]}`,
+		"entry:\n- id: clm-abcdef\n  rigor: 0\n- id: clm-bbbbbb\n  rigor: \"*pending*\"\n",
+		`{"entry": [{"id": "clm-abcdef", "rigor": 0}, {"id": "clm-bbbbbb", "rigor": "*pending*"}]}`,
 	} {
-		entries, refusals := parseValues([]byte(doc), "set-rigor")
+		b, refusals := parseValues([]byte(doc), EditClaim)
+		entries := b.entries
 		if refusals != nil || len(entries) != 2 {
 			t.Fatalf("%q: %v %v", doc, entries, refusals)
 		}
-		if v := entries[0].score("rigor"); v == nil || *v != 0 || formatScore(v) != "0.0" {
+		if v := entries[0].score("rigor"); v == nil || *v != 0 || kb.PyFloatRepr(*v) != "0.0" {
 			t.Errorf("rigor 0 read as %v", v)
 		}
 		if entries[1].score("rigor") != nil {
@@ -197,31 +223,33 @@ func TestValuesAccepted(t *testing.T) {
 }
 
 // TestIDVocabulary: every op's id checks take the kinds' prefixes and no
-// retired one, an axiom premise is named by its axm- id and carries its
-// bearing, and a claim's refutation defaults to the pending judgement.
+// retired one, and an axiom premise is named by its axm- id and carries its
+// bearing.
 func TestIDVocabulary(t *testing.T) {
 	for _, tc := range []struct {
 		name, op, values string
 		accepted         bool
 	}{
-		{"claim entry", "set-rigor", "entry:\n- id: clm-abcdef\n  rigor: 0.5\n", true},
-		{"analysis entry", "set-rigor", "entry:\n- id: ana-abcdef\n  rigor: 0.5\n", true},
-		{"retired analysis id", "set-rigor", "entry:\n- id: sup-abcdef\n  rigor: 0.5\n", false},
-		{"work entry", "set-rigor", "entry:\n- id: wrk-smith2020\n  rigor: 0.5\n", true},
-		{"retired work id", "set-rigor", "entry:\n- id: work-smith2020\n  rigor: 0.5\n", false},
-		{"experiment entry", "set-rigor", "entry:\n- id: exp-abcdef\n  rigor: 0.5\n", true},
-		{"axiom source", "set-bearing", "entry:\n- id: axm-S1\n  target: clm-abcdef\n  relation: founds\n  bearing: 0.8\n", true},
-		{"analysis source", "set-bearing", "entry:\n- id: ana-abcdef\n  target: clm-abcdef\n  relation: lifts\n  bearing: 0.8\n", true},
-		{"analysis target", "set-bearing", "entry:\n- id: clm-abcdef\n  target: ana-abcdef\n  relation: supports\n  bearing: 0.8\n", true},
-		{"retired analysis target", "set-bearing", "entry:\n- id: clm-abcdef\n  target: sup-abcdef\n  relation: supports\n  bearing: 0.8\n", false},
-		{"axiom premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-S1\n    bearing: 0.8\n", true},
-		{"label-less axiom premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-\n    bearing: 0.8\n", false},
-		{"retired axiom token premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: Axiom S1\n    bearing: 0.8\n", false},
-		{"retired invariant premise", "add-rests-on", "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: INVARIANT-S1\n    bearing: 0.8\n", false},
-		{"claim refutation", "insert-claim-entry", "entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n  refutes:\n  - id: clm-abcdef\n", true},
+		{"claim entry", RemoveNode, "entry:\n- id: clm-abcdef\n", true},
+		{"analysis entry", RemoveNode, "entry:\n- id: ana-abcdef\n", true},
+		{"retired analysis id", RemoveNode, "entry:\n- id: sup-abcdef\n", false},
+		{"work entry", RemoveNode, "entry:\n- id: wrk-s00000\n", true},
+		{"3.0.0 work id", RemoveNode, "entry:\n- id: wrk-smith2020\n", false},
+		{"retired work id", RemoveNode, "entry:\n- id: work-smith2020\n", false},
+		{"experiment entry", RemoveNode, "entry:\n- id: exp-abcdef\n", true},
+		{"axiom source", AddEdge, "entry:\n- source: axm-s10000\n  target: clm-abcdef\n  relation: founds\n  bearing: 0.8\n", true},
+		{"analysis source", AddEdge, "entry:\n- source: ana-abcdef\n  target: clm-abcdef\n  relation: lifts\n  bearing: 0.8\n", true},
+		{"analysis target", AddEdge, "entry:\n- source: clm-abcdef\n  target: ana-abcdef\n  relation: supports\n  bearing: 0.8\n", true},
+		{"retired analysis target", AddEdge, "entry:\n- source: clm-abcdef\n  target: sup-abcdef\n  relation: supports\n  bearing: 0.8\n", false},
+		{"axiom premise", AddBuildEdges, "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-s10000\n    bearing: 0.8\n", true},
+		{"3.0.0 axiom premise", AddBuildEdges, "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-S1\n    bearing: 0.8\n", false},
+		{"label-less axiom premise", AddBuildEdges, "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: axm-\n    bearing: 0.8\n", false},
+		{"retired axiom token premise", AddBuildEdges, "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: Axiom S1\n    bearing: 0.8\n", false},
+		{"retired invariant premise", AddBuildEdges, "entry:\n- id: clm-abcdef\n  rests-on:\n  - id: INVARIANT-S1\n    bearing: 0.8\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			entries, refusals := parseValues([]byte(tc.values), tc.op)
+			b, refusals := parseValues([]byte(tc.values), tc.op)
+			entries := b.entries
 			if tc.accepted {
 				if refusals != nil || len(entries) != 1 {
 					t.Fatalf("refused %v", refusals)
@@ -233,15 +261,6 @@ func TestIDVocabulary(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a claim refutation without a bearing is pending", func(t *testing.T) {
-		entries, refusals := parseValues([]byte("entry:\n- title: T\n  rigor: 0.5\n  rationale: R\n  refutes:\n  - id: clm-abcdef\n"), "insert-claim-entry")
-		if refusals != nil {
-			t.Fatal(refusals)
-		}
-		if p := entries[0].pairs(kb.RefutesKey); len(p) != 1 || p[0].ID != "clm-abcdef" || p[0].Score != nil {
-			t.Errorf("refutations = %+v, want one pending pair", p)
-		}
-	})
 }
 
 func TestSpliceLines(t *testing.T) {
@@ -283,18 +302,13 @@ func TestExcerptLines(t *testing.T) {
 	}
 }
 
-func TestRenderCitation(t *testing.T) {
-	root := seedKB(t)
-	res := run(t, root, RenderCitation, "entry:\n- excerpt: The bound is tight\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: sub/notes.md\n")
-	if res.Outcome != result.Refused || res.Refusals[0].Key != "citing-document" {
-		t.Fatalf("a citing document in a missing directory: %+v", res)
-	}
-	res = run(t, root, RenderCitation, "entry:\n- excerpt: The bound is tight\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: notes.md\n")
-	if res.Outcome != result.Done || !slices.Equal(res.Citations, []string{`["The bound is tight"](leaf.md#bounds)`}) {
-		t.Fatalf("got %+v", res)
-	}
-	res = run(t, root, RenderCitation, "entry:\n- excerpt: The bound is loose in the limit\n  cited-document: leaf.md\n  anchor: bounds\n  citing-document: notes.md\n")
-	if res.Outcome != result.Refused || res.Refusals[0].Key != "excerpt" {
-		t.Fatalf("a misquote: %+v", res)
+// TestOpsAreTheCallerWriteOps: Ops is the caller-issued write ops, sorted,
+// and no build-only op.
+func TestOpsAreTheCallerWriteOps(t *testing.T) {
+	want := []string{AddAnalysis, AddAxiom, AddCitation, AddClaim, AddEdge, AddExperiment, AddWork,
+		EditAnalysis, EditAxiom, EditClaim, EditEdge, EditExperiment, EditWork,
+		MoveNode, RemoveEdge, RemoveNode, RestoreDemoted}
+	if got := Ops(); !slices.Equal(got, want) {
+		t.Errorf("Ops() = %q, want %q", got, want)
 	}
 }

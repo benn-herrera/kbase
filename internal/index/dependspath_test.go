@@ -59,9 +59,9 @@ func TestBreakCyclesCutsAsTheWalkFindsThem(t *testing.T) {
 		Claims:      []kb.ClaimNode{{ID: "clm-aaaaaa"}, {ID: "clm-bbbbbb"}, {ID: "clm-cccccc"}, {ID: "clm-dddddd"}},
 		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa"}, {ID: "ana-bbbbbb"}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Status: "run"}},
-		Works:       []kb.WorkNode{{ID: "wrk-key2020"}},
+		Works:       []kb.WorkNode{{ID: "wrk-k00000", Label: "key2020"}},
 		Demoted:     []kb.DemotedEdge{{Source: "clm-aaaaaa", Target: "clm-dddddd", ReplacedRelation: kb.RelationSupports, Bearing: one}},
-		Founds:      []kb.BearingEdge{{Source: "wrk-key2020", Target: "clm-dddddd", Bearing: one}},
+		Founds:      []kb.BearingEdge{{Source: "wrk-k00000", Target: "clm-dddddd", Bearing: one}},
 		Scorable:    slices.Concat(kept[:2], []kb.ScorableEdge{thirdCut, firstCut}, kept[2:], []kb.ScorableEdge{secondCut}),
 	}
 	demoted := func(e kb.ScorableEdge) kb.DemotedEdge {

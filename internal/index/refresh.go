@@ -16,7 +16,7 @@ import (
 	"kbase/internal/sheet"
 )
 
-// The refusal classes refresh and verify raise.
+// The refusal classes a refresh, update-format and verify raise.
 const (
 	checkMetadata = kb.CheckMetadata
 	checkKBRoot   = kb.CheckKBRoot
@@ -49,8 +49,8 @@ func refusal(err error) error {
 	return err
 }
 
-// Precheck is what refresh refuses before it writes: a kb-root that is not a
-// directory or whose CLAUDE.md is not the redirect.
+// Precheck is what a refresh and update-format refuse before they write: a
+// kb-root that is not a directory or whose CLAUDE.md is not the redirect.
 func Precheck(src *kb.Source) error {
 	kbRoot := src.Root()
 	if info, err := os.Stat(kbRoot); err != nil || !info.IsDir() {
@@ -66,145 +66,207 @@ func Precheck(src *kb.Source) error {
 	return nil
 }
 
-// Refresh renders the KB src reads: where its load is degraded it first
-// writes the records as the walk resolves them. Where src was migrated it then
-// saves every file the conversion produced, and every file put in src since,
-// that the disk does not hold as src does: the edge records, the node records,
-// every other file but the stamped documents and the entry point, then the
-// stamped documents. It then writes every register page the KB calls for and
-// the claim-graph sheets, removing a page no longer called for; writes the
-// format stamp file at the version the KB is still at; removes the paths the
-// migration made obsolete, less those it wrote; writes the entry point; and
-// last rewrites the stamp file at kb.FormatVersion. It writes only files whose
-// bytes change and returns their paths, kb-root-relative inside kb-root and
-// absolute beside it. A KB state it refuses is a result.Refusal; earlier
-// phases' writes stand, and a save that stops part-way leaves the KB stamped
-// at the version it converts from, which the next refresh completes.
+// Refresh renders the KB src reads, which its caller has read at the current
+// format: a write over a KB whose conversion is pending is refused before it
+// (PendingConversion). A KB whose load fails is refused before anything is
+// written. It writes every register page the KB calls for and the claim-graph
+// sheets, removing a page no longer called for. It writes only files whose
+// bytes change and returns their kb-root-relative paths. A KB state it refuses
+// is a result.Refusal; earlier phases' writes stand.
 func Refresh(src *kb.Source, lg log.Logger) ([]string, error) {
 	written, _, _, err := RefreshReporting(src, lg)
 	return written, err
 }
 
 // RefreshReporting is Refresh, and also what it removed — the register pages
-// and sheets no longer called for and the obsolete paths it drained,
-// kb-root-relative inside kb-root and repository-relative beside it — and
-// whether it ran with no Graphviz dot on PATH, drawing nothing.
+// and sheets no longer called for, kb-root-relative — and whether it ran with
+// no Graphviz dot on PATH, drawing nothing.
 func RefreshReporting(src *kb.Source, lg log.Logger) (written, removed []string, noDot bool, err error) {
-	r, err := RefreshWithWarnings(src, lg)
-	return r.Written, r.Removed, r.NoDot, err
-}
-
-// Refreshed is what one refresh did: the paths it wrote and removed, as
-// RefreshReporting names them, whether it drew nothing for want of Graphviz
-// dot, and a warning per record its repair of a degraded load dropped or edge
-// it cut.
-type Refreshed struct {
-	Written, Removed []string
-	NoDot            bool
-	Warnings         []result.Item
-}
-
-// RefreshWithWarnings is RefreshReporting, and also the repair's warnings.
-func RefreshWithWarnings(src *kb.Source, lg log.Logger) (Refreshed, error) {
-	if err := Precheck(src); err != nil {
-		return Refreshed{}, err
-	}
 	r := refresher{src: src}
-	for _, phase := range []func() error{r.repair, r.saveConverted, r.pages, r.sheet, r.save} {
+	return r.run(r.load, r.pages, r.sheet)
+}
+
+// Derivation is what the derivation would change over the KB a source reads:
+// each file whose bytes differ from the disk's, kb-root-relative, the register
+// pages then the sheets; each file it would remove, kb-root-relative; and
+// whether it draws the sheets, which it does not without Graphviz dot.
+type Derivation struct {
+	Files   []DerivedFile
+	Removed []string
+	Drawn   bool
+}
+
+// DerivedFile is one file the derivation writes: its kb-root-relative path
+// and its bytes.
+type DerivedFile struct {
+	Rel  string
+	Data []byte
+}
+
+// PlanDerivation is the derivation over the KB src reads, its records and
+// leaves as src holds them, computed and nothing written. Its caller has
+// prechecked src. A KB state the derivation refuses is a result.Refusal.
+func PlanDerivation(src *kb.Source) (Derivation, error) {
+	if _, err := Derive(src); err != nil {
+		return Derivation{}, refusal(err)
+	}
+	files, removed, err := planPages(src)
+	if err != nil {
+		return Derivation{}, refusal(err)
+	}
+	sheets, gone, drawn, err := planSheet(src)
+	if err != nil {
+		return Derivation{}, refusal(err)
+	}
+	return Derivation{Files: append(files, sheets...), Removed: append(removed, gone...), Drawn: drawn}, nil
+}
+
+// RemoveKBFile removes the KB file at p, where it stands, and records in src
+// that it is gone.
+func RemoveKBFile(src *kb.Source, p string) error {
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	src.Removed(p)
+	return nil
+}
+
+// RecordMove is one build record the conversion moves from the repository
+// root into kb-root/.build/, by repository-relative path.
+type RecordMove struct{ From, To string }
+
+// UpdateFormat is update-format's save and re-derivation over the KB src
+// reads. A KB whose load fails is refused before anything is written or
+// moved. Once the load passes, it moves each of moves with move — the
+// caller's git mv — reporting the record's root path among the removed,
+// repository-relative, and its new path among the written; the save itself
+// moves no record. Where src was migrated it then saves every file the
+// conversion produced that the disk does not hold as src does: the edge
+// records, the node records, then every other file but the entry point. It
+// then re-derives as Refresh does; writes the format stamp file at the version
+// the KB is still at; removes the paths the migration made obsolete, less
+// those it wrote; writes the entry point; and last rewrites the stamp file at
+// kb.FormatVersion. It writes only files whose bytes change and reports as
+// RefreshReporting does. A save that stops part-way leaves the KB stamped at
+// the version it converts from.
+func UpdateFormat(src *kb.Source, moves []RecordMove, move func(from, to string) error, lg log.Logger) (written, removed []string, noDot bool, err error) {
+	r := refresher{src: src}
+	return r.run(r.load, func() error { return r.moveRecords(moves, move) }, r.saveConverted, r.pages, r.sheet, r.save)
+}
+
+// moveRecords moves each of moves with move, reporting each as UpdateFormat
+// does. The moved bytes are the ones src holds at the new path, so the save
+// finds each record in place and its root path gone.
+func (r *refresher) moveRecords(moves []RecordMove, move func(from, to string) error) error {
+	for _, m := range moves {
+		if err := move(m.From, m.To); err != nil {
+			return err
+		}
+		r.Removed = append(r.Removed, m.From)
+		r.Written = append(r.Written, r.reported(r.src.Path(m.To)))
+	}
+	return nil
+}
+
+// run is the phases in order after the precheck, stopping at the first that
+// refuses or fails.
+func (r *refresher) run(phases ...func() error) (written, removed []string, noDot bool, err error) {
+	if err := Precheck(r.src); err != nil {
+		return nil, nil, false, err
+	}
+	for _, phase := range phases {
 		if err := phase(); err != nil {
-			return r.Refreshed, refusal(err)
+			return r.Written, r.Removed, r.NoDot, refusal(err)
 		}
 	}
-	return r.Refreshed, nil
+	return r.Written, r.Removed, r.NoDot, nil
 }
 
+// refresher is one refresh or update-format over src: the paths it wrote and removed, as
+// RefreshReporting names them, and whether it drew nothing for want of
+// Graphviz dot.
 type refresher struct {
-	src *kb.Source
-	Refreshed
+	src              *kb.Source
+	Written, Removed []string
+	NoDot            bool
 }
 
 func (r *refresher) path(rel string) string { return r.src.KBPath(rel) }
 
-// repair writes the records as the walk resolves them where the load is
-// degraded, keeping its warnings; a load that is not writes nothing. The
-// records written are the authored ones under the same resolution, so a rigor
-// the walk reads clamped keeps its value in the file. The repair runs first so
-// the pages and the sheets are drawn from the records as they then stand.
-func (r *refresher) repair() error {
-	rows, err := Derive(r.src)
-	if err != nil {
-		return err
-	}
-	if len(rows.Degraded) == 0 {
-		return nil
-	}
-	authored, err := kb.LoadAuthoredGraph(r.src)
-	if err != nil {
-		return err
-	}
-	hosted, err := HostedOrder(r.src, authored)
-	if err != nil {
-		return err
-	}
-	resolved, _ := resolveGraph(authored, GraphKinds(authored), hosted)
-	written, err := WriteGraph(r.src, resolved)
-	r.Written = append(r.Written, written...)
-	if err != nil {
-		return err
-	}
-	r.Warnings = rows.Degraded
-	return nil
+// load refuses a KB whose load fails before any phase writes or moves.
+func (r *refresher) load() error {
+	_, err := Derive(r.src)
+	return err
 }
 
 // pages writes every register page the KB calls for whose bytes on disk
 // differ, and removes each page standing at a page position that is no longer
 // called for.
 func (r *refresher) pages() error {
-	x, err := loadDerivation(r.src)
+	files, removed, err := planPages(r.src)
 	if err != nil {
 		return err
 	}
-	pages := x.registerPages()
-	for _, rel := range x.pagePositions() {
-		p := r.path(rel)
-		data, called := pages[rel]
-		if !called {
-			if !r.src.IsFile(p) {
-				continue
-			}
-			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			r.src.Removed(p)
-			r.Removed = append(r.Removed, rel)
-			continue
-		}
-		if current, err := r.src.DiskFile(p); err == nil && bytes.Equal(current, data) {
-			r.src.Put(p, current)
-			continue
-		}
-		if err := WriteKBFile(r.src, p, data); err != nil {
+	return r.apply(files, removed)
+}
+
+// apply writes each of files and removes each of removed, reporting each.
+func (r *refresher) apply(files []DerivedFile, removed []string) error {
+	for _, f := range files {
+		if err := WriteKBFile(r.src, r.path(f.Rel), f.Data); err != nil {
 			return err
 		}
-		r.Written = append(r.Written, rel)
+		r.Written = append(r.Written, f.Rel)
+	}
+	for _, rel := range removed {
+		if err := RemoveKBFile(r.src, r.path(rel)); err != nil {
+			return err
+		}
+		r.Removed = append(r.Removed, rel)
 	}
 	return nil
 }
 
+// planPages is every register page the KB src reads calls for whose bytes
+// differ from the disk's, and each page standing at a page position no longer
+// called for. A page position the disk cannot be read at is an error.
+func planPages(src *kb.Source) (files []DerivedFile, removed []string, err error) {
+	x, err := loadDerivation(src)
+	if err != nil {
+		return nil, nil, err
+	}
+	pages := x.registerPages()
+	for _, rel := range x.pagePositions() {
+		p := src.KBPath(rel)
+		data, called := pages[rel]
+		if !called {
+			if src.IsFile(p) {
+				removed = append(removed, rel)
+			}
+			continue
+		}
+		current, err := src.DiskFile(p)
+		if err == nil && bytes.Equal(current, data) {
+			src.Put(p, current)
+			continue
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, nil, err
+		}
+		files = append(files, DerivedFile{rel, data})
+	}
+	return files, removed, nil
+}
+
 // WriteKBFile replaces the KB file at p with data, atomically and keeping
 // its mode, making its directory where none stands, and records the bytes in
-// src so later reads see them. A file beside kb-root — a build record — is
-// written under the repository; every other is written under kb-root, and a
-// symbolic link at p or a target outside either tree is refused.
+// src so later reads see them. A symbolic link at p or a target outside
+// kb-root is refused.
 func WriteKBFile(src *kb.Source, p string, data []byte) error {
-	root := src.Root()
-	if !kb.Within(root, p) {
-		root = src.Repo()
-	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := writeInside(root, p, data); err != nil {
+	if err := writeInside(src.Root(), p, data); err != nil {
 		return err
 	}
 	src.Put(p, data)
@@ -256,29 +318,28 @@ func strengthLine(v *float64, trace string) string {
 }
 
 func (r *refresher) sheet() error {
-	written, removed, drawn, err := WriteSheet(r.src)
-	r.Written = append(r.Written, written...)
-	r.Removed = append(r.Removed, removed...)
-	r.NoDot = err == nil && !drawn
-	return err
+	files, removed, drawn, err := planSheet(r.src)
+	if err != nil {
+		return err
+	}
+	r.NoDot = !drawn
+	return r.apply(files, removed)
 }
 
 // saveConverted writes every file a migrated source holds that the disk does
 // not hold as it does, but the entry point, in the order a stopped save is
-// resumed from: the edge records, the node records, every other file, then
-// the readiness-stamped documents. The entry point waits for save, where it is
-// written after the stamp file stands at the version the tree is still at. A
-// source read at the current format has none.
+// resumed from: the edge records, the node records, then every other file.
+// The entry point waits for save, where it is written after the stamp file
+// stands at the version the tree is still at. A source read at the current
+// format has none.
 func (r *refresher) saveConverted() error {
 	entry := r.path(kb.EntryPointFile)
 	rank := func(p string) int {
-		switch {
-		case p == r.path(kb.GraphEdgesFile):
+		switch p {
+		case r.path(kb.GraphEdgesFile):
 			return 0
-		case p == r.path(kb.GraphNodesFile):
+		case r.path(kb.GraphNodesFile):
 			return 1
-		case filepath.Dir(p) == r.src.Root() && slices.Contains(kb.StampedFiles, filepath.Base(p)):
-			return 3
 		}
 		return 2
 	}
@@ -304,7 +365,7 @@ func (r *refresher) saveConverted() error {
 // version the tree is at, and a save that stops part-way leaves a KB the
 // loader reads at its old version — the stamp file, or the entry point's
 // frontmatter until the stamp file is written, saying so — which the converter
-// resumes and the next refresh completes.
+// resumes.
 func (r *refresher) save() error {
 	entry := r.path(kb.EntryPointFile)
 	format := r.path(kb.FormatFile)
@@ -316,11 +377,7 @@ func (r *refresher) save() error {
 	}
 	saved := map[string]bool{}
 	for _, w := range r.Written {
-		if filepath.IsAbs(w) {
-			saved[w] = true
-		} else {
-			saved[r.path(w)] = true
-		}
+		saved[r.path(w)] = true
 	}
 	for _, rel := range r.src.MigratedFiles() {
 		saved[r.src.Path(rel)] = true
@@ -336,7 +393,7 @@ func (r *refresher) save() error {
 			}
 			return err
 		}
-		r.Removed = append(r.Removed, r.reported(p, true))
+		r.Removed = append(r.Removed, r.reported(p))
 	}
 	if _, err := r.src.ReadText(entry); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -361,7 +418,7 @@ func (r *refresher) saveFile(p string) error {
 	if err != nil || !wrote {
 		return err
 	}
-	r.Written = append(r.Written, r.reported(p, false))
+	r.Written = append(r.Written, r.reported(p))
 	return nil
 }
 
@@ -381,45 +438,37 @@ func (r *refresher) writeChanged(p string) (bool, error) {
 	return true, nil
 }
 
-// reported is p as a result names it: kb-root-relative inside kb-root;
-// beside it, repository-relative for a removal and absolute for a write.
-func (r *refresher) reported(p string, removal bool) string {
-	if rel, err := filepath.Rel(r.src.Root(), p); err == nil && kb.Within(r.src.Root(), p) {
-		return filepath.ToSlash(rel)
+// reported is p, a path inside kb-root, as a result names it: kb-root-relative.
+func (r *refresher) reported(p string) string {
+	rel, err := filepath.Rel(r.src.Root(), p)
+	if err != nil {
+		return p
 	}
-	if rel, ok := r.src.RepoRel(p); ok && removal {
-		return rel
-	}
-	return p
+	return filepath.ToSlash(rel)
 }
 
-// WriteSheet draws the KB's claim-graph sheets from the rows Derive yields and
-// writes each whose bytes change, then removes the digest and every volume's
-// sheet the drawing no longer calls for. A KB state Derive refuses is its
-// refusal, dot or no dot. It returns the kb-root-relative paths it wrote and
-// removed and whether the sheets were drawn. Without Graphviz dot on PATH
-// nothing is drawn: every sheet standing is left as it is, the placeholder is
-// written only where kb-root has no claim-graph.svg, and nothing is removed.
-func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err error) {
-	kbRoot := src.Root()
+// planSheet is the KB's claim-graph sheets drawn from the rows Derive yields,
+// nothing written: each sheet whose bytes differ from the disk's, the digest
+// and every volume's sheet the drawing no longer calls for, kb-root-relative,
+// and whether the sheets were drawn. A KB state Derive refuses is its refusal,
+// dot or no dot. Without Graphviz dot on PATH nothing is drawn: every sheet
+// standing is left as it is, the placeholder is written only where kb-root
+// has no claim-graph.svg, and nothing is removed.
+func planSheet(src *kb.Source) (files []DerivedFile, removed []string, drawn bool, err error) {
 	rows, err := Derive(src)
 	if err != nil {
 		return nil, nil, false, err
 	}
 	sheets, err := sheet.Render(src, rows.Nodes, rows.Edges, rows.Cites)
 	if errors.Is(err, sheet.ErrNoDot) {
-		target := filepath.Join(kbRoot, kb.ClaimGraphFile)
-		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(src.KBPath(kb.ClaimGraphFile)); !errors.Is(err, os.ErrNotExist) {
 			return nil, nil, false, err
 		}
 		svg, err := sheet.Placeholder(src)
 		if err != nil {
 			return nil, nil, false, err
 		}
-		if err := writeInside(kbRoot, target, svg); err != nil {
-			return nil, nil, false, err
-		}
-		return []string{kb.ClaimGraphFile}, nil, false, nil
+		return []DerivedFile{{kb.ClaimGraphFile, svg}}, nil, false, nil
 	}
 	if err != nil {
 		return nil, nil, false, err
@@ -427,21 +476,24 @@ func WriteSheet(src *kb.Source) (written, removed []string, drawn bool, err erro
 	drawnPaths := map[string]bool{}
 	for _, s := range sheets {
 		drawnPaths[s.Path] = true
-		target := filepath.Join(kbRoot, filepath.FromSlash(s.Path))
-		current, err := src.DiskFile(target)
+		current, err := src.DiskFile(src.KBPath(s.Path))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return written, nil, true, err
+			return nil, nil, true, err
 		}
-		if bytes.Equal(s.SVG, current) {
-			continue
+		if !bytes.Equal(s.SVG, current) {
+			files = append(files, DerivedFile{s.Path, s.SVG})
 		}
-		if err := writeInside(kbRoot, target, s.SVG); err != nil {
-			return written, nil, true, err
-		}
-		written = append(written, s.Path)
 	}
-	removed, err = removeUndrawnSheets(src, drawnPaths)
-	return written, removed, true, err
+	_, present, err := SheetPaths(src)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	for _, rel := range present {
+		if !drawnPaths[rel] {
+			removed = append(removed, rel)
+		}
+	}
+	return files, removed, true, nil
 }
 
 // SheetPaths is every kb-root-relative slash path a claim-graph sheet of the
@@ -465,24 +517,4 @@ func SheetPaths(src *kb.Source) (candidates, present []string, err error) {
 		}
 	}
 	return candidates, present, nil
-}
-
-// removeUndrawnSheets removes every sheet present that drawn does not hold,
-// returning their kb-root-relative paths in path order.
-func removeUndrawnSheets(src *kb.Source, drawn map[string]bool) ([]string, error) {
-	_, present, err := SheetPaths(src)
-	if err != nil {
-		return nil, err
-	}
-	var removed []string
-	for _, rel := range present {
-		if drawn[rel] {
-			continue
-		}
-		if err := os.Remove(src.KBPath(rel)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return removed, err
-		}
-		removed = append(removed, rel)
-	}
-	return removed, nil
 }

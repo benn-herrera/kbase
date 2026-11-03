@@ -29,7 +29,7 @@ var goldenShapes = map[string]func() string{
 		return strings.Join([]string{kb.StatementMarker("clm-aa1111"), kb.StatementMarker("ana-ee5555"), kb.StatementMarker("exp-ff6666")}, "\n")
 	},
 	"citation": func() string {
-		return renderCitation("the weakest link in the dependency cone", "part3/claim-rigor.md", "regime-conservation-laws")
+		return kb.Citation(`"the weakest link in the dependency cone"`, "part3/regimes.md#regime-conservation-laws", "clm-aa1111")
 	},
 }
 

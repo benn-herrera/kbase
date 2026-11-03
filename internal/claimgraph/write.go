@@ -2,6 +2,8 @@ package claimgraph
 
 import (
 	"encoding/json"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -17,8 +19,8 @@ const retryLimit = 3
 // values is one op's values entries.
 type values []map[string]any
 
-// writer lands values through the write API's ops as the build's own, with no
-// trailing refresh: kb_claimgraph stage G refreshes once the writes are in.
+// writer lands values through the write API's ops as the build's own, each
+// batch followed by the derivation.
 type writer struct {
 	kbRoot, repoRoot string
 	lg               log.Logger
@@ -26,7 +28,7 @@ type writer struct {
 
 // options is one op invocation of the writer's over data.
 func (w writer) options(data []byte) write.Options {
-	return write.Options{KBRoot: w.kbRoot, Values: data, NoRefresh: true, Provenance: write.ProvenanceMachine, Logger: w.lg}
+	return write.Options{KBRoot: w.kbRoot, Values: data, Provenance: write.ProvenanceMachine, Logger: w.lg}
 }
 
 // run issues op over vs, re-issuing an identical call on retry. Any outcome
@@ -69,15 +71,92 @@ func refusalText(res write.Result) string {
 	return strings.Join(parts, "; ")
 }
 
-// insertClaims inserts one claim per entry, each marked in its document at its
-// locator in the call that mints it, and returns the id each took, in order.
-func (w writer) insertClaims(name string, entries []entry) ([]string, error) {
-	vs := make(values, len(entries))
-	for i, e := range entries {
-		vs[i] = map[string]any{"title": e.title, "rationale": e.rationale, "document": e.document, "locator": e.locator}
+// uniqueTitle is title where taken does not hold it, else title followed by
+// the first counter, " (2)" on, that makes it a title taken does not hold;
+// taken then holds what it returns. A node's title is unique within its kind.
+func uniqueTitle(title string, taken map[string]bool) string {
+	unique := title
+	for n := 2; taken[unique]; n++ {
+		unique = fmt.Sprintf("%s (%d)", title, n)
 	}
-	res, err := w.run(name, "insert-claim-entry", vs)
-	return res.IDs, err
+	taken[unique] = true
+	return unique
+}
+
+// hostedTitle is a claim title in the leaf that hosts it.
+type hostedTitle struct{ document, title string }
+
+// addClaims lands one claim per entry through add-claim, each marked at the
+// one line of its document its locator names, and returns the id each took,
+// in order. Title and rationale are one line each, as add-claim stores them.
+// An entry whose title a claim its document hosts already carries — one an
+// earlier entry adds included — takes that claim's id and writes nothing, as
+// the same block or sentence read twice is one claim. Any other entry's title
+// is made unique among the KB's claims.
+func (w writer) addClaims(name string, entries []entry) ([]string, error) {
+	src := builtTree(w.kbRoot)
+	g, err := kb.LoadGraph(src)
+	if err != nil {
+		return nil, err
+	}
+	taken, titles := map[string]bool{}, map[string]string{}
+	for _, n := range g.Claims {
+		taken[n.Title], titles[n.ID] = true, n.Title
+	}
+	texts := map[string][]string{}
+	hosted := map[hostedTitle]string{}
+	adding := map[hostedTitle]int{}
+	ids := make([]string, len(entries))
+	repeats := map[int]int{}
+	var vs values
+	var minting []int
+	for i, e := range entries {
+		lines, read := texts[e.document]
+		if !read {
+			text, err := src.ReadText(src.KBPath(e.document))
+			if err != nil {
+				return nil, err
+			}
+			lines = kb.SplitLines(text)
+			texts[e.document] = lines
+			for _, id := range slices.Sorted(maps.Keys(kb.MarkerLines(text))) {
+				site := hostedTitle{e.document, titles[id]}
+				if _, held := hosted[site]; !held && titles[id] != "" {
+					hosted[site] = id
+				}
+			}
+		}
+		site := hostedTitle{e.document, kb.NormalizeSpace(e.title)}
+		if id, ok := hosted[site]; ok {
+			ids[i] = id
+			continue
+		}
+		if j, ok := adding[site]; ok {
+			repeats[i] = j
+			continue
+		}
+		at := write.ExcerptLines(strings.Join(lines, "\n"), e.locator)
+		if len(at) != 1 {
+			return nil, stopf(name, "the locator %q names %d lines of %s, and a claim's marker goes on exactly one", e.locator, len(at), e.document)
+		}
+		adding[site] = i
+		minting = append(minting, i)
+		vs = append(vs, map[string]any{"title": uniqueTitle(site.title, taken), "rationale": kb.NormalizeSpace(e.rationale),
+			"document": e.document, "line": at[0] + 1, "snippet": kb.NormalizeSpace(lines[at[0]])})
+	}
+	if len(vs) > 0 {
+		res, err := w.run(name, write.AddClaim, vs)
+		if err != nil {
+			return nil, err
+		}
+		for k, id := range res.IDs() {
+			ids[minting[k]] = id
+		}
+	}
+	for i, j := range repeats {
+		ids[i] = ids[j]
+	}
+	return ids, nil
 }
 
 // writePlan lands the declared pass's plan in the order the ops'
@@ -88,7 +167,7 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 	var ids []string
 	if len(p.entries) > 0 {
 		var err error
-		if ids, err = w.insertClaims("pass-1", p.entries); err != nil {
+		if ids, err = w.addClaims("pass-1", p.entries); err != nil {
 			return findings, err
 		}
 	}
@@ -96,9 +175,9 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 	for _, e := range p.entries {
 		docs[e.document] = true
 	}
-	findings = append(findings, pass("pass-1-insert-claim-entry", field("entries", len(ids)), field("documents", len(docs))))
+	findings = append(findings, pass("pass-1-add-claim", field("entries", len(ids)), field("documents", len(docs))))
 
-	f, err := w.writeWorks(p.works)
+	works, f, err := w.writeWorks(p.works)
 	if err != nil {
 		return findings, err
 	}
@@ -106,7 +185,7 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 
 	var edges []pair
 	for _, r := range p.restsOn {
-		edges = append(edges, pair{ids[r.entry], r.workID})
+		edges = append(edges, pair{ids[r.entry], works[r.workKey]})
 	}
 	f, err = w.writeEdges("pass-3-rests-on", edges, nil)
 	if err != nil {
@@ -115,24 +194,40 @@ func (w writer) writePlan(p plan) ([]Finding, error) {
 	return append(findings, f), nil
 }
 
-// writeWorks inserts one work record per external work, every rigor the
-// pending literal.
-func (w writer) writeWorks(works []CitedWork) (Finding, error) {
+// writeWorks adds one work record per external work through add-work, its
+// citation key its label, every rigor the pending literal and every title
+// unique among the KB's works, and returns the id add-work minted each, by
+// citation key.
+func (w writer) writeWorks(works []CitedWork) (map[string]string, Finding, error) {
 	if len(works) == 0 {
-		return fact("pass-1b-insert-work-entry", field("works", 0), field("named", 0), field("key-only", 0)), nil
+		return nil, fact("pass-1b-add-work", field("works", 0), field("named", 0), field("key-only", 0)), nil
+	}
+	g, err := kb.LoadGraph(builtTree(w.kbRoot))
+	if err != nil {
+		return nil, Finding{}, err
+	}
+	taken := map[string]bool{}
+	for _, n := range g.Works {
+		taken[n.Title] = true
 	}
 	vs := make(values, len(works))
 	named := 0
 	for i, wk := range works {
-		vs[i] = map[string]any{"key": wk.Key, "title": wk.Title, "rigor": kb.PendingLiteral, "rationale": workRationale(wk)}
+		vs[i] = map[string]any{"label": wk.Key, "title": uniqueTitle(kb.NormalizeSpace(wk.Title), taken), "rigor": kb.PendingLiteral,
+			"rationale": kb.NormalizeSpace(workRationale(wk))}
 		if wk.Named {
 			named++
 		}
 	}
-	if _, err := w.run("pass-1b", "insert-work-entry", vs); err != nil {
-		return Finding{}, err
+	res, err := w.run("pass-1b", write.AddWork, vs)
+	if err != nil {
+		return nil, Finding{}, err
 	}
-	return pass("pass-1b-insert-work-entry", field("works", len(works)), field("named", named), field("key-only", len(works)-named)), nil
+	ids := map[string]string{}
+	for i, e := range res.Entries {
+		ids[works[i].Key] = e.ID
+	}
+	return ids, pass("pass-1b-add-work", field("works", len(works)), field("named", named), field("key-only", len(works)-named)), nil
 }
 
 // writeEdges lands every edge in one batch of the build's edge write, one
@@ -179,11 +274,9 @@ type newClaim struct {
 	title, rationale, locator string
 }
 
-// landLeaf lands one leaf's new claims in one act and returns the id each
-// took, in order. Each is inserted with the leaf and its locator, so it is
-// marked there in the call that mints it; a claim of that title the leaf
-// already hosts, or one no leaf hosts, is adopted instead, by the insert's own
-// rule.
+// landLeaf lands one leaf's new claims in one batch and returns the id each
+// took, in order, as addClaims lands them: a claim of that title the leaf
+// already hosts is taken instead.
 func (w writer) landLeaf(document string, claims []newClaim) ([]string, error) {
 	if len(claims) == 0 {
 		return nil, nil
@@ -192,17 +285,15 @@ func (w writer) landLeaf(document string, claims []newClaim) ([]string, error) {
 	for i, c := range claims {
 		entries[i] = entry{title: c.title, rationale: c.rationale, document: document, locator: c.locator}
 	}
-	return w.insertClaims("land-"+document, entries)
+	return w.addClaims("land-"+document, entries)
 }
 
-// landLeaves is landLeaf over several leaves in one insert batch, each entry
-// naming its leaf, and returns the id each entry took, in order. It adopts
-// exactly what landing the leaves one by one in entry order would: within the
-// batch a minted claim joins the batch's graph and its marker the batch's
-// hosts, which adoption reads.
+// landLeaves is landLeaf over several leaves in one batch, each entry naming
+// its leaf, and returns the id each entry took, in order: exactly what landing
+// the leaves one by one in entry order would.
 func (w writer) landLeaves(entries []entry) ([]string, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	return w.insertClaims("land-leaves", entries)
+	return w.addClaims("land-leaves", entries)
 }

@@ -20,6 +20,7 @@ import (
 	"kbase/internal/atomicfile"
 	"kbase/internal/buildstore"
 	"kbase/internal/kb"
+	"kbase/internal/log"
 	"kbase/internal/query"
 	"kbase/internal/result"
 )
@@ -96,7 +97,7 @@ func OpenReplay(dir, run, pass string, failedOnly bool, limit int) (*Replay, err
 	runDir := filepath.Join(RunsDir(dir), run)
 	captured, err := readLastCaptures(runDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, result.Refusal{{Check: checkUsage, Path: filepath.Join(runDir, capturesFile), Key: buildstore.ReplayKey,
+		return nil, result.Refusal{{Check: result.CheckUsage, Path: filepath.Join(runDir, capturesFile), Key: buildstore.ReplayKey,
 			Detail: "run " + run + " has no " + capturesFile + ": it stands no longer, asked nothing, or was a dry run"}}
 	}
 	if err != nil {
@@ -107,16 +108,16 @@ func OpenReplay(dir, run, pass string, failedOnly bool, limit int) (*Replay, err
 		return nil, fmt.Errorf("read %s: %w", filepath.Join(runDir, runFile), err)
 	}
 	switch pass {
-	case "", query.PassBoth:
+	case "", query.PassAll:
 		pass = ""
 	case query.PassRigor, query.PassBearing:
-		if h.Pass != query.PassBoth && h.Pass != pass {
-			return nil, result.Refusal{{Check: checkUsage, Key: "--pass",
+		if h.Pass != query.PassAll && h.Pass != pass {
+			return nil, result.Refusal{{Check: result.CheckUsage, Key: "--pass",
 				Detail: "run " + run + " walked " + h.Pass + ": --pass " + pass + " selects no call of it"}}
 		}
 	default:
-		return nil, result.Refusal{{Check: checkUsage, Key: "--pass",
-			Detail: "--pass takes " + query.PassRigor + ", " + query.PassBearing + " or " + query.PassBoth + ", not " + strconv.Quote(pass)}}
+		return nil, result.Refusal{{Check: result.CheckUsage, Key: "--pass",
+			Detail: "--pass takes " + query.PassRigor + ", " + query.PassBearing + " or " + query.PassAll + ", not " + strconv.Quote(pass)}}
 	}
 	items, err := readAttempts(filepath.Join(runDir, itemsFile))
 	if err != nil {
@@ -243,6 +244,10 @@ type judgement struct {
 	Faults []string `json:"faults"`
 }
 
+// replayedDone is whether a replayed entry counts done; any other status
+// counts failed, in the progress line and in the result alike.
+func replayedDone(e Entry) bool { return e.Status == StatusDone }
+
 // judgementOf is e as a comparison states it.
 func judgementOf(e Entry) judgement {
 	ids := make([]string, 0, len(e.Faults))
@@ -265,8 +270,9 @@ func judgementOf(e Entry) judgement {
 // per-item failure is counted, not returned: the error is a fault of the
 // replay itself — among them a run
 // directory that no longer stands, which the replay never recreates, and a
-// replay directory removed under the walk.
-func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (ReplayResult, error) {
+// replay directory removed under the walk. While it walks it logs its progress
+// to lg through buildstore.ReplayProgress.
+func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader, lg log.Logger) (ReplayResult, error) {
 	digest, err := askDigest(rp.askPass())
 	if err != nil {
 		return ReplayResult{}, err
@@ -311,6 +317,8 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (Repl
 		walkErr error
 		stopped bool
 	)
+	progress := buildstore.StartReplayProgress(lg, len(rp.calls))
+	defer progress.End()
 	for i, captured := range rp.calls {
 		c := &call{class: captured.class, closed: captured.closed}
 		if c.prompt, err = c.class.render(c.closed); err != nil {
@@ -323,8 +331,13 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (Repl
 			answered, interrupted := c.attempt(ctx, ask, e)
 			if interrupted {
 				cut[i] = true
+				return nil
+			}
+			answers[i] = &answered
+			if replayedDone(answered) {
+				progress.Done()
 			} else {
-				answers[i] = &answered
+				progress.Failed()
 			}
 			return nil
 		}); err != nil {
@@ -354,10 +367,9 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader) (Repl
 		original := originalLine.entry()
 		compared = append(compared, comparisonLine{Item: ItemName(it), Before: original.Before, Original: judgementOf(original),
 			Replay: judgementOf(e), PromptChanged: e.PromptSHA256 != captured.PromptSHA256})
-		switch e.Status {
-		case StatusDone:
+		if replayedDone(e) {
 			res.Counts.Done++
-		default:
+		} else {
 			res.Counts.Failed++
 		}
 		// A capture with no ledger line behind it records no outcome to differ

@@ -1,6 +1,9 @@
 package format300
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // TestDecoderRefusesWhatNoReaderMayGuess: a scoring edge with no bearing — the
 // zero-value hazard, which a lenient reader takes for the judgement 0 — a
@@ -22,9 +25,9 @@ func TestDecoderRefusesWhatNoReaderMayGuess(t *testing.T) {
 		{name: "a scoring edge with no bearing", edges: edge(RelationSupports, "  manually-scored: false\n"),
 			want: GraphFault{Path: EdgesFile, Line: 1, Key: BearingKey}},
 		{name: "a bearing on a references record", edges: edge(RelationReferences, "  bearing: 0.5\n"),
-			want: GraphFault{Path: EdgesFile, Line: 5, Key: BearingKey, Allowed: "relation, source, target, context"}},
-		{name: "rigor .inf", nodes: claim(".inf"), want: GraphFault{Path: NodesFile, Line: 3, Key: RigorKey, Allowed: scoreDomain}},
-		{name: "rigor -.inf", nodes: claim("-.inf"), want: GraphFault{Path: NodesFile, Line: 3, Key: RigorKey, Allowed: scoreDomain}},
+			want: GraphFault{Path: EdgesFile, Line: 5, Key: BearingKey, Allowed: []string{"relation", "source", "target", "context"}}},
+		{name: "rigor .inf", nodes: claim(".inf"), want: GraphFault{Path: NodesFile, Line: 3, Key: RigorKey}},
+		{name: "rigor -.inf", nodes: claim("-.inf"), want: GraphFault{Path: NodesFile, Line: 3, Key: RigorKey}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var g Graph
@@ -45,7 +48,7 @@ func TestDecoderRefusesWhatNoReaderMayGuess(t *testing.T) {
 			got.Detail = ""
 			want := c.want
 			want.Check = CheckMetadata
-			if got != want {
+			if !reflect.DeepEqual(got, want) {
 				t.Errorf("fault = %+v, want %+v", got, want)
 			}
 		})

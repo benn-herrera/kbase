@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"kbase/internal/argmark"
 )
 
 // Outcomes.
@@ -35,12 +37,19 @@ func ExitCode(outcome string) int { return exitCodes[outcome] }
 // IsError reports whether the outcome is an error: its exit code is not 0.
 func IsError(outcome string) bool { return ExitCode(outcome) != 0 }
 
-// Field is one key of a result document. Value is nil, a string, a bool, an
-// int, a float64, a []string, a Record, a []Record, an Item or an []Item.
+// Field is one key of a result document. Value is nil, a string, a Verbatim,
+// a bool, an int, a float64, a []string, a Record, a []Record, an Item or an
+// []Item.
 type Field struct {
 	Key   string
 	Value any
 }
+
+// Verbatim is text a document carries as it stands on every surface: KB
+// content a result passes through — a title, a rationale, a context, a line of
+// a leaf. Only the text kbase composes is spelled; KB text holding what reads
+// as a marker is the author's, and is never rewritten.
+type Verbatim string
 
 // Record is one mapping in a list, its keys in the order given.
 type Record []Field
@@ -93,13 +102,19 @@ func (it Item) record() Record {
 // Items is items raised as an error.
 type Items []Item
 
+// Error is the details joined, each argument they name spelled as the command
+// line takes it: an error's text is read on stderr and in logs.
 func (it Items) Error() string {
 	parts := make([]string, len(it))
 	for i, item := range it {
-		parts[i] = item.Detail
+		parts[i] = argmark.Spelling{}.Spell(item.Detail)
 	}
 	return strings.Join(parts, "; ")
 }
+
+// CheckUsage names a refusal of the invocation itself: a request whose own
+// form is wrong.
+const CheckUsage = "usage"
 
 // Refusal is wrong input or state carried as an error, every offending item
 // named.
@@ -107,28 +122,151 @@ type Refusal []Item
 
 func (r Refusal) Error() string { return Items(r).Error() }
 
-// Emit writes one result document: outcome, then fields in order.
-func Emit(w io.Writer, outcome string, fields ...Field) error {
-	return Write(w, append([]Field{{"outcome", outcome}}, fields...)...)
+// What a retry and a failed outcome ask of the caller: each ends the detail of
+// every item that closes a document with that outcome.
+const (
+	RetryAsk  = "re-issue the identical call later"
+	FailedAsk = "re-issuing the identical call will not fix it"
+)
+
+// closingAsks is, per outcome whose items end on an ask, the closing key and
+// the ask.
+var closingAsks = map[string]struct{ key, ask string }{
+	Retry:  {RefusalsKey, RetryAsk},
+	Failed: {FailuresKey, FailedAsk},
 }
 
-// Write writes fields as one YAML mapping, in order, strings quoted.
+// Emit writes one result document: outcome, then fields in order. Under retry
+// and failed, every closing item's detail ends with the outcome's ask; the
+// caller's fields and items are left as given.
+func Emit(w io.Writer, outcome string, fields ...Field) error {
+	doc := append([]Field{{"outcome", outcome}}, fields...)
+	if c, ok := closingAsks[outcome]; ok {
+		for i, f := range doc {
+			if f.Key == c.key {
+				doc[i].Value = withAsk(f.Value, c.ask)
+			}
+		}
+	}
+	return Write(w, doc...)
+}
+
+// withAsk is a copy of the items v holds, each detail ended with ask; any other
+// value is returned as given.
+func withAsk(v any, ask string) any {
+	var items []Item
+	switch x := v.(type) {
+	case []Item:
+		items = x
+	case Items:
+		items = x
+	default:
+		return v
+	}
+	out := make([]Item, len(items))
+	for i, it := range items {
+		it.Detail = endWithAsk(it.Detail, ask)
+		out[i] = it
+	}
+	return out
+}
+
+// endWithAsk joins ask to detail after "; ", dropping the detail's trailing
+// period so the detail stays one sentence.
+func endWithAsk(detail, ask string) string {
+	detail = strings.TrimSuffix(detail, ".")
+	if detail == "" {
+		return ask
+	}
+	return detail + "; " + ask
+}
+
+// Spelled is w spelling, by s, every string of a document Write puts on it —
+// the surface the call w answers came through — but a Verbatim, and any other
+// text written on it, such as what cobra prints from a command's summary and
+// flag usages. A w already spelled keeps its spelling, settled where the call
+// came in. A document written on any other writer keeps the marked form, as a
+// record does until it is emitted again.
+func Spelled(w io.Writer, s argmark.Spelling) io.Writer {
+	if _, ok := w.(spelledWriter); ok {
+		return w
+	}
+	return spelledWriter{w, s}
+}
+
+type spelledWriter struct {
+	w        io.Writer
+	spelling argmark.Spelling
+}
+
+// Write spells p's text where it carries a marker, which a writer of whole
+// lines, as cobra is, never splits. It reports p written whole.
+func (sw spelledWriter) Write(p []byte) (int, error) {
+	if !argmark.Marked(string(p)) {
+		return sw.w.Write(p)
+	}
+	if _, err := io.WriteString(sw.w, sw.spelling.Spell(string(p))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// spellingOf is the spelling of w's documents, none where it is no Spelled
+// writer, and the writer a document spelled by it is written on: a Spelled
+// writer's own, so the encoded document, its strings spelled already, is not
+// spelled again whole and a Verbatim keeps its text.
+func spellingOf(w io.Writer) (func(string) string, io.Writer) {
+	if sw, ok := w.(spelledWriter); ok {
+		return sw.spelling.Spell, sw.w
+	}
+	return func(s string) string { return s }, w
+}
+
+// Write writes fields as one YAML mapping, in order, strings quoted and
+// spelled as w spells them, a Verbatim as it stands.
 func Write(w io.Writer, fields ...Field) error {
-	doc, err := mapping(fields)
+	spell, out := spellingOf(w)
+	doc, err := mapping(fields, spell)
 	if err != nil {
 		return err
 	}
+	return encodeNode(out, doc)
+}
+
+// Reemit writes on w the document doc, which Write wrote on a writer that
+// spelled nothing — a document recorded for a later reader — with each string
+// spelled as w spells it.
+func Reemit(w io.Writer, doc []byte) error {
+	var node yaml.Node
+	if err := yaml.Unmarshal(doc, &node); err != nil {
+		return fmt.Errorf("reading the recorded document: %w", err)
+	}
+	spell, out := spellingOf(w)
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.ScalarNode && n.Tag == "!!str" {
+			n.Value = spell(n.Value)
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(&node)
+	return encodeNode(out, &node)
+}
+
+func encodeNode(w io.Writer, n *yaml.Node) error {
 	enc := yaml.NewEncoder(w)
-	if err := enc.Encode(doc); err != nil {
+	if err := enc.Encode(n); err != nil {
 		return err
 	}
 	return enc.Close()
 }
 
-func mapping(fields []Field) (*yaml.Node, error) {
+func mapping(fields []Field, spell func(string) string) (*yaml.Node, error) {
 	node := &yaml.Node{Kind: yaml.MappingNode}
 	for _, f := range fields {
-		value, err := encode(f.Value)
+		value, err := encode(f.Value, spell)
 		if err != nil {
 			return nil, fmt.Errorf("result key %s: %w", f.Key, err)
 		}
@@ -137,7 +275,7 @@ func mapping(fields []Field) (*yaml.Node, error) {
 	return node, nil
 }
 
-func encode(v any) (*yaml.Node, error) {
+func encode(v any, spell func(string) string) (*yaml.Node, error) {
 	switch x := v.(type) {
 	case nil:
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}, nil
@@ -146,21 +284,21 @@ func encode(v any) (*yaml.Node, error) {
 	case float64:
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: floatText(x)}, nil
 	case Record:
-		return mapping(x)
+		return mapping(x, spell)
 	case Item:
-		return mapping(x.record())
+		return mapping(x.record(), spell)
 	case []Item:
 		records := make([]Record, len(x))
 		for i, it := range x {
 			records[i] = it.record()
 		}
-		return encode(records)
+		return encode(records, spell)
 	case Items:
-		return encode([]Item(x))
+		return encode([]Item(x), spell)
 	case []Record:
 		seq := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, r := range x {
-			m, err := mapping(r)
+			m, err := mapping(r, spell)
 			if err != nil {
 				return nil, err
 			}
@@ -168,13 +306,15 @@ func encode(v any) (*yaml.Node, error) {
 		}
 		return seq, nil
 	case string:
-		return quoted(x), nil
+		return quoted(spell(x)), nil
+	case Verbatim:
+		return quoted(string(x)), nil
 	case int:
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprint(x)}, nil
 	case []string:
 		seq := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, s := range x {
-			seq.Content = append(seq.Content, quoted(s))
+			seq.Content = append(seq.Content, quoted(spell(s)))
 		}
 		return seq, nil
 	}

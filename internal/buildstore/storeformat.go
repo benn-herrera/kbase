@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kbase/internal/argmark"
 	"kbase/internal/result"
 )
 
@@ -35,7 +36,7 @@ func StoreVersion(dir string) (int, error) {
 		return 0, fmt.Errorf("the state store's %s holds %q, not a format version", path, b)
 	}
 	if v > StoreFormat {
-		return 0, result.Refusal{{Check: CheckStateDir, Path: dir, Key: "--state-dir", Remedy: "update kbase, or use another --state-dir",
+		return 0, result.Refusal{{Check: CheckStateDir, Path: dir, Key: argmark.Flag("state-dir"), Remedy: "update kbase, or use another " + argmark.Flag("state-dir"),
 			Detail: fmt.Sprintf("the state store %s is at format %d, and this kbase knows format %d and older", dir, v, StoreFormat)}}
 	}
 	return v, nil

@@ -36,10 +36,8 @@ func classified(name string) bool {
 var (
 	// printedNameRE is the printed word and number a display line opens with.
 	printedNameRE = regexp.MustCompile(`^\*\*([^*]+)\*\*`)
-	// citationSpanRE is every citation, by its keys and its rendering.
-	citationSpanRE = kb.PyRE(`(?s)<span\s+class="citation"\s+data-cites="(?P<keys>[^"]*)"\s*>(?P<rendering>.*?)</span>`)
-	tagRE          = regexp.MustCompile(`<[^>]*>`)
-	emphasisRunRE  = regexp.MustCompile(`\*+`)
+	tagRE         = regexp.MustCompile(`<[^>]*>`)
+	emphasisRunRE = regexp.MustCompile(`\*+`)
 	// precedingWordRE is the last run of non-space characters ahead of a
 	// position, past any whitespace and opening bracket.
 	precedingWordRE = regexp.MustCompile(`([^` + kb.PyWhitespace + `(\[]+)[` + kb.PyWhitespace + `(\[]*\z`)
@@ -507,7 +505,7 @@ func precedingWord(text string, start int) string {
 
 func readCitations(doc Document, cites []records.Record, citations []Citation) error {
 	text := unquote(stripMarkers(doc.Text))
-	matches := citationSpanRE.FindAllStringIndex(text, -1)
+	matches := kb.CitationSpanRE.FindAllStringIndex(text, -1)
 	if len(matches) != len(cites) {
 		return disagree(doc.Path, "citation spans", len(matches), len(cites))
 	}

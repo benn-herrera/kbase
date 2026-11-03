@@ -4,102 +4,21 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/mcp"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
+	"kbase/internal/secret"
 )
-
-// Model ids the fixtures configure with — one per category, in the provider
-// spellings the matcher must tolerate.
-const (
-	decisionID = "clef"
-	textID     = "Qwen3.8-27B"
-	scoringID  = "clef-scoring"
-)
-
-// ref is a category's model as a --model-map value: a reference to the solo
-// pool entry the fixtures configure against.
-func ref(id string) string { return "solo/" + id }
-
-// refs is the three-category --model-map one value, at the solo entry.
-func refs(decision, text, scoring string) []string {
-	return []string{"decision=" + ref(decision) + ",text=" + ref(text) + ",scoring=" + ref(scoring)}
-}
-
-// configureResult is what one runConfigure invocation produced: its result
-// document, stderr, the exit code, and the config directory it was pointed
-// at.
-type configureResult struct {
-	doc    resultDoc
-	stderr string
-	dir    string
-	code   int
-}
-
-// refusal is the detail of the result's one refusal, "" where it has none.
-func (r configureResult) refusal(t *testing.T) map[string]any {
-	t.Helper()
-	items := r.doc.items("refusals")
-	if r.doc.Outcome != "refused" || r.code != 1 || len(items) != 1 {
-		t.Fatalf("outcome %s, exit %d, refusals %v: want one refusal", r.doc.Outcome, r.code, items)
-	}
-	return items[0]
-}
-
-// config reads back the config.toml the run was supposed to write. The
-// second return is false when no file was written.
-func (r configureResult) config(t *testing.T) (config.Config, bool) {
-	t.Helper()
-	path := config.ConfigPath(r.dir)
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return config.Config{}, false
-	} else if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	cfg, err := config.LoadConfig(path)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	return cfg, true
-}
-
-// runConfig invokes runConfigure against a fresh temp configuration directory,
-// substituting a client factory that serves ids from a MockClient — no
-// test reaches the network, a real home, or the process streams.
-func runConfig(t *testing.T, opts configureOptions, client *modeltest.MockClient) configureResult {
-	t.Helper()
-	if opts.WriteDir == "" {
-		opts.WriteDir = t.TempDir()
-	}
-	var stdout, stderr bytes.Buffer
-	opts.Stdout, opts.Stderr = &stdout, &stderr
-	if opts.NewClient == nil {
-		opts.NewClient = func(model.Endpoint) model.Client { return client.Client() }
-	}
-	code, err := runConfigure(context.Background(), opts)
-	if err != nil {
-		t.Fatalf("runConfigure: %v", err)
-	}
-	return configureResult{doc: checkDocument(t, "configure", stdout.String()), stderr: stderr.String(), dir: opts.WriteDir, code: code}
-}
-
-// soloPool is the single-entry pool every fixture configures against, so
-// provider selection never needs a flag it is not the subject of.
-func soloPool() config.Providers {
-	return config.Providers{"solo": provider("solo", "http://provider.example/v1")}
-}
-
-// soloOpts is the baseline configure input: the single-entry pool and
-// nothing else. Tests set the one field they are about on the result.
-func soloOpts() configureOptions {
-	return configureOptions{providerOptions: providerOptions{Providers: soloPool()}}
-}
 
 // anyStrings is a decoded YAML list of strings.
 func anyStrings(v any) []string {
@@ -112,201 +31,572 @@ func anyStrings(v any) []string {
 	return out
 }
 
-// TestRunConfigureReportsTheWrite: a dialed run that writes states the entry it
-// configured, the rule and layer that named it, the three references and the
-// file it wrote, and says the same in one line on stderr that never carries the
-// key; the same run again, writing nothing, is unchanged.
-func TestRunConfigureReportsTheWrite(t *testing.T) {
-	opts := soloOpts()
-	opts.ModelMap = refs(decisionID, textID, scoringID)
-	got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
+// configureRun is what one configure command invocation produced: its result
+// document as parsed and as written, stderr and exit code.
+type configureRun struct {
+	doc    resultDoc
+	stdout string
+	stderr string
+	code   int
+}
 
+// namedLayer is the one layer a --config-dir naming dir resolves.
+func namedLayer(dir string) providerOptions {
+	return providerOptions{Layers: []config.Layer{{Path: dir, Source: config.LayerSourceExplicit}}, WriteDir: dir}
+}
+
+// globalLayer is the layers an invocation naming no directory resolves, the
+// global one at dir, inside the repository repo where repo is not "".
+func globalLayer(dir, repo string) providerOptions {
+	opts := providerOptions{WriteDir: dir, RepoRoot: repo}
+	if repo != "" {
+		opts.Layers = append(opts.Layers, config.Layer{Path: config.RepositoryDir(repo), Source: config.LayerSourceRepository})
+	}
+	opts.Layers = append(opts.Layers, config.Layer{Path: dir, Source: config.LayerSourceGlobal})
+	return opts
+}
+
+// runProviders runs configure-providers with opts, every dial served by
+// client.
+func runProviders(t *testing.T, opts configureProvidersOptions, client *modeltest.MockClient) configureRun {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	opts.Stdout, opts.Stderr = &stdout, &stderr
+	opts.NewClient = func(model.Endpoint) model.Client { return client.Client() }
+	code, err := runConfigureProviders(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("runConfigureProviders: %v", err)
+	}
+	return configureRun{doc: checkDocument(t, "configure-providers", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code}
+}
+
+// runModelsConfig runs configure-models with opts, every dial served by
+// client.
+func runModelsConfig(t *testing.T, opts configureModelsOptions, client *modeltest.MockClient) configureRun {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	opts.Stdout, opts.Stderr = &stdout, &stderr
+	opts.NewClient = func(model.Endpoint) model.Client { return client.Client() }
+	code, err := runConfigureModels(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("runConfigureModels: %v", err)
+	}
+	return configureRun{doc: checkDocument(t, "configure-models", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code}
+}
+
+// refusal is the run's one refusal, failing the test where it has another
+// outcome or count.
+func (r configureRun) refusal(t *testing.T) map[string]any {
+	t.Helper()
+	items := r.doc.items("refusals")
+	if r.doc.Outcome != "refused" || r.code != 1 || len(items) != 1 {
+		t.Fatalf("outcome %s, exit %d, refusals %v: want one refusal", r.doc.Outcome, r.code, items)
+	}
+	return items[0]
+}
+
+// labKey is a credentials store holding one key, lab's.
+func labKey() config.StoredKeys {
+	return config.StoredKeys{Keys: map[string]secret.Key{"lab": secret.NewKey(testAPIKey)}}
+}
+
+// TestConfigureProvidersWithNoKeyNamesTheNextSteps: an entry written with no
+// key stored is written, dials nothing, and names the steps that follow: store
+// the key, then list the models.
+func TestConfigureProvidersWithNoKeyNamesTheNextSteps(t *testing.T) {
+	dir := t.TempDir()
+	client := modeltest.NewScriptedMock(nil, catalogue("m"))
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "Lab", BaseURL: "http://lab:8000/v1"}, client)
 	if got.code != 0 || got.doc.Outcome != "done" {
-		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
 	}
-	models, _ := got.doc.Values["models"].(map[string]any)
-	if got.doc.Values["provider"] != "solo" || models["decision"] != ref(decisionID) ||
-		models["text"] != ref(textID) || models["scoring"] != ref(scoringID) ||
-		!slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(got.dir)}) {
-		t.Errorf("result = %v, want the provider, all three references and config.toml written", got.doc.Values)
+	path := config.ProvidersPath(dir)
+	if got.doc.Values["provider"] != "lab" || got.doc.Values["layer"] != config.LayerSourceExplicit ||
+		!slices.Equal(anyStrings(got.doc.Values["written"]), []string{path}) {
+		t.Errorf("result = %v, want the lowercase provider, the layer and the file written", got.doc.Values)
 	}
-	if got.doc.Values["provider-rule"] != "sole-entry" || got.doc.Values["provider-layer"] != config.LayerSourceRepository {
-		t.Errorf("result provenance = %v/%v, want the sole-entry rule and the layer that supplies the entry",
-			got.doc.Values["provider-rule"], got.doc.Values["provider-layer"])
+	want := []string{config.AuthAddRemedy("lab"), "kbase models --provider lab"}
+	if next := anyStrings(got.doc.Values["next"]); !slices.Equal(next, want) {
+		t.Errorf("next = %q, want %q", next, want)
 	}
-	for _, want := range []string{"configured:",
-		config.CategoryDecision + "=" + ref(decisionID), config.CategoryText + "=" + ref(textID),
-		config.CategoryScoring + "=" + ref(scoringID), config.ConfigPath(got.dir)} {
-		if !strings.Contains(got.stderr, want) {
-			t.Errorf("stderr: got %q, want it to report %q", got.stderr, want)
-		}
+	if _, dialled := got.doc.Values["models"]; dialled {
+		t.Error("an entry with no key was dialled")
+	}
+	if warnings, ok := got.doc.Values["warnings"]; !ok || len(got.doc.items("warnings")) != 0 {
+		t.Errorf("warnings = %v (present %t), want an empty list", warnings, ok)
+	}
+	pool, _, err := config.LoadProviders(path, nil)
+	if err != nil || pool["lab"].BaseURL != "http://lab:8000/v1" || len(pool) != 1 {
+		t.Errorf("pool = %+v, %v; want the entry written alone", pool, err)
+	}
+
+	again := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", BaseURL: "http://lab:8000/v1"}, client)
+	if again.doc.Outcome != "unchanged" || len(anyStrings(again.doc.Values["written"])) != 0 {
+		t.Errorf("the same entry again = %s, written %v; want unchanged", again.doc.Outcome, again.doc.Values["written"])
+	}
+}
+
+// TestConfigureProvidersDialsAStoredKey: with a key stored under the entry's
+// name the written entry is dialled and its catalogue reported, sorted; the
+// key appears nowhere.
+func TestConfigureProvidersDialsAStoredKey(t *testing.T) {
+	dir := t.TempDir()
+	opts := configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", BaseURL: "http://lab:8000/v1",
+		StoredKeys: labKey()}
+	got := runProviders(t, opts, modeltest.NewScriptedMock(nil, catalogue("zeta", "alpha")))
+	if got.code != 0 || got.doc.Outcome != "done" {
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
+	}
+	if models := anyStrings(got.doc.Values["models"]); !slices.Equal(models, []string{"alpha", "zeta"}) {
+		t.Errorf("models = %q, want the catalogue sorted", models)
+	}
+	if _, ok := got.doc.Values["next"]; ok {
+		t.Errorf("result = %v, want no next where the dial answered", got.doc.Values)
 	}
 	if strings.Contains(got.stderr, testAPIKey) {
-		t.Error("API key leaked into stderr")
-	}
-	again := runConfig(t, configureOptions{providerOptions: providerOptions{Providers: soloPool(), WriteDir: got.dir}, ModelMap: opts.ModelMap},
-		modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)))
-	if again.code != 0 || again.doc.Outcome != "unchanged" {
-		t.Errorf("a second configure to the same values = %s, exit %d; want unchanged", again.doc.Outcome, again.code)
+		t.Error("the key reached stderr")
 	}
 }
 
-// TestRunConfigureUnlistedMappedIDWarns: a mapped id the catalogue omits is
-// a warning on stderr, not a failure — provider catalogues rotate, and a
-// user pinning one the listing omits may know something the listing does
-// not.
-func TestRunConfigureUnlistedMappedIDWarns(t *testing.T) {
-	opts := soloOpts()
-	opts.ModelMap = []string{"decision=" + ref("clef-preview"), "text=" + ref(textID), "scoring=" + ref(scoringID)}
-	got := runConfig(t, opts, modeltest.NewScriptedMock(nil, catalogue(textID, scoringID)))
-
-	if got.code != 0 {
-		t.Fatalf("configure: exit %d, %v", got.code, got.doc.Values)
-	}
-	if want := `decision category model "clef-preview" is not in provider "solo"'s catalogue — configuring it anyway`; !strings.Contains(got.stderr, want) {
-		t.Errorf("stderr: got %q, want substring %q", got.stderr, want)
-	}
-}
-
-// TestRunConfigureListFailure: a provider-side failure to list the catalogue is
-// the run's failure, reported with the provider's own reason.
-func TestRunConfigureListFailure(t *testing.T) {
-	client := modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID))
+// TestConfigureProvidersFailedDialLeavesTheEntry: a dial that fails leaves the
+// entry written, outcome done, with next naming the failure.
+func TestConfigureProvidersFailedDialLeavesTheEntry(t *testing.T) {
+	dir := t.TempDir()
+	client := modeltest.NewScriptedMock(nil, nil)
 	client.SetError(errors.New("http 503: service unavailable"))
-
-	opts := soloOpts()
-	opts.ModelMap = refs(decisionID, textID, scoringID)
-	got := runConfig(t, opts, client)
-
-	if failures := got.doc.items("failures"); got.code != 3 || len(failures) != 1 || !strings.Contains(failures[0]["detail"].(string), "503") {
-		t.Fatalf("list failure: exit %d, failures %v; want it reported failed", got.code, failures)
-	}
-}
-
-// TestRunConfigureWarnsBeforeTheDial: the pool's faults and the superseded
-// provider key are on stderr before the first catalogue is requested, so a
-// dial that hangs or fails leaves them said.
-func TestRunConfigureWarnsBeforeTheDial(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	opts := soloOpts()
-	opts.WriteDir = t.TempDir()
-	opts.ModelMap = refs(decisionID, textID, scoringID)
-	opts.Faults = []config.ProviderFault{{Name: "broken", Reason: "no base_url"}}
-	opts.Config = config.Config{Provider: "solo"}
-	opts.Stdout, opts.Stderr = &stdout, &stderr
-	var atDial string
-	opts.NewClient = func(model.Endpoint) model.Client {
-		atDial = stderr.String()
-		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)).Client()
-	}
-	if _, err := runConfigure(context.Background(), opts); err != nil {
-		t.Fatalf("runConfigure: %v", err)
-	}
-	for _, want := range []string{`provider "broken" unavailable: no base_url`, "superseded provider key"} {
-		if !strings.Contains(atDial, want) {
-			t.Errorf("stderr at the dial = %q, want it to hold %q", atDial, want)
-		}
-	}
-}
-
-// TestRunConfigureBadModelMapSkipsNetwork: flag syntax is checked before
-// anything is dialed, so a typo costs no round trip.
-func TestRunConfigureBadModelMapSkipsNetwork(t *testing.T) {
-	// The client seam is the network: a factory that fails the test is how
-	// "no round trip" becomes an assertion rather than a claim.
-	for _, value := range []string{"decision", "decision=" + decisionID} {
-		opts := soloOpts()
-		opts.ModelMap = []string{value}
-		opts.NewClient = func(model.Endpoint) model.Client {
-			t.Error("a malformed --model-map dialed the provider; flag syntax is checked first")
-			return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)).Client()
-		}
-
-		got := runConfig(t, opts, nil)
-		if item := got.refusal(t); item["key"] != "--model-map" || item["check"] != "usage" {
-			t.Errorf("--model-map %q = %v, want a usage refusal of --model-map", value, item)
-		}
-		if _, written := got.config(t); written {
-			t.Errorf("config.toml written despite --model-map %q", value)
-		}
-	}
-}
-
-// TestRunConfigureCreateWritesBothFiles: --create with no --provider makes no
-// request at all — the creating call dials nothing — and reports what it wrote
-// with no provider, saying on stderr that the ids went unchecked.
-func TestRunConfigureCreateWritesBothFiles(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "fresh")
-	dialed := false
-	opts := soloOpts()
-	opts.WriteDir = dir
-	opts.Create = true
-	opts.ModelMap = refs(decisionID, textID, scoringID)
-	opts.NewClient = func(model.Endpoint) model.Client {
-		dialed = true
-		return modeltest.NewScriptedMock(nil, catalogue(decisionID, textID, scoringID)).Client()
-	}
-	got := runConfig(t, opts, nil)
-
+	opts := configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", BaseURL: "http://lab:8000/v1",
+		StoredKeys: labKey()}
+	got := runProviders(t, opts, client)
 	if got.code != 0 || got.doc.Outcome != "done" {
-		t.Fatalf("configure --create: exit %d, %v", got.code, got.doc.Values)
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
 	}
-	if dialed {
-		t.Error("--create with no --provider dialed a provider")
+	if next := anyStrings(got.doc.Values["next"]); len(next) != 1 || !strings.Contains(next[0], "503") {
+		t.Errorf("next = %q, want the failure named", next)
 	}
-	if got.doc.Values["provider"] != nil {
-		t.Errorf("provider = %v, want null: no provider was named", got.doc.Values["provider"])
+	if pool, _, err := config.LoadProviders(config.ProvidersPath(dir), nil); err != nil || pool["lab"].BaseURL == "" {
+		t.Errorf("pool = %+v, %v; want the entry written", pool, err)
 	}
-	for _, key := range []string{"provider-rule", "provider-layer"} {
-		if _, ok := got.doc.Values[key]; ok {
-			t.Errorf("result = %v, want no %s: the creating call dialed nothing, so no pool entry supplied an endpoint", got.doc.Values, key)
-		}
+}
+
+// TestConfigureProvidersRemove: --remove takes the entry out; a provider with
+// no entry is refused, naming it, and nothing is written.
+func TestConfigureProvidersRemove(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\n\n[edge]\nbaseUrl = \"http://edge/v1\"\n")
+	client := modeltest.NewScriptedMock(nil, nil)
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "LAB", Remove: true}, client)
+	if got.code != 0 || got.doc.Outcome != "done" || !slices.Equal(anyStrings(got.doc.Values["written"]), []string{path}) {
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
+	}
+	if body, _ := os.ReadFile(path); string(body) != "[edge]\nbaseUrl = \"http://edge/v1\"\n" {
+		t.Errorf("file = %q, want the lab entry gone and edge standing", body)
+	}
+	if next, ok := got.doc.Values["next"]; ok {
+		t.Errorf("next = %v, want none where nothing names the provider", next)
+	}
+
+	absent := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", Remove: true}, client)
+	item := absent.refusal(t)
+	if item["check"] != config.CheckProvider || item["path"] != path || !strings.Contains(item["detail"].(string), "no provider `lab`") ||
+		item["remedy"] != "kbase show-config" {
+		t.Errorf("refusal = %v, want no provider `lab` in %s with show-config as the remedy", item, path)
+	}
+}
+
+// TestConfigureProvidersRefusesArguments: an unusable name, a missing
+// --base-url, --remove beside an entry field and an unknown api are refused
+// before anything is written.
+func TestConfigureProvidersRefusesArguments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts configureProvidersOptions
+		key  string
+	}{
+		{"name", configureProvidersOptions{Name: "-lab", BaseURL: "http://lab/v1"}, "<provider>"},
+		{"no base url", configureProvidersOptions{Name: "lab"}, "--base-url"},
+		{"remove beside a field", configureProvidersOptions{Name: "lab", Remove: true, API: "openai"}, "--api"},
+		{"api", configureProvidersOptions{Name: "lab", BaseURL: "http://lab/v1", API: "grpc"}, "--api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.opts.providerOptions = namedLayer(dir)
+			got := runProviders(t, tc.opts, modeltest.NewScriptedMock(nil, nil))
+			if item := got.refusal(t); item["key"] != tc.key {
+				t.Errorf("refusal = %v, want key %q", item, tc.key)
+			}
+			if _, err := os.Stat(config.ProvidersPath(dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a refused run wrote providers.toml (%v)", err)
+			}
+		})
+	}
+}
+
+// TestConfigureLocation: no flag writes the named directory, else the global
+// one, standing repository layer or not; --local writes the repository's,
+// and is refused outside a worktree; --global writes the global one over the
+// environment's; either beside --config-dir, and the two together, are
+// refused.
+func TestConfigureLocation(t *testing.T) {
+	repo, global, home := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	environment := providerOptions{Layers: []config.Layer{{Path: "/elsewhere", Source: config.LayerSourceEnvironment}}, WriteDir: "/elsewhere", RepoRoot: repo}
+	for _, tc := range []struct {
+		name          string
+		opts          providerOptions
+		global, local bool
+		dir, layer    string
+		check         string
+	}{
+		{name: "named", opts: namedLayer("/somewhere"), dir: "/somewhere", layer: config.LayerSourceExplicit},
+		{name: "environment", opts: environment, dir: "/elsewhere", layer: config.LayerSourceEnvironment},
+		{name: "default, in a repository", opts: globalLayer(global, repo), dir: global, layer: config.LayerSourceGlobal},
+		{name: "--local", opts: globalLayer(global, repo), local: true, dir: config.RepositoryDir(repo), layer: config.LayerSourceRepository},
+		{name: "--local over the environment", opts: environment, local: true, dir: config.RepositoryDir(repo), layer: config.LayerSourceRepository},
+		{name: "--global over the environment", opts: environment, global: true, dir: filepath.Join(home, ".config", "kbase"), layer: config.LayerSourceGlobal},
+		{name: "--local outside a worktree", opts: globalLayer(global, ""), local: true, check: checkWorktree},
+		{name: "--global beside --config-dir", opts: namedLayer("/somewhere"), global: true, check: "usage"},
+		{name: "--local beside --config-dir", opts: namedLayer("/somewhere"), local: true, check: "usage"},
+		{name: "both", opts: globalLayer(global, repo), global: true, local: true, check: "usage"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, layer, items, err := configureLocation(tc.opts, tc.global, tc.local, "/start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.check != "" {
+				if len(items) != 1 || items[0].Check != tc.check {
+					t.Errorf("items = %+v, want one %s refusal", items, tc.check)
+				}
+				return
+			}
+			if items != nil || dir != tc.dir || layer != tc.layer {
+				t.Errorf("= %q, %q, %+v; want %q, %q", dir, layer, items, tc.dir, tc.layer)
+			}
+		})
+	}
+}
+
+// soloURL is solo's base URL where no test serves it.
+const soloURL = "http://provider.example/v1"
+
+// soloModels is a configure-models input writing into the directory dir names,
+// whose providers.toml it writes holding one entry, solo, at baseURL.
+func soloModels(t *testing.T, dir, baseURL string, given map[config.Role]string) configureModelsOptions {
+	t.Helper()
+	writeConfig(t, dir, config.ProvidersFileName, "[solo]\nbaseUrl = \""+baseURL+"\"\n")
+	return configureModelsOptions{providerOptions: namedLayer(dir), Models: given}
+}
+
+// TestConfigureModelsReportsTheFile: the roles given are written, the rest
+// stand, and the result gives the file's three roles and what was written; a
+// model missing from its catalogue is a warning in the result and on stderr,
+// written all the same; the same run again is unchanged.
+func TestConfigureModelsReportsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, config.ConfigFileName, "# mine\n[models]\ntext = \"solo/kept\"\n")
+	given := map[config.Role]string{config.RoleDecision: "solo/listed", config.RoleScoring: "solo/unlisted"}
+	client := modeltest.NewScriptedMock(nil, catalogue("listed"))
+	got := runModelsConfig(t, soloModels(t, dir, soloURL, given), client)
+	if got.code != 0 || got.doc.Outcome != "done" {
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
 	}
 	models, _ := got.doc.Values["models"].(map[string]any)
-	if models[config.CategoryDecision] != ref(decisionID) || models[config.CategoryText] != ref(textID) ||
-		models[config.CategoryScoring] != ref(scoringID) {
-		t.Errorf("models = %v, want the three references the flag named", models)
+	if models["decision"] != "solo/listed" || models["text"] != "solo/kept" || models["scoring"] != "solo/unlisted" ||
+		!slices.Equal(anyStrings(got.doc.Values["written"]), []string{path}) {
+		t.Errorf("result = %v, want the file's three roles and the file written", got.doc.Values)
 	}
-	if want := []string{config.ProvidersPath(dir), config.ConfigPath(dir)}; !slices.Equal(anyStrings(got.doc.Values["written"]), want) {
-		t.Errorf("written = %v, want %v: the pool, then the choices", got.doc.Values["written"], want)
+	const miss = `the scoring role's model "unlisted" is not in provider "solo"'s catalogue`
+	if want := "configure-models: " + miss + "\n"; !strings.Contains(got.stderr, want) {
+		t.Errorf("stderr = %q, want %q", got.stderr, want)
 	}
-	if !strings.Contains(got.stderr, "were not checked") {
-		t.Errorf("stderr = %q, want the line saying the references were not checked", got.stderr)
+	if warnings := got.doc.items("warnings"); len(warnings) != 1 || warnings[0]["key"] != "--scoring" || warnings[0]["detail"] != miss {
+		t.Errorf("warnings = %v, want the one miss keyed --scoring", warnings)
+	}
+	if body, _ := os.ReadFile(path); string(body) != "# mine\n[models]\ntext = \"solo/kept\"\ndecision = \"solo/listed\"\nscoring = \"solo/unlisted\"\n" {
+		t.Errorf("file = %q, want the two roles added and every other byte kept", body)
+	}
+
+	again := runModelsConfig(t, soloModels(t, dir, soloURL, given), client)
+	if again.code != 0 || again.doc.Outcome != "unchanged" {
+		t.Errorf("the same run again = %s, exit %d; want unchanged", again.doc.Outcome, again.code)
 	}
 }
 
-// TestConfigureTarget: --project names the repository's configuration directory
-// whether or not it stands, over the directory the environment named; beside
-// --config-dir it is refused, since the two name different directories; and
-// outside a worktree it is refused with nothing to create.
-func TestConfigureTarget(t *testing.T) {
-	repo := t.TempDir()
-	explicit := configureOptions{providerOptions: providerOptions{
-		Layers: []config.Layer{{Path: "/somewhere", Source: config.LayerSourceExplicit}}, WriteDir: "/somewhere"}}
-	environment := configureOptions{providerOptions: providerOptions{
-		Layers: []config.Layer{{Path: "/elsewhere", Source: config.LayerSourceEnvironment}}, WriteDir: "/elsewhere"}}
-	project := configureOptions{providerOptions: providerOptions{
-		Layers: []config.Layer{{Path: "/elsewhere", Source: config.LayerSourceEnvironment}}, WriteDir: "/elsewhere", RepoRoot: repo},
-		Project: true, WorkDir: filepath.Join(repo, "nested")}
+// TestConfigureModelsListFailure: a catalogue that cannot be listed fails the
+// run with the provider's own reason, nothing written.
+func TestConfigureModelsListFailure(t *testing.T) {
+	dir := t.TempDir()
+	client := modeltest.NewScriptedMock(nil, nil)
+	client.SetError(errors.New("http 503: service unavailable"))
+	got := runModelsConfig(t, soloModels(t, dir, soloURL, map[config.Role]string{config.RoleText: "solo/t"}), client)
+	if failures := got.doc.items("failures"); got.code != 3 || len(failures) != 1 || !strings.Contains(failures[0]["detail"].(string), "503") {
+		t.Fatalf("exit %d, failures %v; want it failed", got.code, failures)
+	}
+	if _, err := os.Stat(config.ConfigPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a failed run wrote config.toml (%v)", err)
+	}
+}
 
-	if got, items, err := configureTarget(environment); err != nil || items != nil || got != "/elsewhere" {
-		t.Errorf("configureTarget without --project = %q, %v, %v; want the layer the invocation resolved", got, items, err)
+// TestConfigureModelsWithNoKeyCarriesTheRemedy: an entry written before its
+// key is stored, dialled by configure-models and refused for the missing key,
+// fails carrying the command that stores one and the refused-key note.
+func TestConfigureModelsWithNoKeyCarriesTheRemedy(t *testing.T) {
+	srv, _ := refusingProvider(t, http.StatusUnauthorized)
+	dir := t.TempDir()
+	opts := soloModels(t, dir, srv.URL, map[config.Role]string{config.RoleText: "solo/t"})
+	var stdout, stderr bytes.Buffer
+	opts.Stdout, opts.Stderr, opts.NewClient = &stdout, &stderr, model.NewClient
+	code, err := runConfigureModels(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, items, err := configureTarget(project); err != nil || items != nil || got != filepath.Join(repo, config.RepositoryDirName) {
-		t.Errorf("configureTarget --project = %q, %v, %v; want the repository's directory over the environment's", got, items, err)
+	got := checkDocument(t, "configure-models", stdout.String())
+	items := got.items("failures")
+	if code != 3 || len(items) != 1 || items[0]["remedy"] != config.AuthAddRemedy("solo") || !endsWithNote(items[0]) {
+		t.Errorf("exit %d, failures %v; want one failure carrying the auth add remedy and the refused-key note", code, remedies(items))
+	}
+	if _, err := os.Stat(config.ConfigPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a failed run wrote config.toml (%v)", err)
+	}
+}
+
+// TestConfigureModelsLocalOutsideAWorktree: --local outside a git worktree is
+// refused naming the directory the search started from, nothing dialled.
+func TestConfigureModelsLocalOutsideAWorktree(t *testing.T) {
+	opts := soloModels(t, t.TempDir(), soloURL, map[config.Role]string{config.RoleText: "solo/t"})
+	opts.providerOptions = globalLayer(t.TempDir(), "")
+	opts.Local, opts.WorkDir = true, "/start"
+	client := modeltest.NewScriptedMock(nil, catalogue("t"))
+	got := runModelsConfig(t, opts, client)
+	if item := got.refusal(t); item["check"] != checkWorktree || item["path"] != "/start" || item["remedy"] != "git init" {
+		t.Errorf("refusal = %v, want the worktree refusal naming /start", item)
+	}
+}
+
+// TestConfigureModelsChecksTheWrittenStack: configure-models checks a provider
+// against the layer it writes into and the layers beneath it, not the stack
+// the invocation read. A provider only the repository layer holds is refused
+// under --global, against the global providers.toml with the remedy carrying
+// --global, nothing dialled or written; under --local it is accepted.
+func TestConfigureModelsChecksTheWrittenStack(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	global := filepath.Join(home, ".config", "kbase")
+	repoDir := config.RepositoryDir(repo)
+	if err := os.MkdirAll(repoDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, repoDir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\n")
+	read := func() providerOptions {
+		t.Helper()
+		layers := globalLayer(global, repo)
+		opts, err := loadConfigContext(layers.Layers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts.RepoRoot, opts.WriteDir = repo, global
+		return opts
+	}
+	given := map[config.Role]string{config.RoleDecision: "lab/d"}
+
+	undialled := modeltest.NewScriptedMock(nil, nil)
+	undialled.SetError(errors.New("dialled"))
+	got := runModelsConfig(t, configureModelsOptions{providerOptions: read(), Models: given, Global: true}, undialled)
+	item := got.refusal(t)
+	remedy, _ := item["remedy"].(string)
+	if item["check"] != config.CheckProvider || item["key"] != "--decision" || item["path"] != config.ProvidersPath(global) ||
+		!strings.HasPrefix(remedy, "`kbase configure-providers lab ") || !strings.Contains(remedy, "--global") {
+		t.Errorf("refusal = %v, want provider lab refused against %s with a remedy carrying --global", item, config.ProvidersPath(global))
+	}
+	if _, err := os.Stat(config.ConfigPath(global)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused run wrote the global config.toml (%v)", err)
 	}
 
-	beside := project
-	beside.providerOptions = explicit.providerOptions
-	if _, items, err := configureTarget(beside); err != nil || len(items) != 1 ||
-		items[0].Key != "--project" || items[0].Check != checkUsage {
-		t.Errorf("--project beside --config-dir = %v, %v; want one usage refusal naming --project", items, err)
+	got = runModelsConfig(t, configureModelsOptions{providerOptions: read(), Models: given, Local: true}, modeltest.NewScriptedMock(nil, catalogue("d")))
+	if got.code != 0 || got.doc.Outcome != "done" || !slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(repoDir)}) {
+		t.Errorf("--local: exit %d, %v; want the repository's config.toml written", got.code, got.doc.Values)
 	}
+}
 
-	outside := project
-	outside.RepoRoot = ""
-	if _, items, err := configureTarget(outside); err != nil || len(items) != 1 || items[0].Check != checkWorktree ||
-		items[0].Path != outside.WorkDir || items[0].Remedy != "git init" {
-		t.Errorf("--project outside a worktree = %v, %v; want the worktree refusal naming the start directory", items, err)
+// TestConfigureModelsReadsNoLayerOutsideItsStack: a repository providers.toml
+// that fails the strict load does not stop configure-models --global, which
+// neither writes nor checks against that layer; the call answers from the
+// global stack alone.
+func TestConfigureModelsReadsNoLayerOutsideItsStack(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.EnvConfigDir, "")
+	for _, dir := range []string{filepath.Join(repo, ".git"), config.RepositoryDir(repo)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
+	writeConfig(t, config.RepositoryDir(repo), config.ProvidersFileName, "[[[ not toml\n")
+	t.Chdir(repo)
+	args := []string{"configure-models", "--global", "--decision", "nosuch/d"}
+	stdout, stderr, err := executeRoot(t, args...)
+	t.Cleanup(func() {
+		if sub, _, ferr := rootCmd.Find(args); ferr == nil {
+			if err := mcp.ResetFlags(sub); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	code := exitStatus(err, stdout, stderr)
+	doc := checkDocument(t, "configure-models", stdout.String())
+	items := doc.items("refusals")
+	global := filepath.Join(home, ".config", "kbase")
+	if code != 1 || len(items) != 1 || items[0]["check"] != config.CheckProvider || items[0]["path"] != config.ProvidersPath(global) {
+		t.Errorf("exit %d, %s, refusals %v; want the provider refusal against %s", code, doc.Outcome, items, config.ProvidersPath(global))
+	}
+}
+
+// TestConfigureProvidersReadsNoLayerOutsideItsStack: a repository
+// providers.toml that fails the strict load does not stop
+// configure-providers --global, which neither writes nor reads that layer.
+func TestConfigureProvidersReadsNoLayerOutsideItsStack(t *testing.T) {
+	home, repo := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.EnvConfigDir, "")
+	for _, dir := range []string{filepath.Join(repo, ".git"), config.RepositoryDir(repo)} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(t, config.RepositoryDir(repo), config.ProvidersFileName, "[[[ not toml\n")
+	t.Chdir(repo)
+	args := []string{"configure-providers", "lab", "--global", "--base-url", "http://lab/v1"}
+	stdout, stderr, err := executeRoot(t, args...)
+	t.Cleanup(func() {
+		if sub, _, ferr := rootCmd.Find(args); ferr == nil {
+			if err := mcp.ResetFlags(sub); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	code := exitStatus(err, stdout, stderr)
+	doc := checkDocument(t, "configure-providers", stdout.String())
+	want := config.ProvidersPath(filepath.Join(home, ".config", "kbase"))
+	if code != 0 || doc.Outcome != "done" || !slices.Equal(anyStrings(doc.Values["written"]), []string{want}) {
+		t.Errorf("exit %d, %s, %v; want %s written", code, doc.Outcome, doc.Values, want)
+	}
+}
+
+// TestConfigureProvidersNamesAFaultedEntry: a written entry that does not load
+// — here its apiKeyFile cannot be read — gives next naming the fault's reason
+// and show-config, not the steps that store a key.
+func TestConfigureProvidersNamesAFaultedEntry(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\napiKeyFile = \"missing.key\"\n")
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", BaseURL: "http://lab:8000/v1"},
+		modeltest.NewScriptedMock(nil, catalogue("m")))
+	if got.code != 0 || got.doc.Outcome != "done" {
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
+	}
+	next := anyStrings(got.doc.Values["next"])
+	if len(next) != 1 || !strings.Contains(next[0], "missing.key") || !strings.Contains(next[0], "kbase show-config") ||
+		strings.Contains(next[0], "auth add") {
+		t.Errorf("next = %q, want one entry naming the unread key file and show-config", next)
+	}
+	if warnings := got.doc.items("warnings"); len(warnings) != 1 || warnings[0]["path"] != config.ProvidersPath(dir) {
+		t.Errorf("warnings = %v, want the one fault against providers.toml", warnings)
+	}
+	if n := strings.Count(got.stderr, "missing.key"); n != 1 {
+		t.Errorf("stderr = %q names the fault %d times, want once", got.stderr, n)
+	}
+}
+
+// TestConfigureProvidersWarnsOfAFault: a fault in the configuration written
+// into — here another entry with no baseUrl — is an item of warnings against
+// its file and a line on stderr, and the removal goes ahead.
+func TestConfigureProvidersWarnsOfAFault(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\n\n[broken]\napi = \"openai\"\n")
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", Remove: true},
+		modeltest.NewScriptedMock(nil, nil))
+	if got.code != 0 || got.doc.Outcome != "done" {
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
+	}
+	const fault = `provider "broken" unavailable: no baseUrl declared`
+	if warnings := got.doc.items("warnings"); len(warnings) != 1 || warnings[0]["path"] != path || warnings[0]["detail"] != fault {
+		t.Errorf("warnings = %v, want %q against %s", warnings, fault, path)
+	}
+	if !strings.Contains(got.stderr, fault) {
+		t.Errorf("stderr = %q, want %q", got.stderr, fault)
+	}
+}
+
+// TestConfigureProvidersWarningCarriesNoKey: a key file readable beyond its
+// owner is a warning naming the file, the provider is dialled all the same,
+// and the key it holds reaches neither the result nor stderr.
+func TestConfigureProvidersWarningCarriesNoKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no permission bits to expose a key file")
+	}
+	dir := t.TempDir()
+	key := writeConfig(t, dir, "lab.key", testAPIKey)
+	if err := os.Chmod(key, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\napiKeyFile = \"lab.key\"\n")
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", BaseURL: "http://lab:8000/v1"},
+		modeltest.NewScriptedMock(nil, catalogue("m")))
+	if got.code != 0 || !slices.Equal(anyStrings(got.doc.Values["models"]), []string{"m"}) {
+		t.Fatalf("exit %d, %v; want the provider dialled", got.code, got.doc.Values)
+	}
+	warnings := got.doc.items("warnings")
+	if len(warnings) != 1 || warnings[0]["path"] != path || !strings.Contains(fmt.Sprint(warnings[0]["detail"]), key) {
+		t.Errorf("warnings = %v, want one naming %s", warnings, key)
+	}
+	if strings.Contains(got.stdout+got.stderr, testAPIKey) {
+		t.Error("the key reached the result or stderr")
+	}
+}
+
+// TestConfigureProvidersRemovalNamesWhatRefersToIt: a removal that leaves a
+// role's reference and a stored key naming the provider gives next naming the
+// role with the configure-models call that replaces it, then auth remove.
+func TestConfigureProvidersRemovalNamesWhatRefersToIt(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\n")
+	writeConfig(t, dir, config.ConfigFileName, "[models]\ndecision = \"lab/d\"\ntext = \"other/t\"\n")
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", Remove: true,
+		StoredKeys: labKey()}, modeltest.NewScriptedMock(nil, nil))
+	if got.code != 0 || got.doc.Outcome != "done" {
+		t.Fatalf("exit %d, %v", got.code, got.doc.Values)
+	}
+	next := anyStrings(got.doc.Values["next"])
+	if len(next) != 2 || !strings.Contains(next[0], "decision") || !strings.Contains(next[0], "lab/d") ||
+		!strings.Contains(next[0], "kbase configure-models --decision") || !strings.Contains(next[1], "kbase auth remove lab") {
+		t.Errorf("next = %q, want the decision role with its replacing call, then kbase auth remove lab", next)
+	}
+	if strings.Contains(got.stderr+strings.Join(next, ""), testAPIKey) {
+		t.Error("the key reached the result or stderr")
+	}
+}
+
+// TestConfigureProvidersRemovalNamesAKeyThatDoesNotOpen: a key file stored
+// under the removed provider's name that does not open is still named, with
+// the call that clears it.
+func TestConfigureProvidersRemovalNamesAKeyThatDoesNotOpen(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab/v1\"\n")
+	store := config.StoredKeys{Faults: []config.StoreFault{{Name: "lab", Path: "/store/lab-key.enc", Reason: "truncated", DoesNotOpen: true}}}
+	got := runProviders(t, configureProvidersOptions{providerOptions: namedLayer(dir), Name: "lab", Remove: true, StoredKeys: store},
+		modeltest.NewScriptedMock(nil, nil))
+	next := anyStrings(got.doc.Values["next"])
+	if got.code != 0 || len(next) != 1 || !strings.Contains(next[0], "does not open") || !strings.Contains(next[0], "kbase auth remove lab") {
+		t.Errorf("exit %d, next = %q; want one entry naming the key that does not open and kbase auth remove lab", got.code, next)
+	}
+}
+
+// writeConfig writes a configuration file fixture into dir and returns its
+// path.
+func writeConfig(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

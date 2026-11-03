@@ -22,8 +22,14 @@ kbase="${root}/${BIN_DIR}/kbase"
 repo="${out}/repo"
 docs="${out}/docs"
 nodot="${out}/repo-nodot"
-rm -rf "${repo}" "${docs}" "${nodot}" "${out}/outside" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/mc.json" "${out}/mc-run.json" "${out}/init.tsv" "${out}/state"
-mkdir -p "${docs}"
+rm -rf "${repo}" "${docs}" "${nodot}" "${out}/outside" "${out}/gitonly" "${out}/gitconfig" "${out}/seed.yaml" "${out}/leaf.md" "${out}/init.tsv" "${out}/state" "${out}/xdg" "${out}/config"
+mkdir -p "${docs}" "${out}/config"
+# Every verb that reads the configuration also reads the credentials store, so
+# the state home and configuration directory are replaced by empty ones under
+# the evidence directory. HOME stays the user's: the verbs here read nothing
+# beneath it once KBASE_CONFIG_DIR is set, and moving it would send `go test`
+# into a fresh read-only module cache that the next run cannot delete.
+export XDG_STATE_HOME="${out}/xdg" KBASE_CONFIG_DIR="${out}/config"
 export GIT_AUTHOR_NAME=init-integration GIT_AUTHOR_EMAIL=init@invalid GIT_COMMITTER_NAME=init-integration GIT_COMMITTER_EMAIL=init@invalid GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${out}/gitconfig"
 status=0
 fail() { printf '  fail: %s\n' "$*"; status=1; }
@@ -66,8 +72,8 @@ repo="${out}/repo"
 # its own birth; the commit's subject and trail are ledger's, pinned in
 # ledger_test.go — the script never reads git.
 git init --quiet "${repo}"
-printf '%s\n' 'entry:' '- title: An Authored Result' '  rigor: 0.5' '  rationale: Written at birth.' > "${out}/seed.yaml"
-printf '%s\n' 'entry:' '- document: a.md' '  id: "@ID@"' '  locator: authored text stands' > "${out}/mc.json"
+printf '%s\n' 'entry:' '- title: An Authored Result' '  rigor: 0.5' '  rationale: Written at birth.' '  document: a.md' '  line: 3' \
+    '  snippet: authored text stands' > "${out}/seed.yaml"
 printf '%s\n' '# A Leaf' '' 'The authored text stands. It cites nothing it cannot show.' > "${out}/leaf.md"
 run init done init
 # verify green over the born tree as shipped, before any maintenance
@@ -80,17 +86,14 @@ run init refused init
 # reaches the real $XDG_STATE_HOME.
 printf '%s\n' '\documentclass{article}' '\begin{document}' 'Nothing distilled.' '\end{document}' > "${repo}/paper.tex"
 run build refused build "${repo}/paper.tex" --no-inference --state-dir "${out}/state"
-# 5. the cross-process maintenance chain: the id the insert minted
-# reaches the later invocations through its document, the claim is
-# hosted by the marker mark-claim-in-leaf places, and the loop closes
-# green on what init wrote.
-run insert-claim-entry done insert-claim-entry --values "${out}/seed.yaml"
-id="$(sed -n 's/^    - "\(clm-[a-z0-9]*\)"$/\1/p' "${LAST}" | head -n 1)"
-[[ -n "${id}" ]] || fail "the insert minted no id"
+# 5. the cross-process maintenance chain: an authored leaf, a claim
+# add-claim places on its line 3, and the loop closes green on what init
+# wrote.
 cp "${out}/leaf.md" "${repo}/kb-root/a.md"
-sed "s/@ID@/${id}/g" "${out}/mc.json" > "${out}/mc-run.json"
-run mark-claim-in-leaf done mark-claim-in-leaf --values "${out}/mc-run.json"
-run refresh unchanged refresh
+run add-claim done add-claim --values "${out}/seed.yaml"
+git -C "${repo}" add -A kb-root
+git -C "${repo}" commit --quiet -m "the maintenance chain's writes"
+run update-format unchanged update-format
 run verify done verify
 # 6. no dot: the placeholder stands, in its own repository, PATH holding
 # git alone through a symlink of its own.
@@ -101,7 +104,7 @@ ln -s "$(command -v git)" "${out}/gitonly/git"
 grep -q 'outcome: "done"' "${docs}/init-nodot.out" || fail "the no-dot birth did not reach done: $(cat "${docs}/init-nodot.out")"
 grep -q 'no Graphviz dot on PATH' "${docs}/init-nodot.log" || fail "the no-dot lack is not said on stderr"
 grep -q 'no Graphviz dot on PATH' "${nodot}/kb-root/claim-graph.svg" || fail "claim-graph.svg is not the placeholder"
-OUT_DIR="${out}" RECIPE="test-integration-init" INVOCATION="git init repo/ (identity fixed in the environment, global config quarantined to gitconfig)\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir, whose run tree is copied to outside/; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
+OUT_DIR="${out}" RECIPE="test-integration-init" INVOCATION="git init repo/ (identity fixed in the environment, global config quarantined to gitconfig); kb-root/ committed (git add -A kb-root; git commit) before update-format\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir, whose run tree is copied to outside/; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-init): a birth check failed — see init.tsv\n'

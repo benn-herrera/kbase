@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/filelock"
 	"kbase/internal/gitledger"
@@ -112,6 +113,83 @@ func statusOf(t *testing.T, f fixture) statusSnapshot {
 	return s
 }
 
+// nestedRepo is the fixture's repository, which git reads, holding inner/
+// whose .git is an empty directory: git does not accept it and reads the
+// outer repository from inner/, where kbase reads inner/'s .git.
+func nestedRepo(t *testing.T) (outer, inner string) {
+	t.Helper()
+	f := newTrailFixture(t)
+	inner = filepath.Join(f.repo, "inner")
+	if err := os.MkdirAll(filepath.Join(inner, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return f.repo, inner
+}
+
+// isBrokenGitRefusal is whether items are one worktree refusal naming inner,
+// whose .git git does not accept, remedy git init there.
+func isBrokenGitRefusal(items []result.Item, inner string) bool {
+	return len(items) == 1 && items[0].Check == CheckWorktree && items[0].Path == inner && items[0].Remedy == "git init "+inner
+}
+
+// TestOpenRepoOpensOnlyKbasesRepository: from a subdirectory of a repository
+// git reads, OpenRepo is that repository; from inside a directory whose .git
+// git does not accept, nested in one it does, it is refused worktree, remedy
+// git init there.
+func TestOpenRepoOpensOnlyKbasesRepository(t *testing.T) {
+	outer, inner := nestedRepo(t)
+	sub := filepath.Join(outer, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := OpenRepo(sub, OwnedPaths, log.Discard())
+	if err != nil {
+		t.Fatalf("OpenRepo from a subdirectory: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(outer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := filepath.EvalSymlinks(repo.Root); err != nil || got != want {
+		t.Errorf("OpenRepo from a subdirectory is %s (%v), want %s", repo.Root, err, want)
+	}
+	_, err = OpenRepo(inner, OwnedPaths, log.Discard())
+	if refusal, ok := err.(result.Refusal); !ok || !isBrokenGitRefusal(refusal, inner) {
+		t.Errorf("OpenRepo where git reads the enclosing repository = %#v, want one worktree refusal at %s, remedy git init there", err, inner)
+	}
+}
+
+// TestOpenRepoRefusesARedirectedGit: GIT_DIR naming kbase's repository from a
+// subdirectory makes git read the subdirectory as the worktree root, so
+// OpenRepo is refused worktree, remedy the redirect's undoing.
+func TestOpenRepoRefusesARedirectedGit(t *testing.T) {
+	outer, _ := nestedRepo(t)
+	sub := filepath.Join(outer, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_DIR", filepath.Join(outer, ".git"))
+	_, err := OpenRepo(sub, OwnedPaths, log.Discard())
+	if refusal, ok := err.(result.Refusal); !ok || len(refusal) != 1 || refusal[0].Check != CheckWorktree ||
+		refusal[0].Remedy != "unset GIT_DIR and GIT_WORK_TREE, then re-run" {
+		t.Errorf("OpenRepo under GIT_DIR from a subdirectory = %#v, want one worktree refusal, remedy unset GIT_DIR and GIT_WORK_TREE", err)
+	}
+}
+
+// TestStatusRefusesWhereGitReadsAnotherRepository: status, cancel and wait
+// all open through MonitorOptions.Open, so status stands for the three.
+func TestStatusRefusesWhereGitReadsAnotherRepository(t *testing.T) {
+	_, inner := nestedRepo(t)
+	outcome, fields := Status(MonitorOptions{StateDir: t.TempDir(), WorkDir: inner})
+	if items, _ := storetest.Field(fields, result.RefusalsKey).([]result.Item); outcome != result.Refused || !isBrokenGitRefusal(items, inner) {
+		t.Errorf("status where git reads the enclosing repository = %s %v, want one worktree refusal at %s, remedy git init there", outcome, fields, inner)
+	}
+}
+
+// recordedCall is the recorded kbase build invocation argv as a document
+// carries it: the build call, marked for the surface reading it to spell.
+func recordedCall(argv []string) string { return argmark.Recorded(argv[1], argv[2:]) }
+
 func TestShellJoin(t *testing.T) {
 	got := ShellJoin([]string{"kbase", "build", "/a b/p.tex", "--state-dir", "/s/it's"})
 	if want := `kbase build '/a b/p.tex' --state-dir '/s/it'"'"'s'`; got != want {
@@ -164,7 +242,7 @@ func TestStatusReportsAKilledBuild(t *testing.T) {
 		Event{Event: EventStage, Stage: StageDocumentGraph, Total: 2},
 	)
 	s := statusOf(t, f)
-	if s.state != StateInterrupted || s.current != StageDocumentGraph || s.done != 0 || s.total != 2 || s.pid != deadPID || s.resume != ShellJoin(resume) {
+	if s.state != StateInterrupted || s.current != StageDocumentGraph || s.done != 0 || s.total != 2 || s.pid != deadPID || s.resume != recordedCall(resume) {
 		t.Errorf("status of a build killed in %s = %+v, want interrupted there with pid %d and its resume command", StageDocumentGraph, s, deadPID)
 	}
 	appendProgress(t, f.state, Event{Event: EventEnd, Outcome: result.Failed, Items: []result.Item{{Check: CheckError, Detail: "a check failed"}}})
@@ -219,6 +297,9 @@ func TestReadStateNamesTheRun(t *testing.T) {
 func TestAScoreRunLeavesTheBuildWhereItStands(t *testing.T) {
 	const buildPID = 1 << 30 // larger than any pid a running process holds
 	f := newTrailFixture(t)
+	// The build's boundary stands, and its kb-root/ with it: with none, status
+	// reads no build at all.
+	f.boundary(t, "start")
 	appendProgress(t, f.state, Event{Event: EventRun, PID: buildPID}, Event{Event: EventEnd, Outcome: result.Done})
 	built, err := ReadState(f.state)
 	if err != nil || built.State != StateFinished || built.PID != buildPID {

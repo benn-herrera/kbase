@@ -1,27 +1,35 @@
 // Package buildrecords is the schema of the tracked build records the claim
-// graph writes at the repository root, beside kb-root/, where they live, and
-// how they are read back: YAML documents of the record schema, which the sheet
-// reads for edge provenance.
+// graph writes in kb-root/.build/, where they live, and how they are read
+// back: YAML documents of the record schema.
 package buildrecords
 
 import (
 	"fmt"
+	"path"
 
 	"go.yaml.in/yaml/v3"
 
 	"kbase/internal/kb"
 )
 
-// The record files, at the repository root.
+// Dir is the repository-relative directory the build records live in.
+const Dir = kb.KBDir + "/.build"
+
+// The record files, repository-relative.
 const (
-	NodePassFile       = "kb-build-node-pass.yaml"
-	ClassificationFile = "kb-build-classification.yaml"
-	UnmarkedFile       = "kb-build-unmarked.yaml"
-	CullFile           = "kb-build-cull.yaml"
+	NodePassFile       = Dir + "/kb-build-node-pass.yaml"
+	ClassificationFile = Dir + "/kb-build-classification.yaml"
+	UnmarkedFile       = Dir + "/kb-build-unmarked.yaml"
+	CullFile           = Dir + "/kb-build-cull.yaml"
 )
 
 // RecordFiles is every repository-relative path a build record lives at.
 var RecordFiles = []string{NodePassFile, ClassificationFile, UnmarkedFile, CullFile}
+
+// RootRecordFile is where a KB before format 4.0.0 kept the record at rel, a
+// path of RecordFiles: the repository root, under the same name. Converting
+// the KB moves it to rel.
+func RootRecordFile(rel string) string { return path.Base(rel) }
 
 // NodePassRecord is the node pass's build state, per leaf.
 type NodePassRecord struct {

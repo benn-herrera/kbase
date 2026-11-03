@@ -113,12 +113,11 @@ func KnownAxiomIDs(src common.Files) (map[string]bool, error) {
 // AnnotationFault is one malformed register bullet: the list field it was read
 // from, the file and physical line it opens on, and what the reader refused.
 type AnnotationFault struct {
-	Field   string
-	Path    string
-	Line    int
-	Allowed string
-	Remedy  string
-	Detail  string
+	Field  string
+	Path   string
+	Line   int
+	Remedy string
+	Detail string
 }
 
 // AnnotationError is every annotation fault one load found, in register order.

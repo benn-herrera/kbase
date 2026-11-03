@@ -339,7 +339,7 @@ func Culled(ctx context.Context, opts Options) (Report, error) {
 		if err != nil {
 			return nil, stopf("cull-plan", "%v", err)
 		}
-		if _, err := IssueCulls(plan.Culls, w.raw); err != nil {
+		if _, err := IssueCulls(w.kbRoot, plan.Culls, w.raw); err != nil {
 			return nil, err
 		}
 		rec := buildrecords.CullRecord{Entries: entries, Links: plan.Links}

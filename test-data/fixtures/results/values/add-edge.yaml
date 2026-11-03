@@ -1,0 +1,23 @@
+# One edge of each relation a public op writes, pending and numeric bearings
+# both. ${ID1} and ${ID2} are the two staged claims' ids in id order, ${ID3}
+# the staged analysis's and ${WORK1} the staged work's, each read from its
+# add's result and substituted before the op reads the file.
+entry:
+- source: ${ID1}
+  target: ${ID2}
+  relation: supports
+  bearing: 0.8
+- source: ${WORK1}
+  target: ${ID1}
+  relation: founds
+- source: ${ID3}
+  target: ${ID1}
+  relation: lifts
+- source: ${ID3}
+  target: ${ID2}
+  relation: refutes
+  bearing: 0.4
+  context: A counterexample.
+- source: ${ID2}
+  target: ${ID1}
+  relation: references

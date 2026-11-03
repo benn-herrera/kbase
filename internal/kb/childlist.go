@@ -1,22 +1,12 @@
 package kb
 
-import (
-	"regexp"
-	"strings"
-)
+import "strings"
 
 // The child-list reading of the tree relation: a third reading beside
 // TreeLinks', and the one the LaTeX export walks. Only an index's child-list
 // lines are spine edges — a body link is not, so an entry point's prose
 // cross-links do not read as volumes — and the up-link is the body's first
 // line carrying text, where that line carries UplinkMarker and a .md link.
-
-// childLinkRE is one inline link in the child-list form: the link LinkRE
-// reads, with the optional quoted title beside it that RefDefRE carries and
-// LinkRE's destination group cannot cross the whitespace to. Group 1 is the
-// destination.
-var childLinkRE = regexp.MustCompile(
-	`\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*(<[^>]*>|[^)\s]+)\s*(?:"[^"]*"|'[^']*'|\([^)]*\))?\s*\)`)
 
 // ChildListLines is a document's body below the frontmatter in SplitLines'
 // line unit, read by the child-list reading: the index of the up-link line, -1
@@ -116,7 +106,7 @@ func childListLine(line string) (targets []string, ok bool) {
 func linkRun(content string, at int) (targets []string, end int, ok bool) {
 	for {
 		next := at + skipEmphasis(content[at:])
-		m := childLinkRE.FindStringSubmatchIndex(content[next:])
+		m := LinkRE.FindStringSubmatchIndex(content[next:])
 		if m == nil || m[0] != 0 {
 			return targets, at, len(targets) > 0
 		}

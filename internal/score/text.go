@@ -5,7 +5,6 @@ package score
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -28,8 +27,7 @@ var scoreTokenRE = regexp.MustCompile(`- rigor:|\(bearing|- strength:|\(strength
 // line's start does not open it.
 var frameRE = regexp.MustCompile("(?m)^## (?:Source:|Target:|Context\\b)|`{12,}")
 
-// headingRE is a line that opens an ATX heading, which is where
-// kb.AnchorSection ends a section and where a claim's block ends.
+// headingRE is a line that opens an ATX heading, which ends a cited range.
 var headingRE = regexp.MustCompile(`^#{1,6}\s`)
 
 // What a refusal says the text carries, as scoreTokenError.Kind.
@@ -99,22 +97,45 @@ type line struct {
 	from, to int
 }
 
-// graph is the derived index as the passages read it: every node by id, each
-// hosted node's host by id, and the lifts edges, which decide the split forms. A
-// run builds one and every item of its walk reads that one, so no item reads an
-// index file — the runner already holds the index, and a second reading path is
-// how two views of the graph drift.
+// graph is the derived index as the passages and the judged hash read it:
+// every node by id, each hosted node's host by id, and each hosted node's
+// statement as kb.Statement reads it from its host leaf, with the 1-based line
+// of the leaf it opens on (statementLine). A run builds one and every item of
+// its walk reads that one, so no item reads an index file — the runner already
+// holds the index, and a second reading path is how two views of the graph
+// drift.
 type graph struct {
-	nodes map[string]kb.NodeRow
-	hosts map[string]string
-	lifts map[liftPair]bool
+	nodes      map[string]kb.NodeRow
+	hosts      map[string]string
+	statements map[string]string
+	lines      map[string]int
 }
 
-// liftPair is a lifts edge's ends: the analysis and the claim it lifts.
-type liftPair struct{ analysis, claim string }
+// statementLine is the 1-based line of text, the leaf hosting id, that
+// statement — kb.Statement's reading of id there — opens on, which the guard
+// names a hit by: of the lines that, their markers and blockquote prefixes
+// removed, begin with the statement's first line, the one nearest id's marker;
+// 0 where none does. kb.Statement reads a run of the leaf's lines and removes
+// nothing between them, so the statement's later lines follow on from it.
+func statementLine(text, id, statement string) int {
+	first, _, _ := strings.Cut(statement, "\n")
+	at, ok := kb.MarkerLines(text)[id]
+	if first == "" || !ok {
+		return 0
+	}
+	distance := func(i int) int { return max(i-at, at-i) }
+	best := -1
+	for i, l := range strings.Split(text, "\n") {
+		plain := strings.TrimSpace(kb.BlockquotePrefix.ReplaceAllString(kb.StripLineMarkers(l), ""))
+		if strings.HasPrefix(plain, first) && (best < 0 || distance(i) < distance(best)) {
+			best = i
+		}
+	}
+	return best + 1
+}
 
-// rigorText is the closed text one rigor call carries: the node's title and the
-// statement its own document gives it.
+// rigorText is the closed text one rigor call carries: the node's title and its
+// statement.
 func rigorText(src *kb.Source, g graph, id string) (closedText, error) {
 	row, ok := g.nodes[id]
 	if !ok {
@@ -123,11 +144,7 @@ func rigorText(src *kb.Source, g graph, id string) (closedText, error) {
 	if row.NodeType == kb.NodeKindWork || row.NodeType == kb.NodeKindAxiom {
 		return closedText{}, outOfScopeError{Kind: row.NodeType, ID: id}
 	}
-	passages, err := endPassages(src, g, row, titleLabel, nodeEnds{title: passageTitle, statement: passageStatement})
-	if err != nil {
-		return closedText{}, err
-	}
-	return assemble(passages)
+	return assemble(endPassages(src, g, row, titleLabel, nodeEnds{title: passageTitle, statement: passageStatement}))
 }
 
 // The labels a bearing call writes: above each end's title, and the line above
@@ -158,15 +175,8 @@ func bearingText(src *kb.Source, g graph, e kb.EdgeRow) (closedText, error) {
 	if !ok {
 		return closedText{}, fmt.Errorf("the index holds no node %s", e.Target)
 	}
-	sourcePassages, err := endPassages(src, g, source, sourceLabel, nodeEnds{title: passageSource, statement: passageSource})
-	if err != nil {
-		return closedText{}, err
-	}
-	targetPassages, err := endPassages(src, g, target, targetLabel, nodeEnds{title: passageTarget, statement: passageTarget})
-	if err != nil {
-		return closedText{}, err
-	}
-	passages := append(sourcePassages, targetPassages...)
+	passages := append(endPassages(src, g, source, sourceLabel, nodeEnds{title: passageSource, statement: passageSource}),
+		endPassages(src, g, target, targetLabel, nodeEnds{title: passageTarget, statement: passageTarget})...)
 	if e.Context != nil {
 		passages = append(passages, passage{label: true, text: contextLabel}, passage{text: *e.Context})
 	}
@@ -180,331 +190,16 @@ type nodeEnds struct{ title, statement string }
 
 // endPassages is one node's label line, then its title and its statement, each
 // recorded as ends names. The label is the frame's own and is carried on a line
-// of its own, so no numbered line begins with frame text.
-func endPassages(src *kb.Source, g graph, row kb.NodeRow, label string, ends nodeEnds) ([]passage, error) {
-	statement, err := statementPassages(src, g, row)
-	if err != nil {
-		return nil, err
+// of its own, so no numbered line begins with frame text. A node no leaf hosts
+// — a work, whose standing lies outside the corpus, or a node with no marker —
+// has no statement, and its text is its title alone.
+func endPassages(src *kb.Source, g graph, row kb.NodeRow, label string, ends nodeEnds) []passage {
+	out := []passage{{label: true, text: label}, {end: ends.title, path: src.KBPath(row.CanonicalPath), text: row.Title}}
+	if statement := g.statements[row.ID]; statement != "" {
+		out = append(out, passage{end: ends.statement, path: src.KBPath(g.hosts[row.ID]), line: g.lines[row.ID], text: statement})
 	}
-	for i := range statement {
-		statement[i].end = ends.statement
-	}
-	title := passage{end: ends.title, path: src.KBPath(row.CanonicalPath), text: row.Title}
-	return append([]passage{{label: true, text: label}, title}, statement...), nil
+	return out
 }
-
-// statementPassages is the statement the node's own document gives it: for a
-// claim the block its statement marker sits in, in the leaf hosting it; for an
-// analysis and an experiment the section its statement marker sits in, which
-// the index anchors at the nearest heading above the marker in the leaf
-// hosting it. Two split forms read first, for an analysis only here: where its
-// marker stands on a blank quoted line, its statement is that blockquote; where
-// its paragraph holds before its marker, with text between, the marker of a
-// claim it lifts, its statement is that paragraph, markers and `>` prefixes
-// removed.
-// A work carries none: its register entry's body is its `### Rigor`
-// subsection, whose `- rigor:` line the guard refuses and whose `- rationale:`
-// is never sent, and everything else the KB holds of a work is its title — the
-// work itself lying outside the corpus.
-func statementPassages(src *kb.Source, g graph, row kb.NodeRow) ([]passage, error) {
-	switch row.NodeType {
-	case kb.NodeKindClaim:
-		return claimPassages(src, g, row)
-	case kb.NodeKindWork:
-		return nil, nil
-	}
-	doc := src.KBPath(row.CanonicalPath)
-	text, err := src.ReadText(doc)
-	if err != nil {
-		return nil, err
-	}
-	if row.NodeType == kb.NodeKindAnalysis {
-		if at, ok := kb.MarkerLines(text)[row.ID]; ok {
-			lines := strings.Split(text, "\n")
-			if blankQuoted(lines[at]) {
-				return blockPassage(doc, lines, at), nil
-			}
-			if first, last, _, ok := proseLift(lines, at, row.ID, g.lifts); ok {
-				return []passage{{path: doc, line: first + 1, text: unquotedText(lines[first : last+1])}}, nil
-			}
-		}
-	}
-	return anchoredPassages(doc, text, row), nil
-}
-
-// blankQuoted is whether a line is a blank line of a blockquote: one holding
-// only its `>` prefix and markers.
-func blankQuoted(line string) bool { return quoted(line) && lineText(line) == "" }
-
-// lineMarkerAt is a marker and the 0-based line it stands on.
-type lineMarkerAt struct {
-	line int
-	kb.LineMarker
-}
-
-// proseLift is the prose split form in the paragraph around the marker of id on
-// 0-based line at: a claim's marker followed, with text between, by the marker
-// of an analysis lifting that claim, id naming one of the two. It returns the
-// paragraph's lines and the claim's marker; ok is false where the paragraph
-// holds no such pair naming id.
-func proseLift(lines []string, at int, id string, lifts map[liftPair]bool) (first, last int, claim lineMarkerAt, ok bool) {
-	first, last, ok = paragraphExtent(lines, at)
-	if !ok {
-		return 0, 0, lineMarkerAt{}, false
-	}
-	var marks []lineMarkerAt
-	for i := first; i <= last; i++ {
-		for _, m := range kb.LineMarkers(lines[i]) {
-			marks = append(marks, lineMarkerAt{line: i, LineMarker: m})
-		}
-	}
-	for i, c := range marks {
-		for _, a := range marks[i+1:] {
-			if (c.ID == id || a.ID == id) && lifts[liftPair{analysis: a.ID, claim: c.ID}] && textBetween(lines, c, a) {
-				return first, last, c, true
-			}
-		}
-	}
-	return 0, 0, lineMarkerAt{}, false
-}
-
-// textBetween is whether text other than markers stands between the end of
-// marker a and the start of marker b, b after a in one paragraph, every line
-// between them holding text. Two ids one marker names share its span, and have
-// nothing between them.
-func textBetween(lines []string, a, b lineMarkerAt) bool {
-	if a.line == b.line {
-		return b.Start >= a.End && lineText(lines[a.line][a.End:b.Start]) != ""
-	}
-	return b.line > a.line+1 || lineText(lines[a.line][a.End:]) != "" || lineText(lines[b.line][:b.Start]) != ""
-}
-
-// paragraphExtent is the lines of the paragraph the 0-based line at stands in,
-// cut as the build's render cuts paragraphs: the run of lines around it that
-// hold text once the `>` prefix and markers are removed, quoted exactly when
-// line at is, holding no heading, in which only the first line opens a list
-// item. A line of a display-maths fence is in the paragraph whatever its text,
-// and opens no item. ok is false where line at is itself no such line.
-func paragraphExtent(lines []string, at int) (first, last int, ok bool) {
-	inFence := make([]bool, len(lines))
-	for _, f := range kb.Fences(lines) {
-		if f.Info == kb.DisplayMathInfo {
-			for i := f.Start; i < f.End; i++ {
-				inFence[i] = true
-			}
-		}
-	}
-	in := func(i int) bool {
-		line := lines[i]
-		if quoted(line) != quoted(lines[at]) {
-			return false
-		}
-		text := lineText(line)
-		return inFence[i] || text != "" && !headingRE.MatchString(text)
-	}
-	opensItem := func(i int) bool { return !inFence[i] && kb.ListItemRE.MatchString(lineText(lines[i])) }
-	if !in(at) {
-		return 0, 0, false
-	}
-	first, last = at, at
-	for first > 0 && !opensItem(first) && in(first-1) {
-		first--
-	}
-	for last < len(lines)-1 && in(last+1) && !opensItem(last+1) {
-		last++
-	}
-	return first, last, true
-}
-
-// liftedInBlockquote is whether the marker of an analysis lifting claim stands
-// on a blank quoted line of the block the claim's marker on 0-based line at sits
-// in.
-func liftedInBlockquote(lines []string, at int, claim string, lifts map[liftPair]bool) bool {
-	first, last := blockExtent(lines, at)
-	for _, l := range lines[first : last+1] {
-		if !blankQuoted(l) {
-			continue
-		}
-		for _, m := range kb.LineMarkers(l) {
-			if lifts[liftPair{analysis: m.ID, claim: claim}] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// unquote is the line with its statement markers, each taking the space before
-// it, and every blockquote level removed.
-func unquote(line string) string {
-	return kb.BlockquotePrefix.ReplaceAllString(kb.StripLineMarkers(line), "")
-}
-
-// lineText is the line's text with every blockquote level and its statement
-// markers removed, each marker taking the space before it, then trimmed.
-func lineText(line string) string { return strings.TrimSpace(unquote(line)) }
-
-// unquotedText is the lines, each through unquote, joined by line breaks and
-// trimmed.
-func unquotedText(lines []string) string {
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = unquote(l)
-	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
-}
-
-// textBefore is the lines first through at, line at cut at byte cut, as
-// unquotedText gives them.
-func textBefore(lines []string, first, at, cut int) string {
-	run := slices.Clone(lines[first : at+1])
-	run[len(run)-1] = run[len(run)-1][:cut]
-	return unquotedText(run)
-}
-
-// claimPassages is the claim's statement as the leaf hosting it holds it: the
-// block its marker sits in, or, where the marker ends a heading's line, the
-// section that heading opens — the heading is the frame's title line, and the
-// section is the claim. Two split forms read first. Where the claim's marker is
-// followed in its paragraph by text and then by the marker of an analysis
-// lifting it, its statement is the paragraph up to its marker; where an analysis
-// lifting it is marked on a blank quoted line of its blockquote, its statement
-// is the text of its marker's line before the marker. Either is read with the
-// `>` prefixes and any markers removed. A claim no leaf hosts, and one whose
-// host no longer carries the marker, has none: its text is its title alone.
-func claimPassages(src *kb.Source, g graph, row kb.NodeRow) ([]passage, error) {
-	leaf, ok := g.hosts[row.ID]
-	if !ok {
-		return nil, nil
-	}
-	doc := src.KBPath(leaf)
-	text, err := src.ReadText(doc)
-	if err != nil {
-		return nil, err
-	}
-	at, ok := kb.MarkerLines(text)[row.ID]
-	if !ok {
-		return nil, nil
-	}
-	lines := strings.Split(text, "\n")
-	if first, _, m, ok := proseLift(lines, at, row.ID, g.lifts); ok {
-		return []passage{{path: doc, line: first + 1, text: textBefore(lines, first, m.line, m.Start)}}, nil
-	}
-	if liftedInBlockquote(lines, at, row.ID, g.lifts) {
-		for _, m := range kb.LineMarkers(lines[at]) {
-			if m.ID == row.ID {
-				return []passage{{path: doc, line: at + 1, text: textBefore(lines, at, at, m.Start)}}, nil
-			}
-		}
-	}
-	if headingLevel(lines[at]) > 0 {
-		body, line := headingBody(text, at)
-		if body == "" {
-			return nil, nil
-		}
-		return []passage{{path: doc, line: line, text: body}}, nil
-	}
-	return blockPassage(doc, lines, at), nil
-}
-
-// blockPassage is the block the marker on 0-based line at sits in, whole.
-func blockPassage(doc string, lines []string, at int) []passage {
-	first, last := blockExtent(lines, at)
-	return []passage{{path: doc, line: first + 1, text: strings.Join(lines[first:last+1], "\n")}}
-}
-
-// headingBody is the body of the section the heading on 0-based line at opens:
-// its lines after the heading up to the next heading as deep or shallower,
-// trimmed of the blank lines around them, and the 1-based line the body opens
-// on. The code-stripped text decides what is a heading, so a line inside a
-// fenced block opens no section, and the document supplies the bytes.
-func headingBody(text string, at int) (string, int) {
-	lines := strings.Split(text, "\n")
-	stripped := strings.Split(kb.StripCodeSplitLines(text), "\n")
-	level, end := headingLevel(stripped[at]), len(lines)
-	for i := at + 1; i < len(stripped); i++ {
-		if lvl := headingLevel(stripped[i]); lvl > 0 && lvl <= level {
-			end = i
-			break
-		}
-	}
-	first, last := at+1, end
-	for first < last && kb.Strip(lines[first]) == "" {
-		first++
-	}
-	for last > first && kb.Strip(lines[last-1]) == "" {
-		last--
-	}
-	if first == last {
-		return "", 0
-	}
-	return strings.Join(lines[first:last], "\n"), first + 1
-}
-
-// headingLevel is the level of the ATX heading the line opens, 0 where it opens
-// none.
-func headingLevel(line string) int {
-	if !headingRE.MatchString(line) {
-		return 0
-	}
-	n := 0
-	for n < len(line) && line[n] == '#' {
-		n++
-	}
-	return n
-}
-
-// anchoredPassages is the section at the node's canonical anchor in text, the
-// document doc, which the node's canonical path names.
-func anchoredPassages(doc, text string, row kb.NodeRow) []passage {
-	body, ok := kb.AnchorSection(text, row.CanonicalAnchor)
-	if !ok {
-		return nil
-	}
-	if body = strings.TrimSpace(body); body == "" {
-		return nil
-	}
-	// The body's lines are the code-stripped text's, so the body is a run of them
-	// and its offset in that text is the line the section opens on.
-	stripped := kb.StripCodeSplitLines(text)
-	if at := strings.Index(stripped, body); at >= 0 {
-		return []passage{{path: doc, line: 1 + strings.Count(stripped[:at], "\n"), text: body}}
-	}
-	return []passage{{path: doc, text: body}}
-}
-
-// blockExtent is the lines of the block the marker on 0-based line at sits in:
-// a blockquote's quoted run whole where the marker sits in one, else the run of
-// non-blank lines, either clipped at the next line that opens a heading.
-func blockExtent(lines []string, at int) (first, last int) {
-	in := blockMember(quoted(lines[at]))
-	first, last = at, at
-	for first > 0 && in(lines[first-1]) {
-		first--
-	}
-	for last < len(lines)-1 && in(lines[last+1]) {
-		last++
-	}
-	return first, last
-}
-
-// blockMember is whether a line continues the block the marker's line opens: in
-// a blockquote, the quoted lines; elsewhere, the non-blank lines. Either run
-// stops at a line that opens a heading.
-func blockMember(blockquote bool) func(string) bool {
-	return func(line string) bool {
-		if headingRE.MatchString(line) {
-			return false
-		}
-		if blockquote {
-			return quoted(line)
-		}
-		return !quoted(line) && kb.Strip(line) != ""
-	}
-}
-
-// quoted is whether a line is a blockquote's.
-func quoted(line string) bool { return strings.HasPrefix(strings.TrimLeft(line, " \t"), ">") }
 
 // wrapWidth is the column a passage's lines are wrapped to. Wrapping adds breaks
 // and rewrites nothing, so a line of the carried text stays a verbatim slice of

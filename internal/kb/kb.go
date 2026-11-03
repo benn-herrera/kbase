@@ -8,20 +8,21 @@ import (
 	"os"
 	"path/filepath"
 
-	"kbase/internal/formats/format300"
+	"kbase/internal/argmark"
+	"kbase/internal/formats/format400"
 )
 
 // Names the KB's readers key on.
 const (
 	KBDir          = "kb-root"
 	EntryPointFile = "entry-point.md"
-	IndexFile      = "index.md"
+	IndexFile      = format400.IndexFile
 	UplinkMarker   = "↑"
 	// OwnProseTitle heads the leaf a container's own prose is lifted into.
 	OwnProseTitle = "Overview"
 
 	// IndexDir is the index's directory inside kb-root.
-	IndexDir = format300.IndexDir
+	IndexDir = format400.IndexDir
 	// ClaimGraphFile is the claim-graph sheet, inside kb-root and each
 	// volume; ClaimGraphDigestFile is the volume digest, inside kb-root.
 	ClaimGraphFile       = "claim-graph.svg"
@@ -51,6 +52,16 @@ const CheckKBRoot = "kb-root"
 
 // CheckUnknownID is the refusal class of an id no node record carries.
 const CheckUnknownID = "unknown-id"
+
+// NoNode is the detail and remedy of the one refusal of an id no node carries,
+// named at key: every op and query that looks a node up refuses with it, under
+// CheckUnknownID.
+func NoNode(key, id string) (detail, remedy string) {
+	return "no node " + id, NodeLister + ", correct " + key + ", then re-run"
+}
+
+// NodeLister is the query a "no node" remedy points at: find's call.
+var NodeLister = "list the nodes that stand with " + argmark.Call("find", nil)
 
 // RepositoryRoot is the nearest directory at or above dir holding .git — the
 // directory kb-root/ sits in — or "" where there is none.
@@ -111,7 +122,7 @@ var (
 	}
 )
 
-// StampedFiles are the kb-root documents kbase stamps from its templates, in
-// the order it stamps them: kbase owns and generates them, and a migration
-// save writes them whole.
+// StampedFiles are the kb-root readiness documents kbase stamps from its
+// templates, in the order it stamps them: each is written whole where absent,
+// and holds a block kbase maintains, the rest of it the KB's own.
 var StampedFiles = []string{AgentsFile, ConventionsFile}

@@ -23,7 +23,7 @@ var recordCodecHomes = []string{"internal/kb", "internal/formats"}
 // path that exports them.
 var recordFileNames = map[string][]string{
 	"kbase/internal/kb":                {"GraphNodesFile", "GraphEdgesFile"},
-	"kbase/internal/formats/format300": {"NodesFile", "EdgesFile"},
+	"kbase/internal/formats/format400": {"NodesFile", "EdgesFile"},
 }
 
 // recordOnlyKeys are the record keys whose YAML tag makes a struct a record
@@ -71,7 +71,7 @@ func TestRecordFilesOnlyThroughTheLoader(t *testing.T) {
 			switch n := n.(type) {
 			case *ast.Field:
 				if key, ok := recordTagKey(n); ok {
-					t.Errorf("%s: a field tagged yaml %q is a record struct; read the record files with kb.LoadGraph or kb.LoadAuthoredGraph and write them with kb.EncodeNodes and kb.EncodeEdges",
+					t.Errorf("%s: a field tagged yaml %q is a record struct; read the record files with kb.LoadGraph and write them with kb.EncodeNodes and kb.EncodeEdges",
 						fset.Position(n.Pos()), key)
 				}
 			case *ast.FuncDecl:
@@ -97,7 +97,7 @@ func TestRecordFilesOnlyThroughTheLoader(t *testing.T) {
 					return true
 				})
 				if named != token.NoPos && yamlCall != token.NoPos {
-					t.Errorf("%s: %s names a record file and calls the YAML package at %s; read the record files with kb.LoadGraph or kb.LoadAuthoredGraph and write them with kb.EncodeNodes and kb.EncodeEdges",
+					t.Errorf("%s: %s names a record file and calls the YAML package at %s; read the record files with kb.LoadGraph and write them with kb.EncodeNodes and kb.EncodeEdges",
 						fset.Position(named), n.Name.Name, fset.Position(yamlCall))
 				}
 			}

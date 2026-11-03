@@ -9,13 +9,16 @@ import (
 	"kbase/internal/kb"
 )
 
-// The score passes, the values ScoringSet takes. PassBoth is the set a run
-// walks where none is named: both of them, one after the other.
+// The score passes, the values ScoringSet takes. PassAll is the set a run
+// walks where none is named: both passes, one after the other.
 const (
 	PassRigor   = "rigor"
 	PassBearing = "bearing"
-	PassBoth    = "both"
+	PassAll     = "all"
 )
+
+// Passes is every pass, in the order a refusal lists them.
+var Passes = []string{PassRigor, PassBearing, PassAll}
 
 // ScoringNode is one node a score pass asks about: its kind and its id.
 type ScoringNode struct {
@@ -44,8 +47,8 @@ type Item struct {
 // bearing pass is every edge the walk asks about — supports, lifts and refutes,
 // by relation in kb.BearingWalkRelations order, then source, then target. A
 // founds edge is no item: its bearing is the user's, written by hand through
-// set-bearing, and a reference or a demoted row carries no bearing at all.
-// PassBoth is the node set and then the edge set, each in its own order, so one
+// edit-edge, and a reference or a demoted row carries no bearing at all.
+// PassAll is the node set and then the edge set, each in its own order, so one
 // walk covers both and neither set's order depends on the other's. An unknown
 // pass is an error.
 func ScoringSet(ix *Index, pass string) ([]Item, error) {
@@ -54,10 +57,10 @@ func ScoringSet(ix *Index, pass string) ([]Item, error) {
 		return rigorItems(ix), nil
 	case PassBearing:
 		return bearingItems(ix), nil
-	case PassBoth:
+	case PassAll:
 		return append(rigorItems(ix), bearingItems(ix)...), nil
 	}
-	return nil, fmt.Errorf("unknown pass %q: the passes are %s, %s and %s", pass, PassRigor, PassBearing, PassBoth)
+	return nil, fmt.Errorf("unknown pass %q: the passes are %s, %s and %s", pass, PassRigor, PassBearing, PassAll)
 }
 
 // rigorItems is every node the rigor pass asks about, by id: every kind but the

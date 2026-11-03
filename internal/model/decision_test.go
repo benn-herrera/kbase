@@ -16,6 +16,7 @@ import (
 
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
+	"kbase/internal/secret"
 )
 
 // decisionRequest is the one-question request the tests send.
@@ -140,7 +141,7 @@ func TestDecisionSurfacePath(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: tc.base(srv.URL), APIKey: testAPIKey, Decisions: tc.decisions})
+			c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: tc.base(srv.URL), APIKey: secret.NewKey(testAPIKey), Decisions: tc.decisions})
 			if _, err := slotDecision(t, context.Background(), c, decisionRequest()); err != nil {
 				t.Fatalf("Decision: %v", err)
 			}
@@ -162,7 +163,7 @@ func TestSystemOnePayloadShape(t *testing.T) {
 		t.Errorf("method: got %q, want POST", gotMethod)
 	}
 	if gotAuth != "Bearer "+testAPIKey {
-		t.Errorf("auth: got %q, want the bearer key", gotAuth)
+		t.Errorf("auth: got len %d, want the bearer key", len(gotAuth))
 	}
 	if len(bodies) != 1 {
 		t.Fatalf("requests: got %d, want 1", len(bodies))
@@ -303,7 +304,7 @@ func TestSystemOne4xxNoRetry(t *testing.T) {
 		t.Errorf("requests: got %d, want 1 — a 4xx is not re-issued", s.saw())
 	}
 	if strings.Contains(err.Error(), testAPIKey) {
-		t.Fatalf("API key leaked into the error: %v", err)
+		t.Fatal("API key leaked into the error")
 	}
 }
 
@@ -472,7 +473,7 @@ func TestDecisionsRequestShape(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newDecisionServer(t, `{"model":"clef","answers":[]}`)
-			c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+			c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: secret.NewKey(testAPIKey), Decisions: true})
 			req := model.DecisionRequest{Model: "clef", State: "the composed state", Questions: []model.DecisionQuestion{tc.question}}
 			if _, err := slotDecision(t, context.Background(), c, req); err != nil {
 				t.Fatalf("Decision: %v", err)
@@ -546,7 +547,7 @@ func TestDecisionsAnswerDecoding(t *testing.T) {
 		"usage": {"input_tokens": 100, "output_tokens": 5}
 	}`
 	s := newDecisionServer(t, body)
-	c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+	c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: secret.NewKey(testAPIKey), Decisions: true})
 	req := model.DecisionRequest{Model: "clef", State: "the composed state", Questions: []model.DecisionQuestion{
 		{Key: "q1", Type: "noul"}, {Key: "q2", Type: "choice"}, {Key: "q3", Type: "choice"}, {Key: "q4", Type: "score"},
 	}}
@@ -583,7 +584,7 @@ func TestDecisionsAnswerDecoding(t *testing.T) {
 // not ask is refused on this surface too, by the name it echoes back.
 func TestDecisionsUnaskedNameRefused(t *testing.T) {
 	s := newDecisionServer(t, `{"model":"clef","answers":[{"type":"predicate","name":"sneaky","probability":0.5}]}`)
-	c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: testAPIKey, Decisions: true})
+	c := model.NewOpenAIClient(model.Endpoint{Name: "t", BaseURL: s.srv.URL, APIKey: secret.NewKey(testAPIKey), Decisions: true})
 	_, err := slotDecision(t, context.Background(), c, decisionRequest())
 	if err == nil {
 		t.Fatal("expected error for the unasked name, got nil")

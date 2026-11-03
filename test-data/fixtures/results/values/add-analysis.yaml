@@ -1,0 +1,8 @@
+# Placed on its line of statements.md, which the stager appends to the
+# converted a.md before the claims' batch.
+entry:
+- title: An Analysis
+  rationale: Worked.
+  document: a.md
+  line: 10
+  snippet: works both results

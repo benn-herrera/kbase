@@ -18,6 +18,7 @@ import (
 
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 )
@@ -54,18 +55,8 @@ var processLog = struct {
 var rootCmd = &cobra.Command{
 	Use:   "kbase",
 	Short: "build and maintain a knowledge base from LaTeX",
-	Long: `kbase builds a knowledge base (KB) from LaTeX and maintains it. Volume roots
-go in — the top .tex file of each paper — and a KB comes out at kb-root/
-beside the repository's .git: the Markdown document tree, its metadata layer
-and .index/. The maintenance subcommands then operate on the living KB:
-refresh and verify, the write API's ops, render-citation, the queries and the
-claim-graph sheet. build runs in the foreground; status
-and cancel observe and stop it. show-config reports how the provider and model
-configuration resolves; models and configure choose it.
+	Long:  rootLong,
 
-Every subcommand writes one YAML document to stdout, its outcome first, and
-nothing else; stderr is for humans. The exit code follows the outcome: 0 for
-done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.`,
 	// No subcommand a bare invocation could reasonably mean, so it prints
 	// help rather than guessing.
 	Args: cobra.NoArgs,
@@ -86,6 +77,14 @@ done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.`,
 			return err
 		}
 		processLog.logger, processLog.closer = logger, closer
+		// cobra prints a command's summary and flag usages itself — shell
+		// completion's descriptions among them — so the root's stdout spells
+		// the text it is handed, unless the call came in over MCP and settled
+		// its spelling already. The server's stdout is its protocol frames.
+		if cmd.Name() != mcpCommandName {
+			root := cmd.Root()
+			root.SetOut(cliOut(root, root.OutOrStdout()))
+		}
 		return nil
 	},
 
@@ -110,6 +109,39 @@ func requireStreams(stdout, stderr io.Writer, verb string) error {
 	return nil
 }
 
+// rootLong is the root command's shared help body.
+var rootLong = `kbase builds a knowledge base (KB) from LaTeX and maintains it. build takes
+volume roots — the top .tex file of each paper — and makes a KB at kb-root/
+beside the repository's .git: the Markdown document tree and its records,
+under .index/; init creates one empty instead. The write ops change the KB,
+each an entry of a write batch, and the queries read it. verify checks it,
+update-format converts it to the current format and re-derives it, and
+export-latex writes it out as LaTeX. score asks the scoring model, one item
+per ask, for each rigor and bearing a model judges that is not manually scored
+and not yet judged against its current text. build and score run in the foreground;
+status and cancel follow and stop either kind of run, and build-trail lists
+the build's stage boundaries. show-config reports how the
+provider and model configuration resolves; models, configure-providers and
+configure-models choose it, and probe asks one model one question.
+
+Three commands are CLI-only, served by no MCP tool: auth stores, lists and
+removes a provider's API key, which never travels through MCP; wait blocks
+until a run ends, which an MCP call cannot; and mcp is the server itself.
+help and completion are the CLI framework's own. Every other command is an
+MCP tool or an op of the write or query tool.
+
+` + mcp.EdgeDirection + `
+
+Every subcommand writes one YAML document to stdout, its outcome first, and
+nothing else; stderr is for humans. The exit code follows the outcome: 0 for
+done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.
+
+` + queryHelp + `
+
+` + listQueryHelp + `
+
+` + valuesHelp
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&flagConfigDir, "config-dir", "",
 		"the only configuration directory read (default: $"+config.EnvConfigDir+", else <repository>/"+config.RepositoryDirName+" over ~/.config/kbase)")
@@ -131,9 +163,29 @@ func init() {
 	// render the version string twice over.
 	rootCmd.Version = version.Current
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
+	// cobra adds --version at Execute; adding it here puts it in the root's
+	// argument list wherever that list is rendered.
+	rootCmd.InitDefaultVersionFlag()
+
+	// Every command's --help, cobra's help command included, prints
+	// mcp.CLIHelp in place of cobra's template.
+	rootCmd.SetHelpFunc(func(c *cobra.Command, _ []string) {
+		help, err := mcp.CLIHelp(c)
+		if err == nil {
+			_, err = fmt.Fprint(c.OutOrStdout(), help)
+		}
+		if err != nil {
+			c.PrintErrln(err)
+		}
+	})
 }
 
 func main() {
+	stdout := io.Writer(os.Stdout)
+	if os.Getenv(mcp.SurfaceEnv) == mcp.SurfaceMCP {
+		stdout = toolresult.Spelled(stdout, mcp.Spelling(rootCmd, true))
+	}
+	rootCmd.SetOut(stdout)
 	err := rootCmd.Execute()
 
 	// The log file outlives Execute by exactly this much: closing it is
@@ -145,7 +197,18 @@ func main() {
 		}
 	}
 
-	os.Exit(exitStatus(err, os.Stdout, os.Stderr))
+	os.Exit(exitStatus(err, stdout, os.Stderr))
+}
+
+// documentOut is w as a verb's result document reaches its reader: spelled as
+// the command line takes an argument, unless the call w answers came in over
+// MCP, which settled its spelling where it came in.
+func documentOut(w io.Writer) io.Writer { return cliOut(rootCmd, w) }
+
+// cliOut is w spelling for the command line, from the tree under root, unless
+// it carries a spelling already.
+func cliOut(root *cobra.Command, w io.Writer) io.Writer {
+	return toolresult.Spelled(w, mcp.Spelling(root, false))
 }
 
 // exitStatus is the process exit code for what Execute returned. An error no
@@ -166,9 +229,9 @@ func exitStatus(err error, stdout, stderr io.Writer) int {
 	if errors.As(err, &refusal) {
 		outcome, fields = refused(nil, refusal...)
 	} else {
-		outcome, fields = refused(nil, toolresult.Item{Check: checkUsage, Detail: err.Error()})
+		outcome, fields = refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Detail: err.Error()})
 	}
-	if eerr := toolresult.Emit(stdout, outcome, fields...); eerr != nil {
+	if eerr := toolresult.Emit(documentOut(stdout), outcome, fields...); eerr != nil {
 		fmt.Fprintf(stderr, "error: writing the result: %v\n", eerr)
 	}
 	return toolresult.ExitCode(outcome)

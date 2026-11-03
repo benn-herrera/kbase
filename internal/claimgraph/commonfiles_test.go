@@ -257,9 +257,10 @@ func TestAStageWritesNoCommonFileWhileItAsks(t *testing.T) {
 	}
 }
 
-// TestDiscoveredLandsAsTheLeavesOneByOne: two leaves whose claims take the
-// same title, landed in one insert batch, leave the kb-root/ and the
-// node-pass record that landing them one leaf at a time leaves, modulo ids.
+// TestDiscoveredLandsAsTheLeavesOneByOne: two leaves whose claims read the
+// same title, landed in one batch, leave the kb-root/ and the node-pass record
+// that landing them one leaf at a time leaves, modulo ids: one claim per leaf,
+// the second leaf's title made unique within the kind.
 func TestDiscoveredLandsAsTheLeavesOneByOne(t *testing.T) {
 	claim := func(_ context.Context, q asks.MultichoiceQuestion) (asks.Reply, error) {
 		return asks.Reply{Text: asks.LetterClaim}, nil
@@ -296,7 +297,12 @@ func TestDiscoveredLandsAsTheLeavesOneByOne(t *testing.T) {
 		}
 	}
 	g := loadRecords(t, filepath.Join(batch, kb.KBDir))
-	if len(g.Claims) != 2 || g.Claims[0].Title != g.Claims[1].Title {
-		t.Errorf("the batch minted %+v, want one claim per leaf under one title", g.Claims)
+	titles := []string{}
+	for _, n := range g.Claims {
+		titles = append(titles, n.Title)
+	}
+	slices.Sort(titles)
+	if len(titles) != 2 || titles[1] != titles[0]+" (2)" {
+		t.Errorf("the batch minted %+v, want one claim per leaf, the second titled as the first with (2) after it", g.Claims)
 	}
 }

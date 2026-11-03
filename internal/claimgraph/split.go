@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/records"
 	"kbase/internal/write"
@@ -35,8 +34,9 @@ type splitPlan struct {
 
 // Split is the analysis split: each claim whose bounds — its own block or
 // paragraph and the proofs establishing it — hold text beyond its statement
-// proper gets an analysis carrying the rest, all issued in one split-claim
-// batch, then the gate. It asks nothing.
+// proper gets an analysis carrying the rest, titled as its claim and unique
+// among the KB's analyses, all issued in one split-claim batch, then the gate.
+// It asks nothing.
 func Split(opts Options) (Report, error) {
 	return run(opts, func(t *Tree, recs []records.Record, w writer) ([]Finding, error) {
 		if err := passTwoGate(t); err != nil {
@@ -51,10 +51,19 @@ func Split(opts Options) (Report, error) {
 			return nil, err
 		}
 		p := planSplits(t, g, &inv)
+		held, err := kb.LoadGraph(builtTree(w.kbRoot))
+		if err != nil {
+			return nil, err
+		}
+		taken := map[string]bool{}
+		for _, n := range held.Analyses {
+			taken[n.Title] = true
+		}
 		ownText := 0
 		vs := make(values, len(p.entries))
 		for i, e := range p.entries {
-			title := kb.RebaseInlineLinks(e.claim.Title, path.Dir(index.RegisterPage(e.claim.Document, t.volumes)), path.Dir(index.RegisterPage(e.document, t.volumes)))
+			title := uniqueTitle(kb.NormalizeSpace(kb.RebaseInlineLinks(e.claim.Title, path.Dir(kb.SummaryPage(e.claim.Document, t.volumes)),
+				path.Dir(kb.SummaryPage(e.document, t.volumes)))), taken)
 			rationale := splitProofRationale(e.document)
 			if !e.atProof {
 				ownText++

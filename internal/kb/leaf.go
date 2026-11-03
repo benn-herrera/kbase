@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"kbase/internal/formats/format300"
 )
 
 // MalformedError is authored metadata no reader can take: refresh and verify
@@ -22,35 +20,25 @@ func malformed(format string, args ...any) error {
 }
 
 var (
-	statementMarkerRE = format300.StatementMarkerRE
-	headingLineRE     = PyRE(`^(#{1,6})\s+(.*)$`)
-	axiomHeading      = PyRE(`^### Axiom (` + AxiomLabel + `):\s*(.+)$`)
-	anyHeadingRE      = PyRE(`^(#{1,6})\s`)
+	headingLineRE = PyRE(`^(#{1,6})\s+(.*)$`)
+	anyHeadingRE  = PyRE(`^(#{1,6})\s`)
 )
 
-// The frontmatter keys a leaf's node declaration carries besides its id, its
-// status and its local value (RigorKey): the pair lists an analysis or
-// experiment authors on the source.
-const (
-	LiftsKey   = "lifts"
-	RefutesKey = "refutes"
-)
-
-// statementMarker is one node id a statement marker names, and the 0-based
-// line the marker opens on.
+// statementMarker is one node id a statement marker names, the 0-based line
+// the marker opens on, and the byte offset in its text it opens at.
 type statementMarker struct {
-	id   string
-	line int
+	id           string
+	line, offset int
 }
 
-// statementMarkers is every node id the statement markers in text name, in
-// text order.
+// statementMarkers is every hosted node id the statement markers in text
+// name, in text order: a work's or an axiom's id in a marker hosts nothing.
 func statementMarkers(text string) []statementMarker {
 	var out []statementMarker
-	for _, m := range statementMarkerRE.FindAllStringSubmatchIndex(text, -1) {
+	for _, m := range StatementMarkerRE.FindAllStringSubmatchIndex(text, -1) {
 		line := strings.Count(text[:m[0]], "\n")
-		for _, id := range NodeIDs(text[m[2]:m[3]]) {
-			out = append(out, statementMarker{id, line})
+		for _, id := range hostedIDs(text[m[2]:m[3]]) {
+			out = append(out, statementMarker{id, line, m[0]})
 		}
 	}
 	return out
@@ -59,10 +47,23 @@ func statementMarkers(text string) []statementMarker {
 // MarkerLines is, for every node id a statement marker in text names, the
 // 0-based line the first such marker opens on.
 func MarkerLines(text string) map[string]int {
+	return firstMarkers(text, func(m statementMarker) int { return m.line })
+}
+
+// MarkerOffsets is, for every node id a statement marker in text names, the
+// byte offset the first such marker opens at: the order markers are read in,
+// two on one line among them.
+func MarkerOffsets(text string) map[string]int {
+	return firstMarkers(text, func(m statementMarker) int { return m.offset })
+}
+
+// firstMarkers is at of the first statement marker naming each node id of
+// text.
+func firstMarkers(text string, at func(statementMarker) int) map[string]int {
 	out := map[string]int{}
 	for _, m := range statementMarkers(text) {
 		if _, seen := out[m.id]; !seen {
-			out[m.id] = m.line
+			out[m.id] = at(m)
 		}
 	}
 	return out
@@ -75,11 +76,12 @@ type LineMarker struct {
 	Start, End int
 }
 
-// LineMarkers is every statement marker on one line, in order.
+// LineMarkers is every statement marker on one line naming a hosted node, in
+// order.
 func LineMarkers(line string) []LineMarker {
 	var out []LineMarker
-	for _, m := range statementMarkerRE.FindAllStringSubmatchIndex(line, -1) {
-		for _, id := range NodeIDs(line[m[2]:m[3]]) {
+	for _, m := range StatementMarkerRE.FindAllStringSubmatchIndex(line, -1) {
+		for _, id := range hostedIDs(line[m[2]:m[3]]) {
 			out = append(out, LineMarker{id, m[0], m[1]})
 		}
 	}
@@ -87,7 +89,7 @@ func LineMarkers(line string) []LineMarker {
 }
 
 // markedSpanRE is one statement marker with the spaces and tabs before it.
-var markedSpanRE = regexp.MustCompile(`[ \t]*` + statementMarkerRE.String())
+var markedSpanRE = regexp.MustCompile(`[ \t]*` + StatementMarkerRE.String())
 
 // StripLineMarkers is line with every statement marker removed, each taking
 // the spaces and tabs before it; nothing else changes. A marker naming several
@@ -157,32 +159,86 @@ func FirstHeading(text string) string {
 	return ""
 }
 
-// AxiomHeading is one "### Axiom <label>: <title>" heading of axioms.md: the
-// label, the title, and the heading's 1-based line.
+// AxiomHeading is one axiom heading of axioms.md: the axiom id its marker
+// names, "" where it carries none; its text after its #s, its markers removed;
+// and its 1-based line.
 type AxiomHeading struct {
-	Label, Title string
-	Line         int
+	ID, Text string
+	Line     int
 }
 
-// AxiomHeadings is every axiom heading of text, outside code, in text order.
+// AxiomHeadingLine is the heading of the axiom id of label and title, its
+// marker ending it.
+func AxiomHeadingLine(label, title, id string) string {
+	return "### " + AxiomHeadingText(label, title) + StatementMarker(id)
+}
+
+// AxiomHeadingText is the text of the axiom heading of label and title, after
+// its `###`.
+func AxiomHeadingText(label, title string) string { return "Axiom " + label + ": " + title }
+
+var axiomIDRE = PyRE(IDBody(AxiomPrefix))
+
+// AxiomHeadings is every axiom heading of text, outside code, in text order:
+// one per axiom id a heading's markers name, and every unmarked heading
+// opening "### Axiom ", whose ID is "".
 func AxiomHeadings(text string) []AxiomHeading {
 	var out []AxiomHeading
 	for i, line := range scrubbedLines(text) {
-		if m := axiomHeading.FindStringSubmatch(line); m != nil {
-			out = append(out, AxiomHeading{Label: m[1], Title: Strip(m[2]), Line: i + 1})
+		m := headingLineRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		heading := Strip(StripLineMarkers(m[2]))
+		var ids []string
+		for _, mk := range StatementMarkerRE.FindAllStringSubmatch(line, -1) {
+			ids = append(ids, findAllBounded(axiomIDRE, mk[1])...)
+		}
+		for _, id := range ids {
+			out = append(out, AxiomHeading{ID: id, Text: heading, Line: i + 1})
+		}
+		if len(ids) == 0 && strings.HasPrefix(line, "### Axiom ") {
+			out = append(out, AxiomHeading{Text: heading, Line: i + 1})
 		}
 	}
 	return out
 }
 
-// AnchorSection is the code-stripped body of the section whose heading
-// slugifies to anchor, up to the next heading as deep or shallower; ok is
-// false where no heading anchors there.
+// AxiomAnchor is the anchor of the first heading of text, axioms.md, carrying
+// the axiom id's marker; ok false where none does.
+func AxiomAnchor(text, id string) (string, bool) {
+	for _, h := range AxiomHeadings(text) {
+		if h.ID == id {
+			return HeadingAnchors(text)[h.Line-1], true
+		}
+	}
+	return "", false
+}
+
+// HeadingAnchors is the anchor of every heading of text, by 0-based line of
+// its str.splitlines() lines, as GitHub's slugger gives them in document
+// order: a line of a fenced block is no heading, and an HTML comment — a
+// statement marker among them — is no part of a heading's text.
+func HeadingAnchors(text string) map[int]string {
+	var s Slugger
+	out := map[int]string{}
+	for i, line := range blankFenced(SplitLines(text)) {
+		if m := headingLineRE.FindStringSubmatch(line); m != nil {
+			out[i] = s.Slug(m[2])
+		}
+	}
+	return out
+}
+
+// AnchorSection is the code-stripped body of the first section whose heading
+// anchors at anchor (HeadingAnchors), up to the next heading as deep or
+// shallower; ok is false where no heading anchors there.
 func AnchorSection(text, anchor string) (string, bool) {
+	anchors := HeadingAnchors(text)
 	lines := strings.Split(StripCodeSplitLines(text), "\n")
 	for i, line := range lines {
 		h := anyHeadingRE.FindStringSubmatch(line)
-		if h == nil || Slugify(Strip(line[len(h[1]):])) != anchor {
+		if a, ok := anchors[i]; h == nil || !ok || a != anchor {
 			continue
 		}
 		var body []string

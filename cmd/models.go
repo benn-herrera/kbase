@@ -5,14 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/mcp"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
 )
@@ -29,8 +30,8 @@ type modelsOptions struct {
 
 // runModels selects a provider from the loaded pool, fetches its model
 // catalogue, writes the result document — the ids sorted ascending — and
-// returns the exit code its outcome maps to. Warnings and a one-line summary
-// go to Stderr.
+// returns the exit code its outcome maps to. The pool's faults are the
+// result's warnings and lines on Stderr; a one-line summary goes to Stderr.
 func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "models"); err != nil {
 		return 0, err
@@ -40,13 +41,10 @@ func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 }
 
 func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.Field) {
-	env := config.EnvOverrides(os.Getenv)
-	s := opts.inputs(env)
-	warnFaults(opts.Stderr, opts.Faults)
-	supersededProvider(opts.Stderr, opts.Config)
-	name, rule, err := config.Select(s, opts.Provider)
+	warnings := warningsField(warnFaults(opts.Stderr, opts.Faults))
+	name, rule, err := config.Select(opts.inputs(), opts.Provider)
 	if err != nil {
-		return refusedOrFailed(nil, err)
+		return refusedOrFailed([]toolresult.Field{warnings}, err)
 	}
 	reg := modelclient.New(opts.NewClient, opts.Logger, "", 0)
 	defer reg.CloseAll()
@@ -62,14 +60,14 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	ids, err := reg.Catalogue(callCtx, entry)
 	var refusal toolresult.Refusal
 	if errors.As(err, &refusal) {
-		return refused(nil, refusal...)
+		return refused([]toolresult.Field{warnings}, refusal...)
 	}
 	if err != nil {
-		return failed(fields, err)
+		return failed(append(fields, warnings), err)
 	}
 	slices.Sort(ids)
 	fmt.Fprintf(opts.Stderr, "models ok: %s count=%d elapsed=%s\n", name, len(ids), time.Since(start).Round(time.Millisecond))
-	return toolresult.Done, append(fields, toolresult.Field{Key: "models", Value: nonNil(ids)})
+	return toolresult.Done, append(fields, toolresult.Field{Key: "models", Value: nonNil(ids)}, warnings)
 }
 
 var (
@@ -77,18 +75,21 @@ var (
 	modelsFlagTimeout  time.Duration
 )
 
-var modelsCmd = &cobra.Command{
+var modelsCmd = mcp.Notes(&cobra.Command{
 	Use:   "models",
 	Short: "list the models a configured provider exposes",
-	Long: `Query a provider's /models endpoint and write its model identifiers,
-sorted ascending, as one YAML document on stdout.
+	Long: `Query a provider's /models endpoint and give its model identifiers, sorted
+ascending, as its result.
 
-The provider is --provider, else the sole entry in providers.toml — with
-several entries declared and none chosen, the command refuses, listing them,
-rather than picking one. config.toml names no entry: its provider key is
-superseded, and each role names its own entry in its own model reference. Pool
-entries that failed to load are reported as warnings, and a summary line
-(provider, count, elapsed) is written to stderr.`,
+The provider is ` + argmark.Flag("provider") + `, else the only provider in providers.toml — with
+several providers declared and none chosen, the command refuses, listing them,
+rather than picking one. config.toml names no provider here: each role names
+its own provider in its own model reference. Each configuration fault — a
+provider whose table failed to load, a provider that loaded despite a fault in
+its key file, a credentials store directory that did not list — is an item of
+the result's "warnings": "path" the file or directory it is against, "detail"
+what is wrong. "warnings" is empty where there are none, and is carried
+whatever the outcome, refusals included.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)
@@ -114,7 +115,7 @@ entries that failed to load are reported as warnings, and a summary line
 		}
 		return nil
 	},
-}
+}, "", `A summary line (provider, count, elapsed) is written to stderr.`)
 
 func init() {
 	registerProviderFlags(modelsCmd, &modelsFlagProvider, &modelsFlagTimeout, "query")

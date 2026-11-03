@@ -25,7 +25,7 @@ type GraphFault struct {
 	Check, Path string
 	Line        int
 	Key         string
-	Allowed     string
+	Allowed     []string
 	Remedy      string
 	Detail      string
 }
@@ -73,7 +73,7 @@ type graphSink struct {
 	faults *[]GraphFault
 }
 
-func (s *graphSink) add(line int, key, allowed, format string, args ...any) {
+func (s *graphSink) add(line int, key string, allowed []string, format string, args ...any) {
 	*s.faults = append(*s.faults, GraphFault{Check: CheckMetadata, Path: s.rel, Line: line, Key: key, Allowed: allowed,
 		Detail: fmt.Sprintf(format, args...)})
 }
@@ -91,36 +91,36 @@ func parseGraphFile(data []byte, sink *graphSink) (records []graphRecord, ok boo
 			line, _ = strconv.Atoi(m[1])
 		}
 		if errors.Is(err, io.EOF) {
-			sink.add(line, "", "", "holds no YAML document; a file with no records is []")
+			sink.add(line, "", nil, "holds no YAML document; a file with no records is []")
 		} else {
-			sink.add(line, "", "", "does not parse as YAML: %v", err)
+			sink.add(line, "", nil, "does not parse as YAML: %v", err)
 		}
 		return nil, false
 	}
 	var more yaml.Node
 	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
-		sink.add(more.Line, "", "", "holds more than one YAML document")
+		sink.add(more.Line, "", nil, "holds more than one YAML document")
 		return nil, false
 	}
 	root := doc.Content[0]
 	if root.Kind != yaml.SequenceNode {
-		sink.add(root.Line, "", "", "is not a list of records")
+		sink.add(root.Line, "", nil, "is not a list of records")
 		return nil, false
 	}
 	for _, item := range root.Content {
 		if item.Kind != yaml.MappingNode {
-			sink.add(item.Line, "", "", "a record that is not a mapping of fields to values")
+			sink.add(item.Line, "", nil, "a record that is not a mapping of fields to values")
 			continue
 		}
 		r := graphRecord{line: item.Line, keys: map[string]*yaml.Node{}, values: map[string]*yaml.Node{}, sink: sink}
 		for i := 0; i+1 < len(item.Content); i += 2 {
 			k, v := item.Content[i], item.Content[i+1]
 			if k.Kind != yaml.ScalarNode {
-				sink.add(k.Line, "", "", "does not parse: a key that is not a string")
+				sink.add(k.Line, "", nil, "does not parse: a key that is not a string")
 				return nil, false
 			}
 			if _, twice := r.values[k.Value]; twice {
-				sink.add(k.Line, k.Value, "", "does not parse: field %q repeats in one record", k.Value)
+				sink.add(k.Line, k.Value, nil, "does not parse: field %q repeats in one record", k.Value)
 				return nil, false
 			}
 			r.order = append(r.order, k.Value)
@@ -145,18 +145,18 @@ type graphRecord struct {
 func (r graphRecord) fields(want []string) {
 	for _, k := range r.order {
 		if !slices.Contains(want, k) {
-			r.sink.add(r.keys[k].Line, k, strings.Join(want, ", "), "unknown field %q", k)
+			r.sink.add(r.keys[k].Line, k, want, "unknown field %q", k)
 		}
 	}
 	for _, k := range want {
 		if _, ok := r.values[k]; !ok {
-			r.sink.add(r.line, k, "", "missing field %q; an empty value is spelled \"\" or []", k)
+			r.sink.add(r.line, k, nil, "missing field %q; an empty value is spelled \"\" or []", k)
 		}
 	}
 }
 
 func (r graphRecord) wrongType(n *yaml.Node, key, expected string) {
-	r.sink.add(n.Line, key, "", "%s is %s, not %s", key, describeNode(n), expected)
+	r.sink.add(n.Line, key, nil, "%s is %s, not %s", key, describeNode(n), expected)
 }
 
 func describeNode(n *yaml.Node) string {
@@ -176,7 +176,7 @@ func isStringNode(n *yaml.Node) bool { return n.Kind == yaml.ScalarNode && n.Sho
 // oneLine is v where it holds no line break; a fault otherwise.
 func (r graphRecord) oneLine(n *yaml.Node, key string) string {
 	if strings.ContainsAny(n.Value, "\n\r") {
-		r.sink.add(n.Line, key, "", "%s holds a line break; a record's string is one line", key)
+		r.sink.add(n.Line, key, nil, "%s holds a line break; a record's string is one line", key)
 	}
 	return n.Value
 }
@@ -197,7 +197,7 @@ func (r graphRecord) str(key string) string {
 func (r graphRecord) title() string {
 	t := r.str(fieldTitle)
 	if n, ok := r.values[fieldTitle]; ok && isStringNode(n) && t == "" {
-		r.sink.add(n.Line, fieldTitle, "", "title is empty; a node's title is a non-empty line")
+		r.sink.add(n.Line, fieldTitle, nil, "title is empty; a node's title is a non-empty line")
 	}
 	return t
 }
@@ -206,7 +206,7 @@ func (r graphRecord) title() string {
 func (r graphRecord) oneOf(key string, allowed []string) string {
 	v := r.str(key)
 	if n, ok := r.values[key]; ok && isStringNode(n) && !slices.Contains(allowed, v) {
-		r.sink.add(n.Line, key, strings.Join(allowed, ", "), "%s %q is none of the values it takes", key, v)
+		r.sink.add(n.Line, key, allowed, "%s %q is none of the values it takes", key, v)
 		return ""
 	}
 	return v
@@ -249,7 +249,7 @@ func (r graphRecord) list(key string) []string {
 // decoder checks a bearing against and scoreDomain states.
 const domainTop = 1.0
 
-// scoreDomain is the closed set a rigor and a bearing are written from.
+// scoreDomain is the domain a rigor and a bearing are written from.
 var scoreDomain = fmt.Sprintf("a number in [0, %s], or %q", strings.TrimSuffix(PyFloatRepr(domainTop), ".0"), PendingLiteral)
 
 // score is a number-or-pending field: its number, or pending; ok false where
@@ -260,18 +260,18 @@ func (r graphRecord) score(key string, top float64) (v float64, pending, ok bool
 	if !present {
 		return 0, false, false
 	}
-	allowed := scoreDomain
+	expected := scoreDomain
 	switch {
 	case isStringNode(n) && n.Value == PendingLiteral:
 		return 0, true, true
 	case n.Kind == yaml.ScalarNode && (n.ShortTag() == "!!int" || n.ShortTag() == "!!float"):
 		if err := n.Decode(&v); err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > top {
-			r.sink.add(n.Line, key, allowed, "%s %s is outside its domain", key, n.Value)
+			r.sink.add(n.Line, key, nil, "%s %s is outside its domain: %s", key, n.Value, scoreDomain)
 			return 0, false, false
 		}
 		return v, false, true
 	}
-	r.wrongType(n, key, allowed)
+	r.wrongType(n, key, expected)
 	return 0, false, false
 }
 
@@ -299,7 +299,7 @@ func (r graphRecord) endID(key string) (id, kind string) {
 	}
 	kind, inGrammar := NodeIDKind(id)
 	if !inGrammar {
-		r.sink.add(n.Line, key, "", "%s %q is outside its kind's id grammar", key, id)
+		r.sink.add(n.Line, key, nil, "%s %q is outside its kind's id grammar", key, id)
 		return id, ""
 	}
 	return id, kind
@@ -309,7 +309,7 @@ func decodeNodes(records []graphRecord, g *Graph) {
 	seen := map[string]int{}
 	for _, r := range records {
 		if _, ok := r.values[fieldID]; !ok {
-			r.sink.add(r.line, fieldID, "", "missing field %q", fieldID)
+			r.sink.add(r.line, fieldID, nil, "missing field %q", fieldID)
 			continue
 		}
 		id, kind := r.endID(fieldID)
@@ -318,7 +318,7 @@ func decodeNodes(records []graphRecord, g *Graph) {
 		}
 		r.fields(nodeFields[kind])
 		if first, twice := seen[id]; twice {
-			r.sink.add(r.keys[fieldID].Line, fieldID, "", "node id %q repeats; its first record opens on line %d", id, first)
+			r.sink.add(r.keys[fieldID].Line, fieldID, nil, "node id %q repeats; its first record opens on line %d", id, first)
 		} else {
 			seen[id] = r.line
 		}
@@ -347,13 +347,13 @@ func (r graphRecord) pairing(relation, sourceKind, targetKind string) {
 	if relation == "" || sourceKind == "" || targetKind == "" || BearingLegal(relation, sourceKind, targetKind) {
 		return
 	}
-	r.sink.add(r.line, fieldRelation, "", "%s does not join a %s source to a %s target", relation, sourceKind, targetKind)
+	r.sink.add(r.line, fieldRelation, nil, "%s does not join a %s source to a %s target", relation, sourceKind, targetKind)
 }
 
 func decodeEdges(records []graphRecord, g *Graph) {
 	for _, r := range records {
 		if _, ok := r.values[fieldRelation]; !ok {
-			r.sink.add(r.line, fieldRelation, "", "missing field %q", fieldRelation)
+			r.sink.add(r.line, fieldRelation, nil, "missing field %q", fieldRelation)
 			continue
 		}
 		relation := r.oneOf(fieldRelation, Relations)

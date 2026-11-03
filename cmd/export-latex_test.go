@@ -14,6 +14,7 @@ import (
 	"kbase/internal/export"
 	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
+	toolresult "kbase/internal/result"
 )
 
 // exportDir is a repository holding a stamped KB of two volumes, the first
@@ -87,20 +88,32 @@ func requirePandoc(t *testing.T) {
 	}
 }
 
-// TestExportLatexRefusesUnknownVolumes: every --volume naming no volume of
-// the entry point's list is one usage item, and nothing is written.
-func TestExportLatexRefusesUnknownVolumes(t *testing.T) {
+// TestExportLatexRefusesWhatIsNotAVolume: every --volume that is not a
+// volume — a top-level directory of kb-root/ holding an index.md — is one
+// usage item, allowing every volume; a volume the entry point does not list,
+// which the export does not reach, is refused too; nothing is written.
+func TestExportLatexRefusesWhatIsNotAVolume(t *testing.T) {
 	dir := exportDir(t)
-	out, code := kbase(t, dir, "export-latex", "--volume", "vol2", "--volume", "nope", "--volume", "vol9")
+	writeFileAt(t, filepath.Join(dir, kb.KBDir), "vol3/index.md", "[↑ Sample KB](../entry-point.md)\n\n# Third Volume\n")
+	writeFileAt(t, filepath.Join(dir, kb.KBDir), "loose/notes.md", "# Notes\n")
+	out, code := kbase(t, dir, "export-latex", "--volume", "vol2", "--volume", "nope", "--volume", "loose", "--volume", "vol1/sub")
 	d := checkDocument(t, "export-latex", out)
 	items := d.items("refusals")
-	if code != 1 || d.Outcome != "refused" || len(items) != 2 {
+	if code != 1 || d.Outcome != "refused" || len(items) != 3 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	for i, name := range []string{"nope", "vol9"} {
-		if items[i]["check"] != checkUsage || items[i]["key"] != "--volume" || !strings.Contains(items[i]["detail"].(string), name) {
-			t.Errorf("item %d %v, want a usage refusal of --volume naming %s", i, items[i], name)
+	for i, name := range []string{"nope", "loose", "vol1/sub"} {
+		if items[i]["check"] != toolresult.CheckUsage || items[i]["key"] != "--volume" ||
+			!strings.Contains(items[i]["detail"].(string), name+" is not a volume") ||
+			!slices.Equal(anyStrings(items[i]["allowed"]), []string{"vol1", "vol2", "vol3"}) {
+			t.Errorf("item %d %v, want a usage refusal of --volume naming %s, allowing every volume", i, items[i], name)
 		}
+	}
+	out, code = kbase(t, dir, "export-latex", "--volume", "vol3")
+	if items := checkDocument(t, "export-latex", out).items("refusals"); code != 1 || len(items) != 1 ||
+		!strings.Contains(items[0]["detail"].(string), "vol3 is a volume the entry point does not list") ||
+		items[0]["remedy"] != "list it there or drop this --volume" {
+		t.Errorf("an unlisted volume: exit %d\n%s", code, out)
 	}
 	if got := dirBytes(t, filepath.Join(dir, exportOutDefault)); len(got) != 0 {
 		t.Errorf("a refused export wrote %v", slices.Sorted(maps.Keys(got)))

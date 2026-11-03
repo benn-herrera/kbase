@@ -85,8 +85,8 @@ func TestRelativeValuesIsTheProjectRoots(t *testing.T) {
 	resetProjectDir(t)
 	repo := realPath(t, maintenanceRepo(t))
 	gitRepo(t, repo)
-	writeValues(t, repo, "values.yaml", "entry:\n- title: A Result\n  rigor: 0.5\n  rationale: Shown.\n")
-	out, _ := kbase(t, filepath.Join(repo, kb.KBDir), "insert-claim-entry", "--no-refresh", "--values", "values.yaml")
+	writeValues(t, repo, "values.yaml", "entry:\n- label: Result2026\n  title: A Result\n  rationale: Shown.\n")
+	out, _ := kbase(t, filepath.Join(repo, kb.KBDir), "add-work", "--values", "values.yaml")
 	if d := parseResult(t, out); d.Outcome != toolresult.Done {
 		t.Errorf("outcome %s, want %s\n%s", d.Outcome, toolresult.Done, out)
 	}

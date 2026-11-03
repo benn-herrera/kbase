@@ -88,9 +88,15 @@ const checkDefaulted = "defaulted"
 func askStop(err error) error {
 	var incomplete asks.IncompleteError
 	if errors.As(err, &incomplete) {
-		return stopf("inference-failed", "%s", incomplete.Error())
+		return inferenceStop(incomplete)
 	}
 	return err
+}
+
+// inferenceStop is the stage stopping on the call that never completed, with
+// the remedy that call's failure names.
+func inferenceStop(incomplete asks.IncompleteError) *stop {
+	return &stop{check: "inference-failed", detail: incomplete.Error(), remedy: incomplete.Remedy}
 }
 
 // askStopWriting is askStop(err), the group records the stopped batch
@@ -580,7 +586,7 @@ func Depends(ctx context.Context, opts Options) (Report, error) {
 			return findings, err
 		}
 		findings = append(findings, classificationFindings(c, opts.asking())...)
-		f, err := w.writeEdges("pass-3-add-rests-on", c.edges, c.refs)
+		f, err := w.writeEdges("pass-3-add-build-edges", c.edges, c.refs)
 		findings = append(findings, f)
 		if err != nil {
 			return findings, err
@@ -614,7 +620,7 @@ func ringRow(w writer) ([]pair, []string, error) {
 	warnings := make([]string, 0, len(items))
 	entries := make([]map[string]any, 0, len(cuts))
 	for i, d := range cuts {
-		entries = append(entries, map[string]any{"id": d.Target, "target": d.Source})
+		entries = append(entries, map[string]any{"source": d.Source, "target": d.Target, "relation": d.Relation})
 		cut = append(cut, pair{d.Target, d.Source})
 		warnings = append(warnings, items[i].Detail)
 	}

@@ -46,26 +46,26 @@ func Status(opts buildstore.MonitorOptions) (string, []result.Field) {
 	if err != nil {
 		return buildstore.MonitorEnd(placement, err)
 	}
-	if runIsLater(started, buildState.Started) {
+	if startedAfter(started, buildState.Started) {
 		return runDocument(stateDir, buildstore.Holder{Run: run, Started: started}, false)
 	}
 	return buildstore.Status(opts)
 }
 
-// runIsLater reports whether a score run's start stamp is later than the
-// build's last invocation's. Two starts that do not parse cannot be ordered, so
-// a missing or unreadable stamp on either side leaves the build the one
-// reported.
-func runIsLater(scoreStart, buildStart string) bool {
-	score, err := time.Parse(time.RFC3339, scoreStart)
+// startedAfter reports whether the start stamp a is later than b. Two starts
+// that do not parse cannot be ordered, so a missing or unreadable stamp on
+// either side is no later start: status then reports the build, and a resume
+// is not refused for one.
+func startedAfter(a, b string) bool {
+	at, err := time.Parse(time.RFC3339, a)
 	if err != nil {
 		return false
 	}
-	build, err := time.Parse(time.RFC3339, buildStart)
+	bt, err := time.Parse(time.RFC3339, b)
 	if err != nil {
 		return false
 	}
-	return score.After(build)
+	return at.After(bt)
 }
 
 // runDocument reports the score run the holder record h names in the state
@@ -109,7 +109,7 @@ func runDocument(stateDir string, h buildstore.Holder, live bool) (string, []res
 	if len(st.Failures) > 0 {
 		fields = append(fields, result.Field{Key: result.FailuresKey, Value: st.Failures})
 	}
-	if state != result.Done && state != result.Bounded && state != buildstore.StateRunning {
+	if state != result.Done && state != buildstore.StateRunning {
 		if resume := doc["resume"]; resume != nil {
 			fields = append(fields, result.Field{Key: "resume", Value: resume})
 		}

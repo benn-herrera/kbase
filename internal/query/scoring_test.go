@@ -14,9 +14,9 @@ func scoringFixture() kb.Graph {
 	supports := scorable(kb.RelationSupports, "clm-aaaaaa", "ana-aaaaaa", 1)
 	supports.Context = "the sentence that marks the dependency"
 	return kb.Graph{
-		Works:       []kb.WorkNode{{ID: "wrk-aaaaaa", Title: "A Work"}},
+		Works:       []kb.WorkNode{{ID: "wrk-aaaaaa", Label: "A", Title: "A Work"}},
 		Claims:      []kb.ClaimNode{claim("clm-aaaaaa", "A Claim")},
-		Axioms:      []kb.AxiomNode{{ID: "axm-aaaaaa", Title: "An Axiom"}},
+		Axioms:      []kb.AxiomNode{{ID: "axm-aaaaaa", Label: "A", Title: "An Axiom"}},
 		Experiments: []kb.ExperimentNode{{ID: "exp-aaaaaa", Title: "An Experiment", Status: kb.ExperimentRun}},
 		Analyses:    []kb.AnalysisNode{{ID: "ana-aaaaaa", Title: "An Analysis"}},
 		Scorable: []kb.ScorableEdge{
@@ -114,14 +114,14 @@ func TestScoringSet(t *testing.T) {
 }
 
 // TestScoringSetExcludesFounds: a founds edge carries a bearing — kb.Scoring
-// says so, and set-bearing writes it — but no pass walks it. Its source is a
+// says so, and edit-edge writes it — but no pass walks it. Its source is a
 // work or an axiom outside the corpus, so the model has only a title to judge
 // the link by, and the value is the user's. The bearing set leaves it out, and
-// so does the both set, from the edge side and from the node side alike: a work
+// so does the all set, from the edge side and from the node side alike: a work
 // and an axiom are no rigor subject either.
 func TestScoringSetExcludesFounds(t *testing.T) {
 	ix := load(t, scoringFixture())
-	for _, pass := range []string{PassBearing, PassBoth} {
+	for _, pass := range []string{PassBearing, PassAll} {
 		for _, it := range scoringItems(t, ix, pass) {
 			switch {
 			case it.Edge != nil && it.Edge.Relation == kb.RelationFounds:

@@ -79,20 +79,6 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
-func TestSlugify(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"Solidity — the dep gate", "solidity-the-dep-gate"},
-		{"Rule : applied", "rule-applied"},
-		{"INVARIANT-S2: Axiom numbering", "invariant-s2-axiom-numbering"},
-		{"  Ünïcode Wörds_ok ", "ünïcode-wörds_ok"},
-		{"(Parenthesised) Title!", "parenthesised-title"},
-	} {
-		if got := Slugify(tc.in); got != tc.want {
-			t.Errorf("Slugify(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestWordBoundedIDs(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
@@ -109,26 +95,23 @@ func TestWordBoundedIDs(t *testing.T) {
 	}
 }
 
-func TestWorkKey(t *testing.T) {
-	for id, want := range map[string]string{"wrk-smith2020": "smith2020", "work-smith2020": "", "clm-aaaaaa": ""} {
-		if got := WorkKey(id); got != want {
-			t.Errorf("WorkKey(%q) = %q, want %q", id, got, want)
-		}
-	}
-}
-
-// TestIDKinds: the minted kinds are clm, exp and ana; an ana- id is a node and
-// a sup- id is not.
+// TestIDKinds: every kind's id is minted, clm, exp, ana, wrk and axm alike;
+// an ana- id is a node and a sup- id is not, and a 3.0.0 work or axiom id,
+// its key or label after the prefix, is none.
 func TestIDKinds(t *testing.T) {
-	if !slices.Equal(IDKinds, []string{"clm", "exp", "ana"}) {
+	if !slices.Equal(IDKinds, []string{"clm", "exp", "ana", "wrk", "axm"}) {
 		t.Errorf("IDKinds = %q", IDKinds)
 	}
-	if !IDPlaceholders["ana-xxxxxx"] || IDPlaceholders["sup-xxxxxx"] {
+	if !IDPlaceholders["ana-xxxxxx"] || !IDPlaceholders["wrk-xxxxxx"] || IDPlaceholders["sup-xxxxxx"] {
 		t.Errorf("IDPlaceholders = %v", IDPlaceholders)
+	}
+	if got := NodeIDs("cites wrk-a00000, axm-b00000 and clm-c00000; not wrk-Smith2020"); !slices.Equal(got,
+		[]string{"wrk-a00000", "axm-b00000", "clm-c00000"}) {
+		t.Errorf("NodeIDs = %q, want every kind's", got)
 	}
 	body := PyRE(`^` + IDBody() + `$`)
 	for id, want := range map[string]bool{"clm-aaaaaa": true, "exp-aaaaaa": true, "ana-aaaaaa": true,
-		"sup-aaaaaa": false, "ana-AAAAAA": false, "wrk-smith2020": false} {
+		"wrk-aaaaaa": true, "axm-aaaaaa": true, "sup-aaaaaa": false, "ana-AAAAAA": false, "wrk-smith2020": false, "axm-S1": false} {
 		if got := body.MatchString(id); got != want {
 			t.Errorf("IDBody() matches %q = %t, want %t", id, got, want)
 		}
@@ -143,6 +126,19 @@ func TestIDKinds(t *testing.T) {
 		if kind == "support" || kind == "invariant" || kind == "framework" {
 			t.Errorf("NodeKinds carries the retired word %q", kind)
 		}
+	}
+}
+
+// TestKindWithArticle: every node kind has a phrase naming one of it, ending
+// in the kind, and an axiom's takes "an".
+func TestKindWithArticle(t *testing.T) {
+	for _, kind := range NodeKinds {
+		if got := KindWithArticle(kind); got == "" || !strings.HasSuffix(got, " "+kind) {
+			t.Errorf("KindWithArticle(%q) = %q, want a phrase ending in the kind", kind, got)
+		}
+	}
+	if got := KindWithArticle(NodeKindAxiom); got != "an axiom" {
+		t.Errorf("KindWithArticle(axiom) = %q, want \"an axiom\"", got)
 	}
 }
 
@@ -255,12 +251,14 @@ func TestFrontmatterRecognition(t *testing.T) {
 	}
 }
 
-// TestAxiomHeadings: each "### Axiom <label>: <title>" heading outside code is
-// read with its label, its title trimmed and its 1-based line; a heading of
-// another depth or form, or one inside a fence, is none.
+// TestAxiomHeadings: a heading outside code carrying an axiom's marker is that
+// axiom's, at any depth, read with its text, markers removed and trimmed, and
+// its 1-based line; an unmarked "### Axiom " heading is read with no id; an
+// unmarked heading of another depth or form, or one inside a fence, is none.
 func TestAxiomHeadings(t *testing.T) {
-	text := "# Axioms\n\n### Axiom S1: The rule  \n\nBody.\n\n```\n### Axiom S2: Fenced\n```\n\n## Axiom S3: Too shallow\n\n### Axiom 4.b: Another\n"
-	want := []AxiomHeading{{"S1", "The rule", 3}, {"4.b", "Another", 13}}
+	text := "# Axioms\n\n### Axiom S1: The rule  \n\nBody.\n\n```\n### Axiom S2: Fenced<!-- kbase-id: axm-s20000 -->\n```\n\n" +
+		"## Axiom S3: Too shallow\n\n### Axiom 4.b: Another<!-- kbase-id: axm-4b0000 -->\n\n## Axiom S5: Marked shallow<!-- kbase-id: axm-s50000 -->\n"
+	want := []AxiomHeading{{"", "Axiom S1: The rule", 3}, {"axm-4b0000", "Axiom 4.b: Another", 13}, {"axm-s50000", "Axiom S5: Marked shallow", 15}}
 	if got := AxiomHeadings(text); !slices.Equal(got, want) {
 		t.Errorf("headings = %+v, want %+v", got, want)
 	}

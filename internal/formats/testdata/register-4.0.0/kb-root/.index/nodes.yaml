@@ -1,0 +1,71 @@
+- id: "ana-aaaaaa"
+  title: "A Supporting Lemma"
+  rigor: 0.8
+  manually-scored: false
+  rationale: "Derives the beneficiary result in full."
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "ana-aaaaab"
+  title: "Regime Conservation Laws"
+  rigor: 0.85
+  manually-scored: false
+  rationale: "CES asymptotics applied with an explicit exponent formula."
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "ana-bbbbbb"
+  title: "A Leaf"
+  rigor: "*pending*"
+  manually-scored: false
+  rationale: ""
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "ana-bbbbbc"
+  title: "Foundation Claim B"
+  rigor: 0.9
+  manually-scored: false
+  rationale: "One bullet names two claims; the next a claim and a work."
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "ana-cccccc"
+  title: "A Second Claim"
+  rigor: 0.6
+  manually-scored: false
+  rationale: "An indented score line and a key of another kind."
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "axm-37bekj"
+  label: "S3"
+  title: "A labelling convention"
+- id: "axm-kbrt32"
+  label: "1"
+  title: "Substrate Topology"
+- id: "clm-aaaaaa"
+  title: "Regime Conservation Laws"
+  rigor: 0.85
+  manually-scored: false
+  rationale: ""
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "clm-bbbbbb"
+  title: "Foundation Claim B"
+  rigor: 0.9
+  manually-scored: false
+  rationale: ""
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "clm-cccccc"
+  title: "A Second Claim"
+  rigor: 0.6
+  manually-scored: false
+  rationale: ""
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "exp-aaaaaa"
+  title: "A Leaf"
+  status: "run"
+  rigor: 1.0
+  manually-scored: false
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "exp-bbbbbb"
+  title: "A Leaf"
+  status: "planned"
+  rigor: 1.0
+  manually-scored: false
+  judged-hash: "0000000000000000000000000000000000000000000000000000000000000000"
+- id: "wrk-omcjwo"
+  label: "smith2020"
+  title: "Smith, A. 2020. *Markets*, on bearing 0.5"
+  rigor: 0.9
+  rationale: "Fixture Press."

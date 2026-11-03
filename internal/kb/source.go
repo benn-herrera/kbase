@@ -21,17 +21,23 @@ type Migration struct {
 
 // MigrationWarning is one thing a migration dropped or changed: the file it
 // names — kb-root-relative inside kb-root, repository-relative beside it — its
-// 1-based line (0 where it names none), and one sentence.
+// 1-based line (0 where it names none), and one sentence; and, on a warning a
+// conversion result lists by kind, that list, the node id and the text it
+// reports, each "" otherwise. Its fields are formats.Warning's, which the
+// loader converts it from.
 type MigrationWarning struct {
 	Path   string
 	Line   int
 	Detail string
+	List   string
+	ID     string
+	Text   string
 }
 
 // MigrationNote is the one sentence a migrated KB's record carries: every
-// migration ends in the 3.0.0 form, which marks each judged value
-// model-scored.
-const MigrationNote = "every rigor and bearing that score judges is now marked model-scored, so a default score run re-judges it; to keep one, re-assert its current value with set-rigor or set-bearing, only where the user asks"
+// migration ends in the 4.0.0 form, which writes each scored record's judged
+// hash as the unjudged one.
+const MigrationNote = "every scored record's judged hash is now the unjudged one: no rigor or bearing is claimed current, and the next score run finds every one dirty"
 
 // Source is where kbase reads one KB's files — kb-root and the build records
 // beside it — named by absolute path. A KB at the current format version is

@@ -1,0 +1,72 @@
+obsolete:
+    - kb-root/claim-rigor.md
+    - kb-root/vol/claim-rigor.md
+warnings:
+    - path: kb-root/.index/nodes.yaml
+      line: 0
+      detail: the axiom axm-S3 is now axm-37bekj, a minted id, and "S3" is its label
+      list: ids
+      id: axm-S3
+      text: axm-37bekj
+    - path: kb-root/.index/nodes.yaml
+      line: 0
+      detail: the work wrk-smith2020 is now wrk-omcjwo, a minted id, and "smith2020" is its label
+      list: ids
+      id: wrk-smith2020
+      text: wrk-omcjwo
+    - path: kb-root/vol/headings.md
+      line: 5
+      detail: 'vol/headings.md:5: the bare id clm-aaaaaa is its citation in the naming form, [Main Result](results.md#main-result "clm-aaaaaa")'
+      list: bare-ids
+      id: clm-aaaaaa
+    - path: kb-root/vol/notes.md
+      line: 7
+      detail: 'vol/notes.md:7: the link "[both](results.md#a-pair----claim-rigor-clm-bbbbbb)" points into the section of vol/results.md holding the statements of ana-bbbbbb, clm-bbbbbb, so the node it cites cannot be told; its anchor is rewritten and no id added'
+      list: unresolved-citations
+    - path: kb-root/vol/notes.md
+      line: 8
+      detail: 'vol/notes.md:8: the link "[the pair](claim-rigor.md#a-pair)" names 2 entries of the 3.0.0 register page vol/claim-rigor.md, which is removed, all stated in the section of vol/results.md at #a--pair, so the node it cites cannot be told; it is pointed at that section and no id added'
+      list: unresolved-citations
+    - path: kb-root/vol/notes.md
+      line: 9
+      detail: 'vol/notes.md:9: the link "[heading](../axioms.md#axiom-s3-a-labelling-convention \"the heading\")" cites axm-37bekj and carries a title of its own, so the id is not added; its anchor is rewritten'
+      list: unresolved-citations
+      id: axm-37bekj
+    - path: kb-root/vol/notes.md
+      line: 10
+      detail: 'vol/notes.md:10: the link "[ana-aaaaaa](results.md#its-proof)" naming ana-aaaaaa by its id is its citation in the naming form, [Its Proof](results.md#its-proof "ana-aaaaaa")'
+      list: bare-ids
+      id: ana-aaaaaa
+    - path: kb-root/vol/notes.md
+      line: 10
+      detail: 'vol/notes.md:10: the bare id clm-aaaaaa is its citation in the naming form, [Main Result](results.md#main-result "clm-aaaaaa")'
+      list: bare-ids
+      id: clm-aaaaaa
+    - path: kb-root/vol/notes.md
+      line: 10
+      detail: 'vol/notes.md:10: the bare id wrk-smith2020 is its citation in the naming form, [Smith 2020](../kb-summary.md#smith-2020 "wrk-omcjwo")'
+      list: bare-ids
+      id: wrk-omcjwo
+    - path: kb-root/vol/notes.md
+      line: 10
+      detail: 'vol/notes.md:10: the bare id axm-S3 is its citation in the naming form, [A labelling convention](../axioms.md#axiom-s3-a-labelling-convention "axm-37bekj")'
+      list: bare-ids
+      id: axm-37bekj
+    - path: kb-root/vol/notes.md
+      line: 11
+      detail: 'vol/notes.md:11: the bare id clm-cccccc names a node with no place a citation points at; it is left as written'
+      list: unresolved-citations
+      id: clm-cccccc
+    - path: kb-root/vol/notes.md
+      line: 11
+      detail: 'vol/notes.md:11: clm-aaaaaa stands inside a link''s text, where its citation cannot nest; it is left as written'
+      list: unresolved-citations
+      id: clm-aaaaaa
+    - path: kb-root/vol/notes.md
+      line: 12
+      detail: 'vol/notes.md:12: the link "[a missing heading](results.md#no-such-heading)" names no heading of vol/results.md; it is left as written'
+      list: unresolved-citations
+    - path: kb-root/vol/notes.md
+      line: 14
+      detail: 'vol/notes.md:14: the link "[both slugs read](headings.md#a-pair)" names the heading of vol/headings.md at line 13 under 3.0.0''s slugging and the one at line 17 under 4.0.0''s, so the heading it means cannot be told; it is left as written'
+      list: unresolved-citations

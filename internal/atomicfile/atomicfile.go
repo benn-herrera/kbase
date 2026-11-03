@@ -35,11 +35,23 @@ func tempPrefix(target string) string { return "." + filepath.Base(target) + "."
 // done. Calling keep leaves the temp on disk if what follows unwinds, as a
 // killed process would leave it.
 func Write(path string, data []byte, beforeRename func(keep func())) error {
-	target := path
+	return replace(path, followed(path), data, beforeRename, 0)
+}
+
+// WriteMode is Write for a file whose permission the caller sets: the file
+// lands at exactly mode, whatever the umask and whatever mode a file it
+// replaces had. Its temp is created at mode, so the bytes are never readable
+// beyond it.
+func WriteMode(path string, data []byte, mode fs.FileMode) error {
+	return replace(path, followed(path), data, nil, mode.Perm())
+}
+
+// followed is path with a symlink at it resolved, else path itself.
+func followed(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		target = resolved
+		return resolved
 	}
-	return replace(path, target, data, beforeRename)
+	return path
 }
 
 // LinkError is WriteIn's refusal of a path it will not write: the path itself
@@ -57,7 +69,7 @@ func WriteIn(root, path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return replace(path, target, data, nil)
+	return replace(path, target, data, nil, 0)
 }
 
 // resolveIn is path as WriteIn writes it: path itself where nothing on its
@@ -81,10 +93,16 @@ func resolveIn(root, path string) (string, error) {
 	return target, nil
 }
 
-// replace installs data at target, the path Write resolved, as path.
-func replace(path, target string, data []byte, beforeRename func(keep func())) error {
+// replace installs data at target, the path Write resolved, as path. A zero
+// mode is Write's: an existing file's mode is carried, a new file takes
+// CreateMode under the umask. Any other mode is set exactly.
+func replace(path, target string, data []byte, beforeRename func(keep func()), mode fs.FileMode) error {
 	info, statErr := os.Stat(target)
-	tmp, err := createTemp(filepath.Dir(target), tempPrefix(target))
+	createMode := fs.FileMode(CreateMode)
+	if mode != 0 {
+		createMode = mode
+	}
+	tmp, err := createTemp(filepath.Dir(target), tempPrefix(target), createMode)
 	if err != nil {
 		return fmt.Errorf("create a temp file beside %s: %w", path, err)
 	}
@@ -105,7 +123,12 @@ func replace(path, target string, data []byte, beforeRename func(keep func())) e
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
 	}
-	if statErr == nil {
+	switch {
+	case mode != 0:
+		if err := os.Chmod(tmp.Name(), mode); err != nil {
+			return fmt.Errorf("set %s's mode: %w", path, err)
+		}
+	case statErr == nil:
 		if err := os.Chmod(tmp.Name(), info.Mode().Perm()); err != nil {
 			return fmt.Errorf("carry %s's mode: %w", path, err)
 		}
@@ -123,10 +146,7 @@ func replace(path, target string, data []byte, beforeRename func(keep func())) e
 // between the temp and the rename leaves one. The caller must hold whatever
 // excludes path's other writers.
 func Sweep(path string) error {
-	target := path
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		target = resolved
-	}
+	target := followed(path)
 	entries, err := os.ReadDir(filepath.Dir(target))
 	if err != nil {
 		return err
@@ -142,14 +162,14 @@ func Sweep(path string) error {
 	return nil
 }
 
-// createTemp creates a new file in dir whose name starts with prefix, at
-// CreateMode. os.CreateTemp hard-codes 0600, and chmodding up from it would
-// bypass the umask, so the name is chosen here; O_EXCL keeps two writers off
-// one name.
-func createTemp(dir, prefix string) (*os.File, error) {
+// createTemp creates a new file in dir whose name starts with prefix, at mode
+// under the umask. os.CreateTemp hard-codes 0600, and chmodding up from it
+// would bypass the umask, so the name is chosen here; O_EXCL keeps two writers
+// off one name.
+func createTemp(dir, prefix string, mode fs.FileMode) (*os.File, error) {
 	for range 1000 {
 		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36)+TempSuffix)
-		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, CreateMode)
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}

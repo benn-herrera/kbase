@@ -22,6 +22,7 @@ import (
 	"kbase/internal/buildstore"
 	"kbase/internal/buildstore/storetest"
 	"kbase/internal/log"
+	"kbase/internal/log/logtest"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
 	"kbase/internal/result"
@@ -141,13 +142,17 @@ func TestBuildReplayOfAnUnchangedTrail(t *testing.T) {
 	}
 
 	rp := openReplay(t, f.state)
-	res, err := rp.Walk(context.Background(), replayProvider(newAnswering(script).Client()), log.Discard())
+	var lg logtest.Capture
+	res, err := rp.Walk(context.Background(), replayProvider(newAnswering(script).Client()), &lg)
 	if err != nil || res.Outcome != result.Done {
 		t.Fatalf("replay = %+v, %v; want done", res, err)
 	}
 	rows := readComparison(t, rp)
 	if len(rows) == 0 || len(rows) != res.Counts.Total || res.Counts.Done != len(rows) {
 		t.Fatalf("%d rows, counts %+v; want every selected row replayed", len(rows), res.Counts)
+	}
+	if got, want := lg.Last("info", "replay progress"), []any{"done", len(rows), "failed", 0, "remaining", 0, "total", len(rows)}; !slices.Equal(got, want) {
+		t.Errorf("last progress %v, want %v", got, want)
 	}
 	kinds, outcomes := map[string]bool{}, map[asks.Outcome]bool{}
 	for _, row := range rows {
@@ -259,12 +264,17 @@ func TestBuildReplayCarriesOnPastACallThatNeverCompletes(t *testing.T) {
 	lost := items[i]
 
 	rp := openReplay(t, f.state)
-	res, err := rp.Walk(context.Background(), replayProvider(failingKey{newAnswering(script), lost.item}.Client()), log.Discard())
+	var lg logtest.Capture
+	res, err := rp.Walk(context.Background(), replayProvider(failingKey{newAnswering(script), lost.item}.Client()), &lg)
 	if err != nil || res.Outcome != result.Done {
 		t.Fatalf("replay = %+v, %v; want done", res, err)
 	}
 	if res.Counts.Failed != 1 {
 		t.Errorf("counts = %+v, want one failed", res.Counts)
+	}
+	total := res.Counts.Total
+	if got, want := lg.Last("info", "replay progress"), []any{"done", total - 1, "failed", 1, "remaining", 0, "total", total}; !slices.Equal(got, want) {
+		t.Errorf("last progress %v, want %v", got, want)
 	}
 	rows := readComparison(t, rp)
 	if len(rows) != res.Counts.Total {
@@ -287,9 +297,15 @@ func TestBuildReplayOverviewThatNeverCompletes(t *testing.T) {
 		return modeltest.NewScriptedMock([]model.Response{{FinishReason: model.FinishLength}}, nil).ConsultStream(ctx, req)
 	}
 	rp := openReplay(t, f.state)
-	res, err := rp.Walk(context.Background(), replayProvider(&model.ClientFuncs{Stream: cutOff, Decide: a.Decision}), log.Discard())
+	var lg logtest.Capture
+	res, err := rp.Walk(context.Background(), replayProvider(&model.ClientFuncs{Stream: cutOff, Decide: a.Decision}), &lg)
 	if err != nil || res.Outcome != result.Done {
 		t.Fatalf("replay = %+v, %v; want done", res, err)
+	}
+	if c := res.Counts; c.Failed == 0 {
+		t.Errorf("counts = %+v, want the overview counted failed", c)
+	} else if got, want := lg.Last("info", "replay progress"), []any{"done", c.Done, "failed", c.Failed, "remaining", 0, "total", c.Total}; !slices.Equal(got, want) {
+		t.Errorf("last progress %v, want %v", got, want)
 	}
 	overviews := 0
 	for _, row := range readComparison(t, rp) {
@@ -323,8 +339,13 @@ func TestBuildReplayPrunedMidWalkFails(t *testing.T) {
 		})
 		return a.Decision(ctx, req)
 	}}
-	if res, err := rp.Walk(context.Background(), replayProvider(client), log.Discard()); err == nil || res.Outcome != result.Failed {
+	var lg logtest.Capture
+	res, err := rp.Walk(context.Background(), replayProvider(client), &lg)
+	if err == nil || res.Outcome != result.Failed {
 		t.Fatalf("replay = %+v, %v; want failed naming the removed directory", res, err)
+	}
+	if got, want := lg.Last("info", "replay progress")[:4], []any{"done", res.Counts.Done, "failed", res.Counts.Failed}; !slices.Equal(got, want) {
+		t.Errorf("last progress %v, want the returned counts %v", got, want)
 	}
 	if _, err := os.Stat(rp.Dir()); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the replay directory stands: %v", err)
@@ -414,9 +435,15 @@ func TestBuildReplayCancelled(t *testing.T) {
 		mu.Unlock()
 		return a.Decision(c, req)
 	}}
-	res, err := rp.Walk(ctx, replayProvider(client), log.Discard())
+	var lg logtest.Capture
+	res, err := rp.Walk(ctx, replayProvider(client), &lg)
 	if err != nil || res.Outcome != result.Cancelled {
 		t.Fatalf("replay = %+v, %v; want cancelled", res, err)
+	}
+	c := res.Counts
+	remaining := c.Total - c.Done - c.Failed
+	if got, want := lg.Last("info", "replay progress"), []any{"done", c.Done, "failed", c.Failed, "remaining", remaining, "total", c.Total}; remaining <= 0 || !slices.Equal(got, want) {
+		t.Errorf("last progress %v, want %v with some left", got, want)
 	}
 	if c := res.Cancelled; (selectedRow{kind: c.Kind, group: c.Group, item: c.Item}) != order[1] {
 		t.Errorf("cancelled names %+v, want the second row, %+v", c, order[1])
@@ -451,7 +478,7 @@ func writeTrail(t *testing.T, state, start string) string {
 		}
 		return model.DecisionResponse{Answers: []model.DecisionAnswer{{Key: q.Key, Type: q.Type, Noul: noul}}}, nil
 	}}
-	caller := call.New(client, func() string { return trail }, log.Discard())
+	caller := call.New(client, "solo", func() string { return trail }, log.Discard())
 	queue := model.NewQueue(1)
 	ctx := context.Background()
 	batch := asks.NewReplayBatch(ctx, caller.Launch(queue, "decision"))
@@ -614,7 +641,7 @@ func TestBuildReplayRefusesANoInferenceTrail(t *testing.T) {
 func assertReplayRefusal(t *testing.T, err error, path string) {
 	t.Helper()
 	var refusal result.Refusal
-	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != buildstore.CheckUsage || refusal[0].Key != buildstore.ReplayKey || refusal[0].Path != path {
-		t.Errorf("OpenReplay = %v, want one %s refusal keyed %s naming %s", err, buildstore.CheckUsage, buildstore.ReplayKey, path)
+	if !errors.As(err, &refusal) || len(refusal) != 1 || refusal[0].Check != result.CheckUsage || refusal[0].Key != buildstore.ReplayKey || refusal[0].Path != path {
+		t.Errorf("OpenReplay = %v, want one %s refusal keyed %s naming %s", err, result.CheckUsage, buildstore.ReplayKey, path)
 	}
 }

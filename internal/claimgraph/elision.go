@@ -3,33 +3,64 @@ package claimgraph
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
+	"kbase/internal/kb"
 	"kbase/internal/result"
 	"kbase/internal/write"
 )
 
-// IssueCulls issues drop-claim-edges, drop-inbound-edges and drop-claim-node —
-// which takes the node's record and its statement marker — through run, each
-// as one batch over ids in order, and returns the outcomes. A batch whose
-// outcome is neither done nor unchanged stops the issue: no retry, no
+// IssueCulls removes each culled claim of the KB at kbRoot through
+// remove-node — which takes its record, every edge and demoted record naming
+// it, and its statement marker — as one batch through run, and returns the
+// outcome. An outcome neither done nor unchanged stops the issue: no retry, no
 // re-planning.
-func IssueCulls(ids []string, run func(op string, values []byte) write.Result) ([]write.Result, error) {
+func IssueCulls(kbRoot string, ids []string, run func(op string, values []byte) write.Result) (write.Result, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return write.Result{}, nil
 	}
-	entries := make([]map[string]any, len(ids))
-	for i, id := range ids {
-		entries[i] = map[string]any{"id": id}
+	g, err := kb.LoadGraph(builtTree(kbRoot))
+	if err != nil {
+		return write.Result{}, err
 	}
-	var out []write.Result
-	for _, op := range []string{"drop-claim-edges", "drop-inbound-edges", "drop-claim-node"} {
-		res, err := issue(run, op, entries)
-		if err != nil {
-			return out, fmt.Errorf("%s %v: %w", op, ids, err)
+	res, err := issue(run, write.Batch, cullEntries(g, ids))
+	if err != nil {
+		return res, fmt.Errorf("%v: %w", ids, err)
+	}
+	return res, nil
+}
+
+// cullEntries is the batch removing ids from g, each removal valid where it
+// stands: remove-node refuses while a surviving record mentions the node, so
+// a culled claim whose rationale mentions another culled claim is removed
+// before it, the rest in plan order. Where every claim left is mentioned by
+// another, an edit-claim entry clears the rationale of each claim mentioning
+// the first of them before that one's removal.
+func cullEntries(g kb.Graph, ids []string) []map[string]any {
+	rationale := map[string]string{}
+	for _, n := range g.Claims {
+		rationale[n.ID] = n.Rationale
+	}
+	left := slices.Clone(ids)
+	mentioned := func(m string) bool {
+		return slices.ContainsFunc(left, func(n string) bool { return n != m && write.Mentions(rationale[n], m) })
+	}
+	var entries []map[string]any
+	for len(left) > 0 {
+		i := slices.IndexFunc(left, func(m string) bool { return !mentioned(m) })
+		if i < 0 {
+			i = 0
+			for _, n := range left[1:] {
+				if write.Mentions(rationale[n], left[0]) {
+					entries = append(entries, map[string]any{"operation": write.EditClaim, "id": n, "rationale": ""})
+					rationale[n] = ""
+				}
+			}
 		}
-		out = append(out, res)
+		entries = append(entries, map[string]any{"operation": write.RemoveNode, "id": left[i]})
+		left = slices.Delete(left, i, i+1)
 	}
-	return out, nil
+	return entries
 }
 
 // issue lands one op over its values entries in one batch, refusing an

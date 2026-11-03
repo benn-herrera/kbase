@@ -2,17 +2,17 @@ package config
 
 import "strings"
 
-// The guidance kbase gives about the models a [models] category wants, in one
+// The guidance kbase gives about the models a [models] role wants, in one
 // home: the config.toml template's [models] comment block is rendered from
 // these rows, and so is the kbase://model-hints resource the MCP server
-// offers. Examples are examples — a row names the capability a category wants
+// offers. Examples are examples — a row names the capability a role wants
 // and ids that have served it, and binds no provider surface to a model class.
 
-// modelHint is one row: the category it is about, what the build asks that
-// category for, the capability the row wants, ids that have served it, and the
-// one note that qualifies it.
+// modelHint is one row: the role it is about, what the build asks that role
+// for, the capability the row wants, ids that have served it, and any note
+// that qualifies it.
 type modelHint struct {
-	category   string
+	role       Role
 	does       string
 	capability string
 	examples   []string
@@ -22,21 +22,20 @@ type modelHint struct {
 // modelHints is every row, in the order both renderings state them.
 var modelHints = []modelHint{
 	{
-		category:   CategoryDecision,
+		role:       RoleDecision,
 		does:       "one letter per ask",
 		capability: "a mid-weight reasoning model",
 		examples:   []string{"clef-flash", "d3-flash"},
-		note:       "the full-weight variants (clef, d3) are not currently recommended; YMMV",
 	},
 	{
-		category:   CategoryText,
+		role:       RoleText,
 		does:       "the overview passage",
 		capability: "a ~30B instruct model",
 		examples:   []string{"Qwen3.8-27B", "flint", "Ornith-1.5-122B", "Qwen3.8-Flash-Next"},
 		note:       "kbase sets passage length; dense logic warrants one of the larger models",
 	},
 	{
-		category:   CategoryScoring,
+		role:       RoleScoring,
 		does:       "the KB's rigor and bearing, one item per ask",
 		capability: "the strongest instruct model on offer that honors its thinking setting (thinking = \"off\", or a thinking budget)",
 		examples:   []string{"Ornith-1.5-122B", "Qwen3.8-Flash-Next"},
@@ -48,8 +47,8 @@ var modelHints = []modelHint{
 const (
 	modelHintsShared = "One model may serve more than one role where the provider accepts its catalogue on " +
 		"the decision surface (oMLX does); check decision quality before settling."
-	modelHintsVendor = "OpenAI's own /v1/decisions currently accepts gpt-6-luna alone; " +
-		"OpenAI-compatible servers decide their own sets, selected by the entry's decisionsFlavor."
+	modelHintsVendor = "Which models a decision surface accepts is its server's choice " +
+		"(the provider's decisionsFlavor selects the surface); a decision probe shows whether one is accepted."
 )
 
 // hintsCommentWidth is the column the template's comment block wraps at,
@@ -65,7 +64,7 @@ func modelHintsComment() string {
 		if h.note != "" {
 			text += "; " + h.note
 		}
-		blocks = append(blocks, hintCommentBlock("# "+h.category+": ", text+"."))
+		blocks = append(blocks, hintCommentBlock("# "+string(h.role)+": ", text+"."))
 	}
 	return strings.Join(append(blocks, hintCommentBlock("# ", modelHintsShared), hintCommentBlock("# ", modelHintsVendor)), "\n")
 }
@@ -96,11 +95,11 @@ func hintCommentBlock(lead, text string) string {
 func ModelHintsMarkdown() string {
 	var b strings.Builder
 	b.WriteString("# Model hints\n\n")
-	b.WriteString("The models kbase's `[models]` categories want. The capability is what to match; " +
+	b.WriteString("The model each role wants. The capability is what to match; " +
 		"the ids are examples, not requirements, and no decision surface is bound to a model class.\n\n")
-	b.WriteString("| Category | What it does | Capability | Examples | Note |\n|---|---|---|---|---|\n")
+	b.WriteString("| Role | What it does | Capability | Examples | Note |\n|---|---|---|---|---|\n")
 	for _, h := range modelHints {
-		b.WriteString("| `" + h.category + "` | " + h.does + " | " + h.capability + " | " +
+		b.WriteString("| `" + string(h.role) + "` | " + h.does + " | " + h.capability + " | " +
 			hintCodeSpans(h.examples) + " | " + h.note + " |\n")
 	}
 	b.WriteString("\n")

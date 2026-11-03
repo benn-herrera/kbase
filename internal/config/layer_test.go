@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"kbase/internal/secret"
 )
 
 // homeDir is the directory the global layer resolves under, with HOME pointed
@@ -57,53 +59,30 @@ func TestLayers(t *testing.T) {
 	}
 }
 
-// TestWriteTarget: an explicit layer is written whether or not it exists — a
-// flag is not second-guessed; a repository --project named is written whether
-// or not its directory stands, over the directory the environment named;
-// otherwise the repository layer where its directory already stands; otherwise
-// the global layer.
+// TestWriteTarget: a named layer is written whether or not it exists — a flag
+// is not second-guessed; otherwise the global layer, a standing repository
+// layer included.
 func TestWriteTarget(t *testing.T) {
-	repo := t.TempDir()
-	standing := filepath.Join(repo, RepositoryDirName)
+	standing := filepath.Join(t.TempDir(), RepositoryDirName)
 	if err := os.MkdirAll(standing, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	absent := filepath.Join(t.TempDir(), RepositoryDirName)
-	project := t.TempDir()
 	for _, tc := range []struct {
-		name        string
-		layers      []Layer
-		projectRoot string
-		want        string
+		name   string
+		layers []Layer
+		want   string
 	}{
-		{"an explicit layer, absent", []Layer{{Path: "/somewhere", Source: LayerSourceExplicit}}, "", "/somewhere"},
-		{"an environment layer, absent", []Layer{{Path: "/elsewhere", Source: LayerSourceEnvironment}}, "", "/elsewhere"},
+		{"an explicit layer, absent", []Layer{{Path: "/somewhere", Source: LayerSourceExplicit}}, "/somewhere"},
+		{"an environment layer, absent", []Layer{{Path: "/elsewhere", Source: LayerSourceEnvironment}}, "/elsewhere"},
 		{
 			name:   "the repository layer, standing",
 			layers: []Layer{{Path: standing, Source: LayerSourceRepository}, {Path: "/home/.config/kbase", Source: LayerSourceGlobal}},
-			want:   standing,
-		},
-		{
-			name:   "the repository layer, absent",
-			layers: []Layer{{Path: absent, Source: LayerSourceRepository}, {Path: "/home/.config/kbase", Source: LayerSourceGlobal}},
 			want:   "/home/.config/kbase",
 		},
-		{"no repository layer", []Layer{{Path: "/home/.config/kbase", Source: LayerSourceGlobal}}, "", "/home/.config/kbase"},
-		{
-			name:        "a repository --project names, absent",
-			layers:      []Layer{{Path: absent, Source: LayerSourceRepository}, {Path: "/home/.config/kbase", Source: LayerSourceGlobal}},
-			projectRoot: project,
-			want:        filepath.Join(project, RepositoryDirName),
-		},
-		{
-			name:        "a repository --project names, over the environment",
-			layers:      []Layer{{Path: "/elsewhere", Source: LayerSourceEnvironment}},
-			projectRoot: project,
-			want:        filepath.Join(project, RepositoryDirName),
-		},
+		{"no repository layer", []Layer{{Path: "/home/.config/kbase", Source: LayerSourceGlobal}}, "/home/.config/kbase"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := WriteTarget(tc.layers, tc.projectRoot); got != tc.want {
+			if got := WriteTarget(tc.layers); got != tc.want {
 				t.Errorf("WriteTarget = %q, want %q", got, tc.want)
 			}
 		})
@@ -126,14 +105,11 @@ apiKeyFile = "shared.key"
 baseUrl = "http://inherited.example/v1"
 `)
 	writeFile(t, globalDir, ConfigFileName, `
-provider = "inherited"
-
 [models]
 decision = "global-decision"
 text = "global-text"
 
 [asks]
-readerConcurrency = 2
 concurrency = 3
 `)
 	writeProviders(t, repoDir, `
@@ -143,13 +119,13 @@ baseUrl = "http://shared.example/v2"
 [local]
 baseUrl = "http://local.example/v1"
 `)
-	writeFile(t, repoDir, ConfigFileName, "provider = \"local\"\n\n[models]\ndecision = \"repo-decision\"\n")
+	writeFile(t, repoDir, ConfigFileName, "[models]\ndecision = \"repo-decision\"\n")
 
 	layers := []Layer{
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
 	}
-	loaded, err := Load(layers)
+	loaded, err := Load(layers, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -161,8 +137,9 @@ baseUrl = "http://local.example/v1"
 		t.Errorf("pool = %v, want the union of both layers", names)
 	}
 	shared := providers["shared"]
-	if shared.BaseURL != "http://shared.example/v2" || shared.APIKeyFile != "" || shared.APIKey != "" {
-		t.Errorf("shared = %+v, want the repository entry whole: its URL, and no key inherited from the global entry", shared)
+	if shared.BaseURL != "http://shared.example/v2" || shared.APIKeyFile != "" || !shared.APIKey.IsZero() {
+		t.Errorf("shared = %+v, want the repository entry whole: its URL, and no key inherited from the global entry",
+			Provider{BaseURL: shared.BaseURL, APIKeyFile: shared.APIKeyFile})
 	}
 	for name, wantLayer := range map[string]string{
 		"shared": LayerSourceRepository, "local": LayerSourceRepository, "inherited": LayerSourceGlobal,
@@ -171,16 +148,10 @@ baseUrl = "http://local.example/v1"
 			t.Errorf("%s.Layer = %q, want %q", name, got, wantLayer)
 		}
 	}
-	if cfg.Provider != "local" {
-		t.Errorf("Provider = %q, want the repository's choice", cfg.Provider)
-	}
-	want := Config{Provider: "local", Models: ModelMap{Decision: "repo-decision", Text: "global-text"},
+	want := Config{Models: ModelMap{Decision: "repo-decision", Text: "global-text"},
 		Sources: Sources{Decision: LayerSourceRepository, Text: LayerSourceGlobal}}
-	if cfg.Provider != want.Provider || cfg.Models != want.Models || cfg.Sources != want.Sources {
+	if cfg.Models != want.Models || cfg.Sources != want.Sources {
 		t.Errorf("config = %+v (%+v), want %+v", cfg, cfg.Sources, want)
-	}
-	if n := cfg.Asks.ReaderConcurrency; n == nil || *n != 2 {
-		t.Errorf("readerConcurrency = %v, want the global layer's 2 inherited", n)
 	}
 	if n := cfg.Asks.Concurrency; n == nil || *n != 3 {
 		t.Errorf("concurrency = %v, want the global layer's 3 inherited", n)
@@ -192,9 +163,9 @@ baseUrl = "http://local.example/v1"
 func TestLoadOneLayer(t *testing.T) {
 	dir := t.TempDir()
 	writeProviders(t, dir, "[solo]\nbaseUrl = \"http://solo.example/v1\"\n")
-	writeFile(t, dir, ConfigFileName, "provider = \"solo\"\n\n[models]\ndecision = \"d\"\ntext = \"t\"\n")
+	writeFile(t, dir, ConfigFileName, "[models]\ndecision = \"d\"\ntext = \"t\"\n")
 
-	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}})
+	loaded, err := Load([]Layer{{Path: dir, Source: LayerSourceExplicit}}, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -226,7 +197,7 @@ func TestLoadFaultNamesItsFile(t *testing.T) {
 // mustLoad is Load for a test that has already checked it succeeds.
 func mustLoad(t *testing.T, layers []Layer) Loaded {
 	t.Helper()
-	loaded, err := Load(layers)
+	loaded, err := Load(layers, StoredKeys{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -278,13 +249,13 @@ apiKeyFile = "not-here.key"
 				{Path: repoDir, Source: LayerSourceRepository},
 				{Path: globalDir, Source: LayerSourceGlobal},
 			}
-			loaded, err := Load(layers)
+			loaded, err := Load(layers, StoredKeys{})
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
 			providers, faults, cfg := loaded.Providers, loaded.Faults, loaded.Cfg
 			if len(providers) != 1 || providers["local"].Layer != tc.wantLayer {
-				t.Fatalf("pool = %+v, want the one local entry from %s", providers, tc.wantLayer)
+				t.Fatalf("pool = %v, local from %q; want the one local entry from %s", keysOf(providers), providers["local"].Layer, tc.wantLayer)
 			}
 			if len(faults) != tc.wantFaults {
 				t.Fatalf("faults = %+v, want %d", faults, tc.wantFaults)
@@ -293,7 +264,7 @@ apiKeyFile = "not-here.key"
 				t.Errorf("fault = %+v, want the dropped repository entry naming %s", faults[0], brokenPath)
 			}
 
-			facts := Report(cfg, providers, faults, layers, func(string) bool { return false }, func(string) string { return "" })
+			facts := Report(cfg, providers, faults, layers, func(string) bool { return false })
 			usable, dropped := 0, 0
 			for _, e := range facts.Entries {
 				switch {
@@ -320,18 +291,142 @@ apiKeyFile = "not-here.key"
 // a broken repository file never falls through to the global one.
 func TestLoadRefusesTheStack(t *testing.T) {
 	globalDir, repoDir := t.TempDir(), t.TempDir()
-	globalConfig := writeFile(t, globalDir, ConfigFileName, "provider = \"a\"\n")
+	globalConfig := writeFile(t, globalDir, ConfigFileName, "[models]\n")
 	repoConfig := writeFile(t, repoDir, ConfigFileName, "provdier = \"b\"\n")
 
 	loaded, err := Load([]Layer{
 		{Path: repoDir, Source: LayerSourceRepository},
 		{Path: globalDir, Source: LayerSourceGlobal},
-	})
+	}, StoredKeys{})
 	if err == nil || !strings.Contains(err.Error(), repoConfig) || strings.Contains(err.Error(), globalConfig) {
 		t.Fatalf("Load = %v, want the repository file refused and the global one unnamed", err)
 	}
 	if loaded.Providers != nil || loaded.Faults != nil || loaded.Cfg != (Config{}) {
-		t.Errorf("a refused load returned a partial configuration: %+v", loaded)
+		t.Errorf("a refused load returned a partial configuration: pool %v, faults %+v, config %+v",
+			keysOf(loaded.Providers), loaded.Faults, loaded.Cfg)
+	}
+}
+
+// TestLoadFoldsProviderNames: a table name folds to lowercase as it is read, so
+// a repository entry whose name differs only by case from a global one
+// overrides it whole, or, where a fault drops it, the fault names it in
+// lowercase and the global entry is the one in use; a stored key is the folded
+// name's.
+func TestLoadFoldsProviderNames(t *testing.T) {
+	for _, tc := range []struct {
+		name, repoEntry string
+		pooled          bool
+	}{
+		{"a pooled override", "[Reaper]\nbaseUrl = \"http://repo.example/v1\"\n", true},
+		{"an override a fault dropped", "[REAPER]\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			globalDir, repoDir := t.TempDir(), t.TempDir()
+			writeProviders(t, globalDir, "[reaper]\nbaseUrl = \"http://global.example/v1\"\n\n[Other]\nbaseUrl = \"http://other.example/v1\"\n")
+			writeProviders(t, repoDir, tc.repoEntry)
+			loaded, err := Load([]Layer{
+				{Path: repoDir, Source: LayerSourceRepository},
+				{Path: globalDir, Source: LayerSourceGlobal},
+			}, StoredKeys{Keys: map[string]secret.Key{"other": secret.NewKey(fakeKey)}})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if other := loaded.Providers["other"]; other.Name != "other" || other.APIKey.Reveal() != fakeKey {
+				t.Errorf("[Other] loaded as %+v, want the entry named other with its stored key", other)
+			}
+			reaper, ok := loaded.Providers["reaper"]
+			switch {
+			case tc.pooled && (!ok || reaper.Name != "reaper" || reaper.Layer != LayerSourceRepository || reaper.BaseURL != "http://repo.example/v1"):
+				t.Errorf("reaper = %+v (pooled %v), want the repository's entry, named reaper", reaper, ok)
+			case !tc.pooled && (!ok || reaper.Layer != LayerSourceGlobal):
+				t.Errorf("reaper = %+v (pooled %v), want the global entry: the repository's override faulted", reaper, ok)
+			}
+			if !tc.pooled && (len(loaded.Faults) != 1 || loaded.Faults[0].Name != "reaper") {
+				t.Errorf("faults = %+v, want the override's, naming reaper", loaded.Faults)
+			}
+			if got := keysOf(loaded.Providers); slices.ContainsFunc(got, func(n string) bool { return n != strings.ToLower(n) }) {
+				t.Errorf("pool %v, want every name in lowercase", got)
+			}
+		})
+	}
+}
+
+// TestLoadStoredKeys: a stored key is the name's whatever layer supplies the
+// entry, and a stored key file that did not open is a warning naming the entry,
+// its name folded to lowercase, and the file as its path, the entry then falling through to
+// its apiKeyFile — an unreadable one raising its own fault and dropping the
+// entry. A file whose name no entry carries is not reported; the store
+// directory's own, nameless fault is, against the directory.
+func TestLoadStoredKeys(t *testing.T) {
+	const storedKey = "stored-key-456"
+	const storeFile = "/state/kbase/auth/broken-key.enc"
+	globalDir, repoDir := t.TempDir(), t.TempDir()
+	writeFile(t, globalDir, "fallback.key", fakeKey+"\n")
+	globalPath := writeProviders(t, globalDir, `
+[shared]
+baseUrl = "http://global.example/v1"
+
+[Broken]
+baseUrl = "http://broken.example/v1"
+apiKeyFile = "not-here.key"
+
+[fallback]
+baseUrl = "http://fallback.example/v1"
+apiKeyFile = "fallback.key"
+`)
+	writeProviders(t, repoDir, "[shared]\nbaseUrl = \"http://repo.example/v1\"\n")
+	stored := StoredKeys{
+		Keys: map[string]secret.Key{"shared": secret.NewKey(storedKey)},
+		Faults: []StoreFault{
+			{Name: "broken", Path: storeFile, Reason: "too short", DoesNotOpen: true},
+			{Name: "fallback", Path: "/state/kbase/auth/fallback-key.enc", Reason: "too short", DoesNotOpen: true},
+			{Name: "orphan", Path: "/state/kbase/auth/orphan-key.enc", Reason: "too short", DoesNotOpen: true},
+			{Path: "/state/kbase/auth", Reason: "permission denied"},
+		},
+	}
+
+	loaded, err := Load([]Layer{
+		{Path: repoDir, Source: LayerSourceRepository},
+		{Path: globalDir, Source: LayerSourceGlobal},
+	}, stored)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if shared := loaded.Providers["shared"]; shared.Layer != LayerSourceRepository || shared.APIKey.Reveal() != storedKey || keyKind(shared) != KeyKindStore {
+		t.Errorf("shared from %s, key kind %s, stored key %t; want the repository entry with the stored key",
+			shared.Layer, keyKind(shared), shared.APIKey.Reveal() == storedKey)
+	}
+	if fallback := loaded.Providers["fallback"]; fallback.APIKey.Reveal() != fakeKey || keyKind(fallback) != KeyKindFile {
+		t.Errorf("fallback key kind %s, file key %t; want its apiKeyFile's key", keyKind(fallback), fallback.APIKey.Reveal() == fakeKey)
+	}
+	if _, ok := loaded.Providers["broken"]; ok {
+		t.Error("broken is in the pool: its store file did not open and its apiKeyFile is missing")
+	}
+
+	type fault struct {
+		name, path           string
+		source               FaultSource
+		warning, doesNotOpen bool
+	}
+	var got []fault
+	for _, f := range loaded.Faults {
+		got = append(got, fault{f.Name, f.Path, f.Source, f.Warning, f.DoesNotOpen})
+		if f.Source != SourceEntry && f.Reason != "too short" && f.Reason != "permission denied" {
+			t.Errorf("the store fault at %s has reason %q, want the store's reason unprefixed", f.Path, f.Reason)
+		}
+		if strings.Contains(f.Reason, storedKey) || strings.Contains(f.Reason, fakeKey) {
+			t.Errorf("the fault naming %s carries key material", f.Name)
+		}
+	}
+	// The layers' faults, then the store's.
+	want := []fault{
+		{"broken", globalPath, SourceEntry, false, false},
+		{"broken", storeFile, SourceStoreFile, true, true},
+		{"fallback", "/state/kbase/auth/fallback-key.enc", SourceStoreFile, true, true},
+		{"", "/state/kbase/auth", SourceStoreDir, true, false},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("faults = %+v, want %+v", got, want)
 	}
 }
 

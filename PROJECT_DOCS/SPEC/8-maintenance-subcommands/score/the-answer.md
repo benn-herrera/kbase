@@ -1,0 +1,45 @@
+#### The answer
+
+A reply is a list of charge lines, each one fault id and the numbered line of the item's
+own text where the fault shows — one line per occurrence, in the order written — or the word `none`,
+alone. The call carries the text
+wrapped at word boundaries to at most 100 columns, its own line breaks kept and nothing rewritten, and
+writes `N| ` before each line lying inside a passage a charge may cite, numbering from 1: a numbered
+line is a verbatim slice of that text. A frame label and an edge's `## Context` carry no number, and a
+line with no number is no site.
+[RIGOR_AND_BEARING_SCORING_SCHEME.md](../../scoring/rigor-and-bearing/entry-point.md) states the criteria, the
+three closed sets and the citation rule; this section states what kbase does with a reply.
+
+- **The ids are the item's class's.** `rigor` on a claim accepts the statement vocabulary's four,
+  `rigor` on an analysis or an experiment the method vocabulary's six, and `bearing` its five, and
+  nothing else; an id outside that set — the other rigor class's among them, and `flt-pending`, which
+  no table holds — is `malformed`, the refusal naming the id and the call's ids as `allowed`.
+- **The citation is the numbered line where the fault shows.** The ask asks for one number, the line
+  where the fault first shows, `flt-inapplicable: 12`, and never a range. The parse still reads a
+  contiguous range within one passage, `flt-transfer: 12-14`; its dash may be a hyphen, an en dash, an
+  em dash or a minus sign, with or without spaces. kbase resolves the
+  field against the rendering the call carried — never a register page — and records three facts beside
+  the `passage` the lines lie in: `lines`, the answer's own numbers; `citation`, the quoted lines
+  without the gutter; and `offset`, the quote's byte offset in the carried text. A charge naming no
+  line, one naming a line the call does not show, and a range crossing from one passage to another or
+  over a gap — a blank line, a label or a heading between its lines — are `malformed`, naming the id
+  and the lines. A numbered line lies in one passage, so the `both` value — a span the two ends
+  carried alike — is no longer produced; a ledger line already recorded with it keeps the meaning it
+  was written with.
+- **Nothing is read out of prose.** Blank lines are ignored and any other line that is not a charge
+  line is `malformed`. So is `none` beside any other line, a bare number — a decimal, a percentage, a
+  fraction, a `*pending*` written as a value — since a number standing alone names no fault id, and an
+  empty reply: silence is never a clean pass.
+- **Duplicates and overlaps.** One id on one line set, written twice, is one charge; two line sets of
+  one id that overlap without coinciding is `malformed`, naming both lines; two ids on one line set
+  are both charged, the quote and its offset shared.
+
+**The three parse rules are frozen for the life of the format version.** The citation's floor of at
+least one valid line number, `none` beside charges refused, and one id over two line sets that
+overlap without coinciding refused —
+fixed while the ledger's format version stands, and what moves one is a new version, which `--resume`
+reads by its own rules. A valid line number is one the call shows, lying in a passage a charge may
+cite. A ledger's meaning is its ids, and a rule that loosens later would re-read lines already written
+under a new grammar. This change moves no version: `citation` is still a span of the carried text, so
+a line written before it reads as it did, and a line recording `flt-pending` still prices `*pending*`.
+

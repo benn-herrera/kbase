@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"kbase/internal/config"
+	"kbase/internal/mcp"
 	"kbase/internal/model"
 	"kbase/internal/model/modeltest"
 	"kbase/internal/query"
@@ -67,15 +68,14 @@ func TestScoreRecordsAProviderRefusalAsItsOwnReason(t *testing.T) {
 	}
 }
 
-// TestScoreRefusesWithoutAScoringRole: a run whose mode names no scoring model
-// and no flag refuses naming that key before anything is asked, in file mode
-// and in environment mode; --scoring-model supplies the role the files leave
-// unset; and a dry run lists the set, resolves no role and refuses nothing for
-// one.
+// TestScoreRefusesWithoutAScoringRole: a run whose configuration names no
+// scoring model and no flag refuses naming that key before anything is asked;
+// --scoring-model supplies the role the files leave unset; and a dry run lists
+// the set, resolves no role and refuses nothing for one.
 func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
-	fileMode := scoreOptions{Pass: query.PassRigor, providerOptions: scoreWithoutScoring()}
-	got := scoreIn(t, repo, state, fileMode, nil)
+	unscored := scoreOptions{Pass: query.PassRigor, providerOptions: scoreWithoutScoring()}
+	got := scoreIn(t, repo, state, unscored, nil)
 	items := got.doc.items("refusals")
 	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != config.CheckProvider || items[0]["key"] != "models.scoring" {
 		t.Fatalf("a run with no scoring role = %s, %v; want models.scoring refused\n%s", got.doc.Outcome, items, got.stdout)
@@ -91,8 +91,8 @@ func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 
 	// The flag names a model and the files name none for the role: the flag
 	// supplies it, and the roles record says the flag named the model.
-	fileMode.ScoringModel = "solo/judge"
-	got = scoreIn(t, repo, t.TempDir(), fileMode, func() model.Client { return scoring("none") })
+	unscored.ScoringModel = "solo/judge"
+	got = scoreIn(t, repo, t.TempDir(), unscored, func() model.Client { return scoring("none") })
 	if got.doc.Outcome != "done" || got.dialled != 1 {
 		t.Fatalf("--scoring-model over an unset role = %s, %d dials; want the run\n%s",
 			got.doc.Outcome, got.dialled, got.stdout)
@@ -112,48 +112,23 @@ func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 			t.Errorf("a dry run carries %s:\n%s", key, dry.stdout)
 		}
 	}
-
-	// The environment's spelling of the same absence.
-	unsetInferenceEnv(t)
-	t.Setenv(config.EnvAPIBaseURL, "http://env.example/v1")
-	t.Setenv(config.EnvText, "env-text")
-	envMode := scoreOptions{Pass: query.PassRigor, providerOptions: providerOptions{Providers: config.Providers{}}}
-	got = scoreIn(t, repo, t.TempDir(), envMode, nil)
-	items = got.doc.items("refusals")
-	if got.doc.Outcome != "refused" || len(items) != 1 || items[0]["key"] != config.EnvScoring {
-		t.Errorf("a run with no scoring variable = %s, %v; want %s refused\n%s",
-			got.doc.Outcome, items, config.EnvScoring, got.stdout)
-	}
 }
 
-// TestScoreConfiguredByEnvironmentAlone: the environment's endpoint and its
-// scoring variable configure a run with no configuration directory at all: one
-// client on that endpoint, a roles record naming the environment back end and
-// the variable's model, and a ledger whose lines name it. The text variable is
-// set beside it and appears nowhere.
-func TestScoreConfiguredByEnvironmentAlone(t *testing.T) {
-	unsetInferenceEnv(t)
-	t.Setenv(config.EnvAPIBaseURL, "http://env.example/v1")
-	t.Setenv(config.EnvDecision, "env-decision")
-	t.Setenv(config.EnvText, "env-text")
-	t.Setenv(config.EnvScoring, "env-scoring")
-
+// TestScoreNamesTheScoringModelAlone: with no --scoring-model, a run over files
+// whose text and scoring roles name different models asks the scoring one: the
+// roles record names its entry and model, the ledger's lines name it, and the
+// text model appears neither in the document nor in the ledger.
+func TestScoreNamesTheScoringModelAlone(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
-	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor,
-		providerOptions: providerOptions{Providers: config.Providers{}}}, func() model.Client { return scoring("none") })
+	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") })
 	if got.doc.Outcome != "done" || got.dialled != 1 {
-		t.Fatalf("the environment-mode run: %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
+		t.Fatalf("the run: %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
 	}
 	role := roleOf(got.doc, "scoring")
-	if role == nil || role["back-end"] != "environment" || role["model"] != "env-scoring" {
-		t.Fatalf("roles = %v, want the scoring role on the environment's endpoint\n%s", got.doc.Values["roles"], got.stdout)
+	if role == nil || role["provider"] != "solo" || role["provider-rule"] != config.RuleConfig || role["model"] != "scoring-model" {
+		t.Errorf("roles = %v, want solo/scoring-model under the config rule\n%s", got.doc.Values["roles"], got.stdout)
 	}
-	for _, key := range []string{"provider", "provider-rule", "provider-layer"} {
-		if _, ok := role[key]; ok {
-			t.Errorf("an environment endpoint names %s: %v", key, role)
-		}
-	}
-	if strings.Contains(got.stdout, "env-text") {
+	if strings.Contains(got.stdout, "text-model") {
 		t.Errorf("the run names the text model:\n%s", got.stdout)
 	}
 	dir, _ := got.doc.Values["ledger"].(string)
@@ -161,26 +136,12 @@ func TestScoreConfiguredByEnvironmentAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the ledger: %v", err)
 	}
-	if !strings.Contains(string(ledger), `"model":"env-scoring"`) || strings.Contains(string(ledger), "env-text") {
-		t.Errorf("the ledger's lines do not name the scoring variable alone:\n%s", ledger)
-	}
-
-	// The flag under the environment's endpoint is a bare id taken verbatim: a
-	// value carrying a slash is not split against a provider the environment
-	// does not name.
-	flagged := scoreIn(t, repo, t.TempDir(), scoreOptions{Pass: query.PassRigor, ScoringModel: "org/model",
-		providerOptions: providerOptions{Providers: config.Providers{}}}, func() model.Client { return scoring("none") })
-	if flagged.doc.Outcome != "done" {
-		t.Fatalf("the flagged environment run: %s\n%s", flagged.doc.Outcome, flagged.stdout)
-	}
-	role = roleOf(flagged.doc, "scoring")
-	if role == nil || role["back-end"] != "environment" || role["model"] != "org/model" {
-		t.Errorf("roles = %v, want the flag verbatim on the environment's endpoint\n%s", flagged.doc.Values["roles"], flagged.stdout)
+	if !strings.Contains(string(ledger), `"model":"scoring-model"`) || strings.Contains(string(ledger), "text-model") {
+		t.Errorf("the ledger's lines do not name the scoring model alone:\n%s", ledger)
 	}
 }
 
-// TestScoreScoringModelOverridesTheRole: in file mode the flag is a reference;
-// it names the provider and model the run asks, and the roles record says the
+// TestScoreScoringModelOverridesTheRole: the flag is a reference; it names the provider and model the run asks, and the roles record says the
 // flag is what named it.
 func TestScoreScoringModelOverridesTheRole(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
@@ -203,7 +164,7 @@ func TestScoreScoringModelOverridesTheRole(t *testing.T) {
 		t.Errorf("roles = %v, want other/judge under the flag's rule\n%s", got.doc.Values["roles"], got.stdout)
 	}
 	if len(got.endpoints) != 1 || got.endpoints[0].BaseURL != "http://other.example/v1" {
-		t.Errorf("endpoints = %+v, want the flag's entry", got.endpoints)
+		t.Errorf("endpoints = %+v, want the flag's entry", shownEndpoints(got.endpoints))
 	}
 	dir, _ := got.doc.Values["ledger"].(string)
 	ledger, err := os.ReadFile(filepath.Join(dir, "ledger.jsonl"))
@@ -218,7 +179,8 @@ func TestScoreScoringModelOverridesTheRole(t *testing.T) {
 	if resumed, _ := got.doc.Values["resume"].(string); resumed != "" {
 		t.Errorf("a finished run carries resume: %q", resumed)
 	}
-	partial := scoreIn(t, repo, t.TempDir(), scoreOptions{Pass: query.PassRigor, Limit: 1, ScoringModel: "solo/judge"},
+	// Over a fresh copy, every item dirty, one answered and the rest failing.
+	partial := scoreIn(t, scoreFixture(t), t.TempDir(), scoreOptions{Pass: query.PassRigor, ScoringModel: "solo/judge"},
 		func() model.Client { return scoring("none") })
 	resumed, _ := partial.doc.Values["resume"].(string)
 	if !strings.Contains(resumed, "--scoring-model solo/judge") {
@@ -247,7 +209,10 @@ func TestScoreScoringModelNamesAMissingProvider(t *testing.T) {
 // user looks for it, and neither the retired --provider nor the removed
 // --harness is.
 func TestScoreHelpNamesTheScoringFlag(t *testing.T) {
-	help := scoreCmd.UsageString()
+	help, err := mcp.CLIHelp(scoreCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(help, "--scoring-model") {
 		t.Errorf("score --help names no --scoring-model:\n%s", help)
 	}

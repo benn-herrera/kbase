@@ -14,22 +14,25 @@ import (
 	"testing"
 	"time"
 
+	"kbase/internal/argmark"
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
+	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
 	"kbase/internal/score"
+	"kbase/internal/write"
 )
 
 // scoreToolProvider starts the inference endpoint a tool call's scoring run
-// reaches and names it in the environment: slow holds each request for a moment
-// so the run stays in flight, fail refuses it with a reason of its own, and
-// value answers at once. The tool call's child is the shipped binary and the run
-// is real, so what answers it is an endpoint rather than a stub process.
-func scoreToolProvider(t *testing.T, mode string) {
+// reaches and names it as the scoring role in the configuration directory the
+// child reads under base: slow holds each request for a moment so the run stays
+// in flight, fail refuses it with a reason of its own, and value answers at
+// once. The tool call's child is the shipped binary and the run is real, so
+// what answers it is an endpoint rather than a stub process.
+func scoreToolProvider(t *testing.T, base, mode string) {
 	t.Helper()
-	unsetInferenceEnv(t)
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch mode {
@@ -57,8 +60,7 @@ func scoreToolProvider(t *testing.T, mode string) {
 	// Registered after Close so it runs before it: a request the run left
 	// hanging must wake before the server waits for its handlers.
 	t.Cleanup(func() { close(release) })
-	t.Setenv(config.EnvAPIBaseURL, srv.URL)
-	t.Setenv(config.EnvScoring, "stub/model")
+	childStubConfig(t, base, srv.URL, config.RoleScoring)
 }
 
 // scoreToolServer is the MCP tool table over repo, with the child's state and
@@ -108,7 +110,7 @@ func TestMCPScoreStartsDetached(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -153,7 +155,7 @@ func TestMCPScoreWaitReportsFailures(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "fail")
+	scoreToolProvider(t, base, "fail")
 	srv := scoreToolServer(t, repo, base)
 
 	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -189,7 +191,7 @@ func TestBuildRefusedWhileAScoreRunHoldsTheLock(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	_, pid, _ := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -223,7 +225,7 @@ func TestStatusReportsAKilledScoreRun(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -295,7 +297,7 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	}
 	gitRepo(t, repo)
 	state := filepath.Join(base, "state")
-	scoreToolProvider(t, "slow")
+	scoreToolProvider(t, base, "slow")
 	srv := scoreToolServer(t, repo, base)
 
 	run, pid, ledger := scoreToolStart(t, srv, state, map[string]any{"pass": "rigor"})
@@ -303,8 +305,8 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	if isError || cancel["outcome"] != toolresult.Done || cancel["pid"] != float64(pid) {
 		t.Fatalf("cancel: isError %v, %v", isError, cancel)
 	}
-	if resume, _ := cancel["resume"].(string); !strings.Contains(resume, "--resume "+run) {
-		t.Errorf("cancel resume = %q, want the command that continues run %s", resume, run)
+	if resume, _ := cancel["resume"].(string); resume != `score {"resume":true,"state-dir":"`+state+`"}` {
+		t.Errorf("cancel resume = %q, want the score call that continues the most recent run", resume)
 	}
 	if _, err := os.Stat(filepath.Join(ledger, "run.yaml")); err != nil {
 		t.Errorf("the cancelled run left no run.yaml: %v", err)
@@ -315,11 +317,11 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 
 	// The cancelled run's ledger continues: an endpoint that answers lands the
 	// item the cancellation left unasked.
-	scoreToolProvider(t, "value")
-	out, code := kbase(t, repo, "score", "--pass", "rigor", "--resume", run, "--state-dir", state)
+	scoreToolProvider(t, base, "value")
+	out, code := kbase(t, repo, "score", "--resume", "--state-dir", state)
 	doc := checkDocument(t, "score", out)
-	if doc.Outcome != toolresult.Done || code != 0 {
-		t.Fatalf("resume: outcome %s, exit %d\n%s", doc.Outcome, code, out)
+	if doc.Outcome != toolresult.Done || code != 0 || doc.Values["run"] != run {
+		t.Fatalf("resume: outcome %s, exit %d, run %v; want done continuing %s\n%s", doc.Outcome, code, doc.Values["run"], run, out)
 	}
 	counts, _ := doc.Values["counts"].(map[string]any)
 	if counts["done"] != 1 {
@@ -327,5 +329,101 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	}
 	if got := rigorOf(t, repo, "clm-aaaaaa"); got != 1.0 {
 		t.Errorf("the claim's rigor = %v, want the resumed reply's 1.0", got)
+	}
+}
+
+// TestScoreCallWithAnEdgeReadsOnBothSurfaces: a call holding the edge mapping
+// reads as --edge <source>,<target>,<relation> at the command line and as the
+// mapping in the tool's call.
+func TestScoreCallWithAnEdgeReadsOnBothSurfaces(t *testing.T) {
+	call := argmark.Call("score", map[string]any{"edge": map[string]any{"source": "clm-a", "target": "clm-b", "relation": "supports"},
+		"rescore-manual": true})
+	if got, want := atTheCommandLine(call), "kbase score --edge clm-a,clm-b,supports --rescore-manual"; got != want {
+		t.Errorf("at the command line %q, want %q", got, want)
+	}
+	if got, want := mcp.Spelling(rootCmd, true).Spell(call), `score {"edge":{"relation":"supports","source":"clm-a","target":"clm-b"},"rescore-manual":true}`; got != want {
+		t.Errorf("over MCP %q, want %q", got, want)
+	}
+}
+
+// TestMCPScoreTakesTheEdgeAsAMapping: over MCP the edge argument is a mapping
+// of its source, target and relation, which the run receives as the edge it
+// names — here one that does not stand, which the run refuses at edge — and a
+// value holding a comma is refused at edge, in the tool's terms, before any run
+// starts.
+func TestMCPScoreTakesTheEdgeAsAMapping(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.EvalSymlinks(scoreRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRepo(t, repo)
+	state := filepath.Join(base, "state")
+	scoreToolProvider(t, base, "value")
+	srv := scoreToolServer(t, repo, base)
+	for _, c := range []struct {
+		name   string
+		edge   map[string]any
+		detail string
+	}{
+		{"an edge that does not stand", map[string]any{"source": "clm-aaaaaa", "target": "clm-bbbbbb", "relation": "supports"},
+			"no edge supports clm-aaaaaa → clm-bbbbbb"},
+		{"a relation holding a comma", map[string]any{"source": "clm-aaaaaa", "target": "clm-bbbbbb", "relation": "sup,ports"},
+			"`edge`'s relation holds a comma, and none of its values may: \"sup,ports\""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			doc, isError := callTool(t, srv, "score", map[string]any{"edge": c.edge, "state-dir": state})
+			items, _ := doc[toolresult.RefusalsKey].([]any)
+			var item map[string]any
+			if len(items) == 1 {
+				item, _ = items[0].(map[string]any)
+			}
+			if !isError || doc["outcome"] != toolresult.Refused || item["key"] != "edge" || item["detail"] != c.detail {
+				t.Errorf("score with edge %v: isError %v, %v; want refused at edge, %q", c.edge, isError, doc, c.detail)
+			}
+		})
+	}
+}
+
+// TestMCPScoreReportsARunStillStarting: a score run that has not opened its
+// ledger 5 s after the call — its start refresh waiting on the KB write lock
+// another writer holds — is reported done, state starting, with its state-dir,
+// pid and the wait command, for status to follow.
+func TestMCPScoreReportsARunStillStarting(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.EvalSymlinks(scoreRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRepo(t, repo)
+	state := filepath.Join(base, "state")
+	scoreToolProvider(t, base, "value")
+	srv := scoreToolServer(t, repo, base)
+	release, err := write.LockKB(filepath.Join(repo, kb.KBDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
+
+	start, isError := callTool(t, srv, "score", map[string]any{"state-dir": state})
+	pid, _ := start["pid"].(float64)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWait := buildstore.ShellJoin([]string{exe, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid))})
+	if isError || start["outcome"] != toolresult.Done || start["state"] != "starting" || start["state-dir"] != state || pid <= 0 ||
+		start["wait"] != wantWait {
+		t.Fatalf("score start: isError %v, %v; want done, state starting, the state-dir, the pid and %q", isError, start, wantWait)
+	}
+	if _, named := start["run"]; named {
+		t.Errorf("a run still starting names a run: %v", start)
 	}
 }

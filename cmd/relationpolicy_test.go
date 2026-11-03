@@ -4,8 +4,10 @@ import (
 	"go/ast"
 	"go/token"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"kbase/internal/kb"
@@ -24,9 +26,23 @@ var relationHomonyms = map[string][]string{
 	"internal/docgraph/ast.go": {kb.RelationReferences},
 }
 
-// TestNoRelationSpelledOutsideKB: a relation is named through kb's constants.
-// The formats tree is outside the rule: it imports nothing of kbase outside
-// itself (I8), and format300 is where the live format defines the relations.
+// relationSeries matches two or more relation names in a prose series, joined
+// by a comma, "and" or "or" across any whitespace, with no letter or hyphen
+// touching the series' ends (so restore-demoted names no relation).
+var relationSeries = func() *regexp.Regexp {
+	var names []string
+	for _, r := range kb.Relations {
+		names = append(names, regexp.QuoteMeta(r))
+	}
+	name := `(?:` + strings.Join(names, "|") + `)`
+	sep := `(?:\s*,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+)`
+	return regexp.MustCompile(`(?:^|[^\pL-])` + name + `(?:` + sep + name + `)+(?:$|[^\pL-])`)
+}()
+
+// TestNoRelationSpelledOutsideKB: a relation is named through kb's constants,
+// and a list of relations is composed from them, never kept as prose. The
+// formats tree is outside the rule: it imports nothing of kbase outside
+// itself, and format400 is where the live format defines the relations.
 func TestNoRelationSpelledOutsideKB(t *testing.T) {
 	fset := token.NewFileSet()
 	seen := map[string][]string{}
@@ -41,7 +57,13 @@ func TestNoRelationSpelledOutsideKB(t *testing.T) {
 				return true
 			}
 			s, err := strconv.Unquote(lit.Value)
-			if err != nil || !slices.Contains(kb.Relations, s) {
+			if err != nil {
+				return true
+			}
+			if series := relationSeries.FindString(s); series != "" {
+				t.Errorf("%s: %q lists relations in prose; compose the list from kb's relation sets", fset.Position(lit.Pos()), strings.TrimSpace(series))
+			}
+			if !slices.Contains(kb.Relations, s) {
 				return true
 			}
 			if !slices.Contains(seen[rel], s) {

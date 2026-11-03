@@ -18,13 +18,11 @@ func TestStatsCountsTheBottomRungUnderItsLabel(t *testing.T) {
 		".git/HEAD":              "ref: refs/heads/main\n",
 		"kb-root/entry-point.md": maintenanceEntryPoint,
 		maintenanceStampFile:     maintenanceFormatStamp,
-		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n# A\n\nAn assertion nothing carries. <!-- claim-rigor: clm-aaaaaa -->\n",
+		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n# A\n\nAn assertion nothing carries.<!-- kbase-id: clm-aaaaaa -->\n",
 	}
 	maps.Copy(files, recordFiles(kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A Claim", Rigor: &rigor, Rationale: "Shown."}}}))
 	writeRepo(t, repo, files)
-	if out, code := kbase(t, repo, "refresh"); code != 0 {
-		t.Fatalf("refresh: exit %d\n%s", code, out)
-	}
+	updateFormatKB(t, repo)
 
 	stats := checkDocument(t, "stats", mustRun(t, repo, "done", "stats"))
 	results, _ := stats.Values["results"].(map[string]any)

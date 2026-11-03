@@ -49,5 +49,6 @@ func splitClaim(b *recordBatch, e entry) error {
 	if !b.holds(kb.RelationLifts, ana, claim) {
 		b.g.Scorable = append(b.g.Scorable, kb.ScorableEdge{Relation: kb.RelationLifts, Source: ana, Target: claim, Bearing: kb.Bearing{Pending: true}})
 	}
+	b.depends = nil
 	return nil
 }

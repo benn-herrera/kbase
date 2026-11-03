@@ -4,10 +4,9 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
-	"kbase/internal/formats/format300"
+	"kbase/internal/formats/format400"
 )
 
 // The metadata layer's readers follow Python's text semantics: a file read in
@@ -17,11 +16,11 @@ import (
 
 // PyWhitespace is the body of the class Python's \s and str.isspace() share,
 // for use inside a bracket expression.
-const PyWhitespace = format300.PyWhitespace
+const PyWhitespace = format400.PyWhitespace
 
 // PyRE compiles a pattern written in Python's spelling of \s, \S and \d,
 // none of them inside a bracket expression. \d stays ASCII.
-func PyRE(pattern string) *regexp.Regexp { return format300.PyRE(pattern) }
+func PyRE(pattern string) *regexp.Regexp { return format400.PyRE(pattern) }
 
 // TranslateNewlines is text as Python's text-mode read returns it: \r\n and
 // \r translated to \n.
@@ -112,26 +111,10 @@ func NormalizeSpace(s string) string {
 }
 
 // IsWord is whether r is a character Python's \w matches.
-func IsWord(r rune) bool { return isWord(r) }
+func IsWord(r rune) bool { return format400.IsWord(r) }
 
-// isWord is a character Python's \w matches.
-func isWord(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
-}
-
-// boundaryAt is Python's \b at byte offset i of s.
-func boundaryAt(s string, i int) bool {
-	before, after := false, false
-	if i > 0 {
-		r, _ := utf8.DecodeLastRuneInString(s[:i])
-		before = isWord(r)
-	}
-	if i < len(s) {
-		r, _ := utf8.DecodeRuneInString(s[i:])
-		after = isWord(r)
-	}
-	return before != after
-}
+// BoundaryAt is Python's \b at byte offset i of s.
+func BoundaryAt(s string, i int) bool { return format400.BoundaryAt(s, i) }
 
 // findAllBounded is the matches of re in s that Python's \b(...)\b would
 // keep. Exact only where a rejected match cannot overlap an accepted one,
@@ -140,31 +123,17 @@ func boundaryAt(s string, i int) bool {
 func findAllBounded(re *regexp.Regexp, s string) []string {
 	var out []string
 	for _, m := range re.FindAllStringIndex(s, -1) {
-		if boundaryAt(s, m[0]) && boundaryAt(s, m[1]) {
+		if BoundaryAt(s, m[0]) && BoundaryAt(s, m[1]) {
 			out = append(out, s[m[0]:m[1]])
 		}
 	}
 	return out
 }
 
-// Slugify is the heading anchor every KB's stored canonical_anchor carries:
-// lowercased, everything but word characters, whitespace and hyphens dropped,
-// then each whitespace run one hyphen. The collapse is not GitHub's anchor:
-// "A — B" anchors at "a-b".
-func Slugify(text string) string {
-	var b strings.Builder
-	inSpace := false
-	for _, r := range strings.ToLower(Strip(text)) {
-		switch {
-		case IsSpace(r):
-			if !inSpace {
-				b.WriteByte('-')
-			}
-			inSpace = true
-		case isWord(r) || r == '-':
-			b.WriteRune(r)
-			inSpace = false
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
+// Slugify is a heading's anchor as GitHub's slugger has it, HTML comments
+// stripped, before any suffix for a repeat.
+func Slugify(heading string) string { return format400.Slugify(heading) }
+
+// Slugger anchors the headings of one document in document order, a repeat
+// suffixed as GitHub's slugger suffixes it.
+type Slugger = format400.Slugger

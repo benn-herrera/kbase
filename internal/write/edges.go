@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"kbase/internal/argmark"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
@@ -19,15 +20,10 @@ func (b *recordBatch) nodeKind(key, id string) (string, error) {
 	return kind, nil
 }
 
-// addRestsOn adds the edges an entry's rests-on list carries into its node
-// and its references list out of it, refusing one that would close a cycle.
-func addRestsOn(b *recordBatch, e entry) error { return addListEdges(b, e, true) }
-
-// addBuildEdges is addRestsOn without the cycle refusal: the build's walk
+// addBuildEdges adds the edges an entry's rests-on list carries into its node
+// and its references list out of it. It refuses no cycle: the build's walk
 // cuts what its edges close.
-func addBuildEdges(b *recordBatch, e entry) error { return addListEdges(b, e, false) }
-
-func addListEdges(b *recordBatch, e entry, refuseCycles bool) error {
+func addBuildEdges(b *recordBatch, e entry) error {
 	id := e.str("id")
 	kind, err := b.nodeKind("id", id)
 	if err != nil {
@@ -41,84 +37,16 @@ func addListEdges(b *recordBatch, e entry, refuseCycles bool) error {
 		return opRefusal(kb.RelationReferences, id+" carries a references list, and a reference is one claim of this corpus naming another",
 			"restore: drop the references list, or name a claim as the id, then re-run")
 	}
-	edges := listEdges(e, kind, kb.ListRestsOn, kb.RelationReferences)
+	edges := listEdges(e, kind)
 	if err := b.resolveEnds(edges); err != nil {
 		return err
 	}
-	return b.addEdges(e, id, edges, refuseCycles)
-}
-
-// pairListsBySource is the pair lists add-pairs takes from a source of each
-// kind.
-var pairListsBySource = map[string][]string{
-	kb.NodeKindClaim:      {kb.RefutesKey},
-	kb.NodeKindAnalysis:   {kb.LiftsKey, kb.RefutesKey},
-	kb.NodeKindExperiment: {kb.SupportsKey, kb.LiftsKey, kb.RefutesKey},
-	kb.NodeKindWork:       nil,
-	kb.NodeKindAxiom:      nil,
-}
-
-// addPairs adds the scoring edges an entry's pair lists carry from its node,
-// refusing a list its source's kind does not author and an edge that would
-// close a cycle.
-func addPairs(b *recordBatch, e entry) error {
-	id := e.str("id")
-	kind, err := b.nodeKind("id", id)
-	if err != nil {
-		return err
-	}
-	var keys []string
-	for _, f := range opFields["add-pairs"] {
-		if f.name == "id" || !e.has(f.name) {
-			continue
-		}
-		if !slices.Contains(pairListsBySource[kind], f.name) {
-			return result.Refusal{{Key: f.name, Entry: e.Index, Allowed: pairListsBySource[kind],
-				Remedy: fmt.Sprintf("supply only the lists a %s authors, then re-run", kind),
-				Detail: fmt.Sprintf("is a list a %s does not author: %s is a %s", kind, id, kind)}}
-		}
-		keys = append(keys, f.name)
-	}
-	if len(keys) == 0 {
-		return opRefusal("id="+id, "names no pair list, and this op adds the edges those lists carry",
-			"restore: supply a "+strings.Join(pairListsBySource[kind], ", ")+" list, then re-run")
-	}
-	edges := listEdges(e, kind, keys...)
-	if err := b.resolveEnds(edges); err != nil {
-		return err
-	}
-	return b.addEdges(e, id, edges, true)
-}
-
-// ownEdge is whether a record of relation from source to target is one of the
-// claim id's own edge lists: a supports or founds edge into it, its rests-on
-// list, or a references edge out of it.
-func ownEdge(id, relation, source, target string) bool {
-	switch relation {
-	case kb.RelationSupports, kb.RelationFounds:
-		return target == id
-	case kb.RelationReferences:
-		return source == id
-	}
-	return false
-}
-
-// inboundEdge is whether a record of relation from source to target is
-// another node's edge naming the claim id: a supports edge out of it, a
-// references, lifts or refutes edge into it, or an experiment's support of it.
-func inboundEdge(id, relation, source, target string) bool {
-	switch relation {
-	case kb.RelationSupports:
-		kind, _ := kb.NodeIDKind(source)
-		return source == id || target == id && kind == kb.NodeKindExperiment
-	case kb.RelationReferences, kb.RelationLifts, kb.RelationRefutes:
-		return target == id
-	}
-	return false
+	return b.addEdges(e, id, edges)
 }
 
 // dropEdges removes every edge record match accepts.
 func (b *recordBatch) dropEdges(match func(relation, source, target string) bool) {
+	b.depends = nil
 	g := &b.g
 	g.References = slices.DeleteFunc(g.References, func(r kb.UnscoredEdge) bool {
 		return match(kb.RelationReferences, r.Source, r.Target)
@@ -127,139 +55,255 @@ func (b *recordBatch) dropEdges(match func(relation, source, target string) bool
 	g.Scorable = slices.DeleteFunc(g.Scorable, func(r kb.ScorableEdge) bool { return match(r.Relation, r.Source, r.Target) })
 }
 
-// dropClaimEdges removes a claim's own edges of the class named, or of both:
-// the supports and founds edges into it its rests-on list carries, and the
-// references edges out of it.
-func dropClaimEdges(b *recordBatch, e entry) error {
-	id, class := e.str("id"), e.str("edge-class")
-	if _, err := b.nodeKind("id", id); err != nil {
-		return err
-	}
-	b.dropEdges(func(relation, source, target string) bool {
-		if !ownEdge(id, relation, source, target) {
-			return false
-		}
-		switch class {
-		case kb.ListRestsOn:
-			return relation != kb.RelationReferences
-		case kb.RelationReferences:
-			return relation == kb.RelationReferences
-		}
-		return true
-	})
-	return nil
-}
-
-// dropInboundEdges removes every other node's edge naming a claim.
-func dropInboundEdges(b *recordBatch, e entry) error {
-	id := e.str("id")
-	if _, err := b.nodeKind("id", id); err != nil {
-		return err
-	}
-	b.dropEdges(func(relation, source, target string) bool { return inboundEdge(id, relation, source, target) })
-	return nil
-}
-
-// refuseRepeatedPairs refuses a resolve-demoted batch naming one pair twice,
-// whatever the actions, one item per repeat.
-func refuseRepeatedPairs(entries []entry) error {
-	named := map[[2]string]int{}
-	var refusals result.Refusal
-	for _, e := range entries {
-		id, target := e.str("id"), e.str("target")
-		if first, ok := named[[2]string{id, target}]; ok {
-			refusals = append(refusals, result.Item{Entry: e.Index, Key: "target", Remedy: "drop one of the two entries, then re-run",
-				Detail: fmt.Sprintf("names %s → %s, which entry %d already names; a pair takes one action per batch", id, target, first)})
-			continue
-		}
-		named[[2]string{id, target}] = e.Index
-	}
-	if len(refusals) > 0 {
-		return refusals
-	}
-	return nil
-}
-
-// resolveDemoted removes the demoted records of the edge from target into id,
-// or restores each to the edge it replaced, exactly, refusing a restore that
-// would close a cycle. A pair already as asked — no demoted record to remove,
-// or the edge standing and none to restore — is left as it stands.
-func resolveDemoted(b *recordBatch, e entry) error {
-	id, target, action := e.str("id"), e.str("target"), e.str("action")
-	for _, end := range [][2]string{{"id", id}, {"target", target}} {
-		if _, err := b.nodeKind(end[0], end[1]); err != nil {
-			return err
-		}
-	}
-	ends := func(source, into string) bool { return source == target && into == id }
-	var demoted []kb.DemotedEdge
+// takeDemoted removes every demoted record from source to target and returns
+// them.
+func (b *recordBatch) takeDemoted(source, target string) []kb.DemotedEdge {
+	var taken []kb.DemotedEdge
 	b.g.Demoted = slices.DeleteFunc(b.g.Demoted, func(d kb.DemotedEdge) bool {
-		if ends(d.Source, d.Target) {
-			demoted = append(demoted, d)
+		if d.Source == source && d.Target == target {
+			taken = append(taken, d)
 			return true
 		}
 		return false
 	})
-	if len(demoted) == 0 {
-		if action == actionRemove || slices.ContainsFunc(b.g.Scorable, func(r kb.ScorableEdge) bool { return ends(r.Source, r.Target) }) {
-			return nil
-		}
-		return opRefusal("target="+target, fmt.Sprintf("%s takes no demoted edge from %s, so there is nothing to restore; "+
-			"only the build writes a demoted edge", id, target),
-			"restore: add the edge with kbase add-rests-on or kbase add-pairs, or correct target, then re-run")
+	return taken
+}
+
+// edgeLister is the query a "no edge" remedy points at, edges' call.
+var edgeLister = "list the edge records that stand with " + argmark.Call("edges", nil)
+
+// noEdgeRemedy is how op's entry naming an edge no record holds is put right:
+// a removal's record may already be gone, and any other op's edge may be added
+// by a later entry of the batch.
+func noEdgeRemedy(op string) string {
+	if removal(op) {
+		return edgeLister + ", demoted ones included. Where an earlier batch or an earlier entry of this one already removed or restored " +
+			"this record, nothing is left to do: drop the entry. Otherwise correct source, target or relation, then re-run"
 	}
-	done := resolvedRemove
-	if action == actionRestore {
-		done = resolvedRestore
-		for _, d := range demoted {
-			if b.holds(d.ReplacedRelation, d.Source, d.Target) {
-				continue
-			}
-			if path := b.closesCycle(d.Source, d.Target); path != nil {
-				return result.Refusal{{Check: checkDependencyCycle, Entry: e.Index, Key: "target",
-					Remedy: "kbase resolve-demoted with action remove for this pair, or remove an edge on the named path first",
-					Detail: fmt.Sprintf("restoring %s would close the cycle %s", index.EdgeName(d.ReplacedRelation, d.Source, d.Target),
-						strings.Join(append(path, d.Source), " → "))}}
-			}
-			b.g.Scorable = append(b.g.Scorable, kb.ScorableEdge{Relation: d.ReplacedRelation, Source: d.Source, Target: d.Target,
-				Context: d.Context, Bearing: d.Bearing, ManuallyScored: d.ManuallyScored})
+	return edgeLister + ". Where it lists this edge as demoted, put a restore-demoted entry before this one. " +
+		"Where a later entry of this batch adds this edge, move that add before this entry. " +
+		"Otherwise correct source, target or relation, then re-run"
+}
+
+// noEdge refuses op's entry naming an edge identity no record holds, at its
+// relation.
+func noEdge(op, relation, source, target string) error {
+	return result.Refusal{{Key: "relation", Detail: "no edge " + index.EdgeName(relation, source, target), Remedy: noEdgeRemedy(op)}}
+}
+
+// cycleRemedy is how a cycle the named edge would close is cleared: remove
+// another edge of it first.
+var cycleRemedy = "remove another edge of the named cycle with remove-edge first — a step X → Y is source X and target Y, " +
+	"and " + argmark.Call("edges", nil) + " lists its relation in the row with source X and target Y — then re-run"
+
+// cycleRefusal refuses the edge named, which would close cycle, remedy its
+// clearing.
+func cycleRefusal(name string, cycle []string, remedy string) error {
+	return result.Refusal{{Check: checkDependencyCycle, Key: "target", Remedy: remedy,
+		Detail: fmt.Sprintf("%s would close the cycle %s", name, strings.Join(cycle, " → "))}}
+}
+
+// edgeEnds is the kinds of the nodes source and target name, op's entry
+// refused where either names none.
+func (b *recordBatch) edgeEnds(op, source, target string) (sourceKind, targetKind string, err error) {
+	kinds := index.GraphKinds(b.g)
+	for _, end := range [][2]string{{"source", source}, {"target", target}} {
+		if _, ok := kinds[end[1]]; !ok {
+			return "", "", noNode(op, end[0], end[1])
 		}
 	}
-	b.resolved = append(b.resolved, Resolution{Source: id, Target: target, Action: done})
+	return kinds[source], kinds[target], nil
+}
+
+// joiningRelations is the relations an op writes that join a sourceKind node
+// to a targetKind node, in the relations table's order.
+func joiningRelations(sourceKind, targetKind string) []string {
+	var out []string
+	for _, r := range authoredRelations {
+		if Joins(r, sourceKind, targetKind) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Joins is whether an op may write a relation edge from a sourceKind node to a
+// targetKind node: references joins any kind to any kind, a scoring relation
+// the kinds whose edge may carry a bearing, and demoted none.
+func Joins(relation, sourceKind, targetKind string) bool {
+	return relation == kb.RelationReferences || kb.BearingLegal(relation, sourceKind, targetKind)
+}
+
+// unjoined refuses relation, which does not join a sourceKind node to a
+// targetKind node.
+func unjoined(relation, sourceKind, targetKind string) result.Item {
+	return result.Item{Key: "relation", Remedy: "correct relation, source or target, then re-run",
+		Detail: fmt.Sprintf("%s does not join a %s source to a %s target", relation, sourceKind, targetKind)}
+}
+
+// referencesBearing refuses a bearing on a references edge.
+func referencesBearing() error {
+	return result.Refusal{{Key: "bearing", Remedy: "drop bearing, then re-run",
+		Detail: "a references edge carries no bearing"}}
+}
+
+// addEdge writes one edge, refused where its ends name no node, where its
+// relation does not join their kinds, where a references edge is given a
+// bearing, where an edge of its identity stands, and where a scoring edge would
+// close a cycle. A left-out bearing is pending; a demoted record of the edge
+// is deleted, the add's own values written.
+func addEdge(b *recordBatch, e entry) error {
+	source, target, relation := e.str("source"), e.str("target"), e.str("relation")
+	sourceKind, targetKind, err := b.edgeEnds(e.Op, source, target)
+	if err != nil {
+		return err
+	}
+	if joins := joiningRelations(sourceKind, targetKind); !slices.Contains(joins, relation) {
+		item := unjoined(relation, sourceKind, targetKind)
+		item.Allowed = joins
+		return result.Refusal{item}
+	}
+	if relation == kb.RelationReferences && e.has("bearing") {
+		return referencesBearing()
+	}
+	name := index.EdgeName(relation, source, target)
+	if b.holds(relation, source, target) {
+		return result.Refusal{{Key: "relation", Detail: "edge exists: " + name,
+			Remedy: "edit-edge changes a standing edge's bearing or context; " + argmark.Call("edges", nil) + " reads its values"}}
+	}
+	context := e.str("context")
+	if relation == kb.RelationReferences {
+		b.g.References = append(b.g.References, kb.UnscoredEdge{Source: source, Target: target, Context: context})
+		return nil
+	}
+	if cycle := b.closesCycle(source, target); cycle != nil {
+		return cycleRefusal(name, cycle, cycleRemedy)
+	}
+	bearing := bearingOf(e.score("bearing"))
+	if relation == kb.RelationFounds {
+		b.g.Founds = append(b.g.Founds, kb.BearingEdge{Source: source, Target: target, Context: context, Bearing: bearing})
+		return nil
+	}
+	b.g.Demoted = slices.DeleteFunc(b.g.Demoted, kb.DemotedMatch(relation, source, target))
+	b.g.Scorable = append(b.g.Scorable, kb.ScorableEdge{Relation: relation, Source: source, Target: target, Context: context,
+		Bearing: bearing, ManuallyScored: b.judged(e.has("bearing"))})
+	if e.has("bearing") {
+		b.valueSet(scoredRecord{relation: relation, source: source, target: target}, bearing.Pending)
+	}
 	return nil
 }
 
-// demoteEdge replaces each standing scoring edge from target into id with the
-// demoted record that keeps it whole. Where that record already stands the
-// edge standing beside it goes; where only demoted records stand the pair is
-// left as it stands, and a pair with neither is refused.
-func demoteEdge(b *recordBatch, e entry) error {
-	id, target := e.str("id"), e.str("target")
-	ends := func(source, into string) bool { return source == target && into == id }
-	var standing []kb.ScorableEdge
-	b.g.Scorable = slices.DeleteFunc(b.g.Scorable, func(r kb.ScorableEdge) bool {
-		if ends(r.Source, r.Target) {
-			standing = append(standing, r)
-			return true
+// editEdge replaces the bearing and the context its entry gives of the edge it
+// names, refused where no record holds it and where a references edge is given
+// a bearing. A bearing given marks a supports, lifts or refutes edge manually
+// scored; its judged hash stands.
+func editEdge(b *recordBatch, e entry) error {
+	source, target, relation := e.str("source"), e.str("target"), e.str("relation")
+	ends := func(s, t string) bool { return s == source && t == target }
+	var context *string
+	switch relation {
+	case kb.RelationReferences:
+		if e.has("bearing") {
+			return referencesBearing()
 		}
-		return false
+		if r := record(b.g.References, func(r kb.UnscoredEdge) bool { return ends(r.Source, r.Target) }); r != nil {
+			context = &r.Context
+		}
+	case kb.RelationFounds:
+		if r := record(b.g.Founds, func(r kb.BearingEdge) bool { return ends(r.Source, r.Target) }); r != nil {
+			context = &r.Context
+			if e.has("bearing") {
+				r.Bearing = bearingOf(e.score("bearing"))
+			}
+		}
+	default:
+		if r := record(b.g.Scorable, func(r kb.ScorableEdge) bool { return r.Relation == relation && ends(r.Source, r.Target) }); r != nil {
+			context = &r.Context
+			if e.has("bearing") {
+				r.Bearing, r.ManuallyScored = bearingOf(e.score("bearing")), b.judged(true)
+				b.valueSet(scoredRecord{relation: relation, source: source, target: target}, r.Bearing.Pending)
+			}
+		}
+	}
+	if context == nil {
+		return noEdge(e.Op, relation, source, target)
+	}
+	if e.has("context") {
+		*context = e.str("context")
+	}
+	return nil
+}
+
+// removeEdge removes the one edge record its entry names, or, for demoted,
+// every demoted record from source to target, leaving the edge out of the
+// graph. It is refused where an end names no node, where a scoring relation
+// does not join their kinds, and where no such record stands.
+func removeEdge(b *recordBatch, e entry) error {
+	source, target, relation := e.str("source"), e.str("target"), e.str("relation")
+	sourceKind, targetKind, err := b.edgeEnds(e.Op, source, target)
+	if err != nil {
+		return err
+	}
+	if kb.Scoring(relation) && !kb.BearingLegal(relation, sourceKind, targetKind) {
+		return result.Refusal{unjoined(relation, sourceKind, targetKind)}
+	}
+	if relation == kb.RelationDemoted {
+		if len(b.takeDemoted(source, target)) == 0 {
+			return noEdge(e.Op, relation, source, target)
+		}
+		return nil
+	}
+	if !b.holds(relation, source, target) {
+		return noEdge(e.Op, relation, source, target)
+	}
+	b.dropEdges(func(r, s, t string) bool { return r == relation && s == source && t == target })
+	return nil
+}
+
+// restoreDemoted puts back the edge each demoted record from source to target
+// replaced, exactly, deleting the record, and reports the relations it put
+// back. It refuses an entry no demoted record from source to target answers,
+// and a restore that would close a cycle.
+func restoreDemoted(b *recordBatch, e entry) error {
+	source, target := e.str("source"), e.str("target")
+	demoted := b.takeDemoted(source, target)
+	if len(demoted) == 0 {
+		return noEdge(e.Op, kb.RelationDemoted, source, target)
+	}
+	var restored []string
+	for _, d := range demoted {
+		if cycle := b.closesCycle(d.Source, d.Target); cycle != nil {
+			return cycleRefusal("restoring "+index.EdgeName(d.ReplacedRelation, d.Source, d.Target), cycle,
+				cycleRemedy+fmt.Sprintf("; or, to leave the edge out of the graph, remove the demoted record with remove-edge, source %s, target %s and relation %s",
+					source, target, kb.RelationDemoted))
+		}
+		b.g.Scorable = append(b.g.Scorable, kb.ScorableEdge{Relation: d.ReplacedRelation, Source: d.Source, Target: d.Target,
+			Context: d.Context, Bearing: d.Bearing, ManuallyScored: d.ManuallyScored})
+		restored = append(restored, d.ReplacedRelation)
+	}
+	b.report = entryReport{Restored: restored}
+	return nil
+}
+
+// demoteEdge replaces the standing scoring edge of relation from source to
+// target with the demoted record that keeps it whole. Where only that record
+// stands the edge is left as it stands, and an edge with neither is refused.
+func demoteEdge(b *recordBatch, e entry) error {
+	source, target, relation := e.str("source"), e.str("target"), e.str("relation")
+	i := slices.IndexFunc(b.g.Scorable, func(r kb.ScorableEdge) bool {
+		return r.Relation == relation && r.Source == source && r.Target == target
 	})
-	if len(standing) == 0 {
-		if slices.ContainsFunc(b.g.Demoted, func(d kb.DemotedEdge) bool { return ends(d.Source, d.Target) }) {
+	if i < 0 {
+		if slices.ContainsFunc(b.g.Demoted, kb.DemotedMatch(relation, source, target)) {
 			return nil
 		}
-		return opRefusal("target="+target, fmt.Sprintf("%s takes no scoring edge from %s, and this op demotes a standing edge; "+
-			"only the build writes a demoted edge, and add-rests-on or add-pairs adds the edge", id, target),
-			"restore: add the edge, or correct target, then re-run")
+		return opRefusal("target="+target, fmt.Sprintf("no %s edge runs from %s to %s, and this op demotes a standing edge", relation, source, target),
+			"restore: add the edge, or correct source, target or relation, then re-run")
 	}
-	for _, r := range standing {
-		if slices.ContainsFunc(b.g.Demoted, func(d kb.DemotedEdge) bool {
-			return d.ReplacedRelation == r.Relation && ends(d.Source, d.Target)
-		}) {
-			continue
-		}
-		b.g.Demoted = append(b.g.Demoted, kb.DemotedEdge{Source: r.Source, Target: r.Target, Context: r.Context,
-			ReplacedRelation: r.Relation, Bearing: r.Bearing, ManuallyScored: r.ManuallyScored})
-	}
+	r := b.g.Scorable[i]
+	b.g.Scorable = slices.Delete(b.g.Scorable, i, i+1)
+	b.depends = nil
+	b.g.Demoted = append(b.g.Demoted, kb.DemotedEdge{Source: r.Source, Target: r.Target, Context: r.Context,
+		ReplacedRelation: r.Relation, Bearing: r.Bearing, ManuallyScored: r.ManuallyScored})
 	return nil
 }

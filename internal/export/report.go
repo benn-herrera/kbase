@@ -2,8 +2,8 @@ package export
 
 import "fmt"
 
-// Finding is one line of the export report: the form it was raised for, the
-// source path it was found in, and the reason.
+// Finding is one line of the export report: the form the export simplified or
+// otherwise raised it for, the source path it was found in, and why.
 type Finding struct {
 	Form   string `json:"form" yaml:"form"`
 	Path   string `json:"path" yaml:"path"`

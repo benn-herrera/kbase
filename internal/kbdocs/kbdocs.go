@@ -1,6 +1,7 @@
 // Package kbdocs writes the documents a build stamps into kb-root/ from their
 // templates: the readiness documents, each only where none stands, and the
-// overview document around a passage written from excerpts of the tree.
+// overview document around a passage written from excerpts of the tree; and
+// rewrites the block kbase maintains in each of them.
 package kbdocs
 
 import (
@@ -15,6 +16,7 @@ import (
 
 	"kbase/internal/atomicfile"
 	"kbase/internal/buildrecords"
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
@@ -30,6 +32,14 @@ var sessionRule string
 // both carry.
 func SessionRule() string { return strings.TrimSpace(sessionRule) }
 
+//go:embed templates/index-rule.txt
+var indexRule string
+
+// IndexRule is the rule a session works under for kb-root/.index/: plain
+// text, the one copy that the stamped AGENTS.md and the MCP instructions both
+// carry.
+func IndexRule() string { return strings.TrimSpace(indexRule) }
+
 // The documents, by the name each is written under in kb-root/.
 const (
 	ConventionsFile = kb.ConventionsFile
@@ -40,11 +50,11 @@ const (
 const (
 	slotProjectName = "project-name"
 	slotScopePin    = "scope-pin"
-	slotNodeKinds   = "node-kinds"
 	slotPending     = "pending-literal"
 	slotPassage     = "overview-passage"
 	slotDigestChunk = "digest-chunk"
 	slotSessionRule = "session-rule"
+	slotIndexRule   = "index-rule"
 )
 
 // digestChunkName names the template sub-piece holding the digest sentence
@@ -63,11 +73,10 @@ func digestChunk() (string, error) {
 }
 
 // AuthoredKBPin is the scope pin of a KB `init` created empty: no corpus was
-// distilled because there is no corpus — what the KB holds, its author writes
-// into it, a claim at a time.
+// distilled because there is no corpus — its author writes what it holds, a
+// claim at a time.
 const AuthoredKBPin = "This KB was created empty by kbase init, authored, not distilled: " +
-	"there is no corpus. What it holds its author writes into it, a claim at a time, " +
-	"through the ops `CONVENTIONS.md` states."
+	"there is no corpus. Its author writes what it holds, a claim at a time."
 
 var slotRE = regexp.MustCompile(`\{([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\}`)
 
@@ -143,45 +152,106 @@ func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []str
 
 // readinessValues is what the readiness documents' slots are filled with.
 func readinessValues(projectName, scopePin string) map[string]string {
-	kinds := make([]string, len(kb.NodeKinds))
-	for i, k := range kb.NodeKinds {
-		kinds[i] = "`" + k + "`"
-	}
-	return map[string]string{slotProjectName: projectName, slotScopePin: scopePin, slotNodeKinds: strings.Join(kinds, ", "),
-		slotSessionRule: SessionRule()}
+	return map[string]string{slotProjectName: projectName, slotScopePin: scopePin,
+		slotSessionRule: SessionRule(), slotIndexRule: IndexRule()}
 }
 
-// Restamp records in a migrated src, for its save to write, every readiness
-// document rendered whole from its template, whatever stood: projectName in
-// each, and as AGENTS.md's scope pin AuthoredKBPin where init made the KB, else
-// none. A source read at the current format is left as it is.
-func Restamp(src *kb.Source, projectName string) error {
-	if !src.Migrated() {
-		return nil
+// The maintained block's fence lines, each recognised by its two ends alone,
+// so the text between the ends may differ between releases.
+const (
+	fenceOpenHead, fenceOpenTail   = "<!-- vvv-kbase", "kbase-vvv -->"
+	fenceCloseHead, fenceCloseTail = "<!-- ^^^-kbase", "kbase-^^^ -->"
+)
+
+// blockSpan is the byte range of text between its one ordered pair of fence
+// lines: from the start of the line after the opening fence to the start of
+// the closing fence's line. ok is false where text holds other than one
+// opening and one closing fence line, the opening first.
+func blockSpan(text string) (start, end int, ok bool) {
+	opens, closes := 0, 0
+	for at := 0; at < len(text); {
+		n := strings.IndexByte(text[at:], '\n')
+		next := len(text)
+		if n >= 0 {
+			next = at + n + 1
+		}
+		line := strings.TrimSpace(text[at:next])
+		switch {
+		case strings.HasPrefix(line, fenceOpenHead) && strings.HasSuffix(line, fenceOpenTail):
+			opens++
+			start = next
+		case strings.HasPrefix(line, fenceCloseHead) && strings.HasSuffix(line, fenceCloseTail):
+			closes++
+			end = at
+		}
+		at = next
 	}
+	return start, end, opens == 1 && closes == 1 && start <= end
+}
+
+// Maintain rewrites the maintained block of each maintained-block document
+// of src's kb-root to what its template renders, writing only a document whose
+// bytes change: AGENTS.md and CONVENTIONS.md, each written whole where absent,
+// and README.md only where it stands — a build alone writes one, carrying its
+// overview passage outside the block. A document holding other than one
+// ordered pair of fence lines is left untouched and listed in unfenced. The
+// templates are filled with projectName; AGENTS.md's scope pin is
+// AuthoredKBPin where init made the KB, else none; README.md's digest
+// sentence stands where digestDrawn. Both lists are kb-root-relative.
+func Maintain(src *kb.Source, projectName string, digestDrawn bool) (written, unfenced []string, err error) {
 	pin := ""
 	if bornByInit(src) {
 		pin = AuthoredKBPin
 	}
-	values := readinessValues(projectName, pin)
-	for _, name := range kb.StampedFiles {
-		text, err := fill(name, values)
-		if err != nil {
-			return err
-		}
-		src.Put(src.KBPath(name), []byte(text))
+	readme, err := Overview(projectName, "", digestDrawn)
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil
+	rendered := map[string]string{OverviewFile: readme}
+	for _, name := range kb.StampedFiles {
+		if rendered[name], err = fill(name, readinessValues(projectName, pin)); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, name := range append(slices.Clone(kb.StampedFiles), OverviewFile) {
+		target := src.KBPath(name)
+		current, err := src.ReadFile(target)
+		if errors.Is(err, os.ErrNotExist) {
+			if name == OverviewFile {
+				continue
+			}
+			if err := index.WriteKBFile(src, target, []byte(rendered[name])); err != nil {
+				return written, unfenced, err
+			}
+			written = append(written, name)
+			continue
+		}
+		if err != nil {
+			return written, unfenced, err
+		}
+		start, end, ok := blockSpan(string(current))
+		if !ok {
+			unfenced = append(unfenced, name)
+			continue
+		}
+		blockStart, blockEnd, _ := blockSpan(rendered[name])
+		text := string(current[:start]) + rendered[name][blockStart:blockEnd] + string(current[end:])
+		if text == string(current) {
+			continue
+		}
+		if err := index.WriteKBFile(src, target, []byte(text)); err != nil {
+			return written, unfenced, err
+		}
+		written = append(written, name)
+	}
+	return written, unfenced, nil
 }
 
-// bornByInit is whether init made the KB src holds: AGENTS.md stands and no
-// build record does. init stamps AGENTS.md at birth and writes no build record,
-// and build refuses the populated kb-root it leaves; a build writes its node-pass
-// record at claims-declared and stamps AGENTS.md only later, at phase-3a.
+// bornByInit is whether init made the KB src holds: no build record stands.
+// init writes no build record, and build refuses the populated kb-root it
+// leaves; a build writes its node-pass record at claims-declared, before it
+// stamps AGENTS.md at phase-3a.
 func bornByInit(src *kb.Source) bool {
-	if !src.IsFile(src.KBPath(kb.AgentsFile)) {
-		return false
-	}
 	return !slices.ContainsFunc(buildrecords.RecordFiles, func(rel string) bool { return src.IsFile(src.Path(rel)) })
 }
 

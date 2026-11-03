@@ -2,54 +2,66 @@
 # file for the placeholders and how the script is rendered and run.
 steps:
   - name: premise
-    op: insert-claim-entry
+    reissue: refused
+    reissue-detail: "node exists: "
     values:
       entry:
-        - title: Compatibility Probe Premise
+        - operation: add-claim
+          title: Compatibility Probe Premise
           rigor: 0.9
           rationale: Written by the compatibility op script as the result the probe rests on.
           document: "{leaf}"
-          locator: "{locator}"
+          line: "{line}"
+          snippet: "{snippet}"
   - name: probe
-    op: insert-claim-entry
+    reissue: refused
+    reissue-detail: "node exists: "
     values:
       entry:
-        - title: Compatibility Probe Result
+        - operation: add-claim
+          title: Compatibility Probe Result
           rigor: 0.5
           rationale: Written by the compatibility op script to exercise the write API.
           document: "{leaf}"
-          locator: "{locator}"
-          rests-on:
-            - id: "{minted:premise}"
-              context: the result the probe extends
-              bearing: "*pending*"
-          strengthen-by:
-            - Replace the probe with a claim the corpus states.
-  - op: set-rigor
+          line: "{line}"
+          snippet: "{snippet}"
+  - name: work
+    reissue: refused
+    reissue-detail: "node exists: "
     values:
       entry:
-        - id: "{minted:probe}"
-          rigor: 0.75
-  - op: insert-work-entry
-    values:
-      entry:
-        - key: CompatProbe2026
+        - operation: add-work
+          label: CompatProbe2026
           title: Compatibility Probe (2026)
           rigor: "*pending*"
           rationale: A work the probe rests on; no bibliography answers its key.
-  - op: add-rests-on
+  - reissue: refused
+    reissue-detail: "edge exists: "
     values:
       entry:
-        - id: "{minted:probe}"
-          rests-on:
-            - id: wrk-CompatProbe2026
-              bearing: "*pending*"
-          references:
-            - id: "{minted:premise}"
-  - op: set-bearing
+        - operation: add-edge
+          source: "{minted:premise}"
+          target: "{minted:probe}"
+          relation: supports
+          bearing: "*pending*"
+          context: the result the probe extends
+        - operation: add-edge
+          source: "{minted:work}"
+          target: "{minted:probe}"
+          relation: founds
+          bearing: "*pending*"
+        - operation: add-edge
+          source: "{minted:probe}"
+          target: "{minted:premise}"
+          relation: references
+  - reissue: unchanged
     values:
       entry:
-        - id: wrk-CompatProbe2026
+        - operation: edit-claim
+          id: "{minted:probe}"
+          rigor: 0.75
+        - operation: edit-edge
+          source: "{minted:work}"
           target: "{minted:probe}"
           relation: founds
           bearing: 0.5

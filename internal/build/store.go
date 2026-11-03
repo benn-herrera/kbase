@@ -122,7 +122,7 @@ func runningRefusal(path string) ([]result.Item, error) {
 func awaitWriters(kbRoot string) error {
 	release, err := write.LockKB(kbRoot)
 	if errors.Is(err, filelock.ErrHeld) {
-		return buildstore.Retry{{Check: buildstore.CheckLock, Path: filepath.Dir(kbRoot), Detail: "a write op or refresh holds the KB's write lock"}}
+		return buildstore.Retry{{Check: buildstore.CheckLock, Path: filepath.Dir(kbRoot), Detail: "a write op or update-format holds the KB's write lock"}}
 	}
 	if err != nil {
 		return err

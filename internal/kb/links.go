@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"kbase/internal/formats/format400"
 )
 
 // SkipDirs are never crawled, matched as one path segment at any depth.
@@ -23,19 +25,78 @@ var skipSegmentRuns = [][]string{{"tests", "fixtures"}, {".claude", "worktrees"}
 // where a build stamps it.
 const documentTemplateSuffix = ".tmpl.md"
 
+// The link grammar is format400's: every reader of a document's links, the
+// citations among them, reads through it.
 var (
-	// LinkRE is an inline link or image, [text](target); group 1 is the
-	// destination, angle-bracketed or bare. Link text may nest one level of
-	// brackets.
-	LinkRE = regexp.MustCompile(`\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*(<[^>]*>|[^)\s]+)\s*\)`)
-	// RefDefRE is a link reference definition, [label]: destination "title";
-	// group 1 is the destination. A footnote definition, [^1]: text, is not one.
-	RefDefRE = regexp.MustCompile(`(?m)^[ \t]{0,3}\[[^\[\]^][^\[\]]*\]:[ \t]*(<[^>]*>|\S+)[ \t]*(?:"[^"]*"|'[^']*'|\([^)]*\))?[ \t]*$`)
-	// InlineMathRE is the writer's inline maths span, which may wrap across
-	// lines; the $ at both ends is what keeps an odd backtick in prose from
-	// opening one.
-	InlineMathRE = regexp.MustCompile("\\$`[^`]*`\\$")
+	// LinkRE is an inline link or image, [text](destination "title"); group 1
+	// is the destination and group 2 the title with its delimiters.
+	LinkRE = format400.LinkRE
+	// RefDefRE is a link reference definition; group 1 is the destination.
+	RefDefRE = format400.RefDefRE
+	// InlineMathRE is the writer's inline maths span.
+	InlineMathRE = format400.InlineMathRE
+)
 
+// Links is every inline link of line, in order: its spans, text, destination
+// and title, and the node id the title cites where it is a citation.
+func Links(line string) []format400.Link { return format400.Links(line) }
+
+// TextLink is one inline link in a document's text: its 0-based line and its
+// link, whose offsets hold on the raw line.
+type TextLink struct {
+	Line int
+	format400.Link
+}
+
+// TextCitation is a TextLink whose title is a node id.
+type TextCitation = TextLink
+
+// TextLinks is every inline link in text outside code, in order. Code is
+// blanked byte for byte, so each link's offsets are its offsets in the raw
+// line.
+func TextLinks(text string) []TextLink {
+	var out []TextLink
+	for n, view := range SplitLines(StripCodeSplitLines(text)) {
+		for _, l := range Links(view) {
+			out = append(out, TextLink{Line: n, Link: l})
+		}
+	}
+	return out
+}
+
+// TextLinkDefinitions is every link reference definition in text outside
+// code, [label]: destination "title", in order, each a TextLink spanning the
+// definition, its destination and the destination's offsets on the raw line
+// set; its label and title are not read.
+func TextLinkDefinitions(text string) []TextLink {
+	var out []TextLink
+	for n, view := range SplitLines(StripCodeSplitLines(text)) {
+		if m := RefDefRE.FindStringSubmatchIndex(view); m != nil {
+			out = append(out, TextLink{Line: n, Link: format400.Link{Start: m[0], End: m[1], DestStart: m[2], DestEnd: m[3], Destination: view[m[2]:m[3]]}})
+		}
+	}
+	return out
+}
+
+// TextCitations is every citation in text outside code, in order: each of
+// TextLinks whose title is a node id.
+func TextCitations(text string) []TextCitation {
+	return slices.DeleteFunc(TextLinks(text), func(l TextLink) bool {
+		_, ok := l.CitedID()
+		return !ok
+	})
+}
+
+// Citation is the citation of node id whose link text is text and whose
+// destination is destination.
+func Citation(text, destination, id string) string { return format400.Citation(text, destination, id) }
+
+// BareIDs is every node id in line outside a statement marker, a link's
+// destination and title, and a link reference definition; code is the
+// caller's to blank first.
+func BareIDs(line string) []format400.IDToken { return format400.BareIDs(line) }
+
+var (
 	fenceLineRE = regexp.MustCompile("^[ \t]*(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$")
 	// BlockquotePrefix is one line's leading blockquote markers: indent, >
 	// and an optional space, once per nesting level.
@@ -82,6 +143,33 @@ func MarkdownFiles(src *Source) ([]string, error) {
 	})
 	slices.Sort(out)
 	return out, err
+}
+
+// CitingDocuments is every document citations are read in, as kb-root-relative
+// slash paths, sorted: every MarkdownFiles document but those standing at a
+// summary page position, the volumes taken as Volumes(Documents(src)). A file
+// named like a summary page anywhere else is read.
+func CitingDocuments(src *Source) ([]string, error) {
+	docs, err := Documents(src)
+	if err != nil {
+		return nil, err
+	}
+	pages := SummaryPagePositions(Volumes(docs))
+	files, err := MarkdownFiles(src)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, file := range files {
+		rel, err := filepath.Rel(src.Root(), file)
+		if err != nil {
+			return nil, err
+		}
+		if rel = filepath.ToSlash(rel); !slices.Contains(pages, rel) {
+			out = append(out, rel)
+		}
+	}
+	return out, nil
 }
 
 func containsRun(parts, run []string) bool {
@@ -168,64 +256,7 @@ func StripCodeSplitLines(text string) string {
 	return blankInlineSpans(StripCodeFences(text))
 }
 
-func blankInlineSpans(text string) string {
-	return blankCodeSpans(InlineMathRE.ReplaceAllStringFunc(text, spaces))
-}
-
-// blankCodeSpans is text with every inline code span blanked, CommonMark's
-// pairing on one line: a maximal run of n backticks opens, and only the next
-// maximal run of exactly n closes; a run of any other length inside is
-// content, and an opener with no closer on its line is literal text. Go's
-// regexp has no backreference to state the pairing as a pattern.
-func blankCodeSpans(text string) string {
-	var b strings.Builder
-	last := 0
-	for i := 0; i < len(text); {
-		n := backtickRun(text, i)
-		if n == 0 {
-			i++
-			continue
-		}
-		closer := -1
-		for j := i + n; j < len(text) && text[j] != '\n'; {
-			m := backtickRun(text, j)
-			if m == n {
-				closer = j
-				break
-			}
-			j += max(m, 1)
-		}
-		if closer < 0 {
-			i += n
-			continue
-		}
-		end := closer + n
-		b.WriteString(text[last:i])
-		b.WriteString(spaces(text[i:end]))
-		last, i = end, end
-	}
-	b.WriteString(text[last:])
-	return b.String()
-}
-
-// backtickRun is the length of the run of backticks starting at s[i].
-func backtickRun(s string, i int) int {
-	n := 0
-	for i+n < len(s) && s[i+n] == '`' {
-		n++
-	}
-	return n
-}
-
-// spaces is s with every character but a newline replaced by a space.
-func spaces(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' {
-			return r
-		}
-		return ' '
-	}, s)
-}
+func blankInlineSpans(text string) string { return format400.BlankInlineCode(text) }
 
 var (
 	// destinationRE is a link destination wherever a link text closes, so a

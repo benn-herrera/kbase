@@ -31,14 +31,25 @@ MONITOR_ARXIV_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-monitor-arx
 RESULTS_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "results"
 MCP_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp"
 MCP_BUILD_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-mcp-build"
+MEASURE_MCP_SURFACE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "measure-mcp-surface"
 INIT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-init"
+# The committed fixtures that pin kbase's own output, which only
+# regenerate-fixtures writes, and its evidence.
+INIT_SKELETON_DIR := TEST_DATA_FIXTURES_DIR / "init" / "skeleton"
+REGENERATE_FIXTURES_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "regenerate-fixtures"
 CONFIG_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-config"
+AUTH_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-auth"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 OPSCRIPT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-opscript-results"
 COMPAT_OP_SCRIPT := TEST_DATA_FIXTURES_DIR / "compat" / "ops.yaml"
 PARITY_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-parity-adjagent-sheet"
 REFUSED_WRITE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-refused-write-adjagent-sheet"
 STAGE_FIXTURE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-stage-fixture"
+# The two small papers the lamb build recipes build, and their evidence.
+LAMB_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "lamb"
+LAMB_CYCLE_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "lamb-cycle"
+BUILD_LAMB_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-lamb"
+BUILD_LAMB_CYCLE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-lamb-cycle"
 
 # Pinned integration corpus: the arXiv survey sample, taken from adjagent's
 # kb-testing/justfile — papers sampled by construction across categories whose
@@ -96,15 +107,19 @@ EXPORT_CHECK_DIR := "tools/export"
 GOPKGS := "./..."
 GOSRCDIRS := "cmd internal tools"
 
+[doc("list the public recipes with their docs")]
 default:
     @just --list
 
-# builds for current host platform only. product is .gitignored. The build is
-# tagged kbasedev, the development shape, so it carries the development
-# replays; an untagged build is the release shape and carries none of them.
+[doc("build bin/kbase for the host platform with -tags kbasedev, the development shape that carries the development replays; an untagged build is the release shape and carries none")]
 build:
     @mkdir -p {{BIN_DIR}}
     go build -tags kbasedev -o {{BIN_DIR}}/kbase ./cmd
+
+[doc("build bin/release/kbase for the host platform with no build tag: the release shape the tap ships, carrying no development replay")]
+build-release:
+    @mkdir -p {{BIN_DIR}}/release
+    go build -o {{BIN_DIR}}/release/kbase ./cmd
 
 # Both unit recipes tee their output to {{UNIT_TEST_OUT_DIR}}. `go test ./...`
 # is ONE process emitting ONE combined stream, so the preserved log is
@@ -117,38 +132,41 @@ build:
 # files tagged kbasedev, so an untagged `go test ./...` would run none of them
 # and pass, silently.
 
-# run the unit tests. VERBOSE=1 for per-test output.
+[doc("run the unit tests under -tags kbasedev; VERBOSE=1 for per-test output; log in test-data/transient/unit_tests/test_log.txt")]
 test:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     go test -tags kbasedev ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test_log.txt"
 
-# run the unit tests under the race detector (slower; catches real data races)
+[doc("run the unit tests under the race detector, slower; VERBOSE=1 for per-test output; log in test-data/transient/unit_tests/test-race_log.txt")]
 test-race:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     go test -race -tags kbasedev ${VERBOSE:+-v} ./... 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-race_log.txt"
 
-[doc("run one package's unit tests and its subpackages: just test-pkg ./internal/kb, or internal/kb, or internal/kb/... — one package alone, for testing it while OTHER packages still fail to build; log under the package's name in the unit-test output directory; VERBOSE=1 for per-test output; a package that is not named, or that names the whole repository, is refused")]
+[doc("run one package's unit tests and its subpackages, for testing it while other packages fail to build: just test-pkg ./internal/kb (or internal/kb, internal/kb/...); VERBOSE=1 for per-test output")]
 test-pkg pkg:
     @PKG="{{pkg}}" UNIT_TEST_OUT_DIR="{{UNIT_TEST_OUT_DIR}}" tools/scripts/test-pkg.sh
 
-[doc("benchmark the index derivation: BenchmarkLoadDerive in internal/index times index.Derive over the claim-graph sheet fixture's KB as committed (x1) and replicated x40 in memory, reporting ns/op and allocs/op at each size; log under test-data/transient/bench-load/")]
+[doc("benchmark index.Derive (BenchmarkLoadDerive) over the claim-graph sheet fixture, converted first, and its x40 in-memory replica; ns/op and allocs/op")]
 bench-load:
     @mkdir -p "{{BENCH_LOAD_OUT_DIR}}"
     go test -run '^$' -bench '^BenchmarkLoadDerive$' -benchmem ./internal/index 2>&1 | tee "{{BENCH_LOAD_OUT_DIR}}/log.txt"
 
-[doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the export contract checker's own; log in the unit-test output directory")]
+[doc("NEEDS python3 (excluded from test-integration): run the tools/export unit tests, the export contract checker's own; log in test-data/transient/unit_tests/")]
 test-export-forms:
     @mkdir -p "{{UNIT_TEST_OUT_DIR}}"
     python3 -B -m unittest discover -s {{EXPORT_CHECK_DIR}} 2>&1 | tee "{{UNIT_TEST_OUT_DIR}}/test-export-forms_log.txt"
 
-# Cheap gate: run after every change.
+[doc("the cheap gate, run after every change: fmt-check, go vet plain and tagged kbasedev, bash -n of every tools/scripts script, check-hermetic.sh and check-just-docs.sh")]
 edit-gate: fmt-check
     go vet ./...
     go vet -tags kbasedev ./...
     @for f in tools/scripts/*.sh; do bash -n "${f}" || exit 1; done
+    @tools/scripts/check-hermetic.sh
+    @tools/scripts/check-just-docs.sh
 
 # this project is developed in tandem with adjagent
 AGENTS_DIR := "../adjagent"
+[doc("NEEDS the adjagent clone (AGENTS_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
     @AGENTS_DIR="{{AGENTS_DIR}}" tools/scripts/agents.sh
 
@@ -156,23 +174,17 @@ agents:
 # set-up both take, and the location its .gitignore entry names.
 TAP_DIR := "homebrew-kbase"
 TAP_URL := "git@github.com:benn-herrera/homebrew-kbase.git"
-[doc("set up the sibling Homebrew tap clone at homebrew-kbase/, idempotent by state: absent clones it, a clone whose origin is the tap is left alone, one with no origin gets the origin, one with another origin or no .git is refused naming what it holds; one line says what was done")]
+[doc("set up the sibling Homebrew tap clone at homebrew-kbase/: clone it, or add the missing origin to a clone; leave a correct clone alone, refuse any other; one line says what was done")]
 tap:
     @TAP_DIR="{{TAP_DIR}}" TAP_URL="{{TAP_URL}}" tools/scripts/tap.sh
 
-[doc("after a release is pushed: point the tap's formula at the v<version> source tarball and its sha256; refuses until GitHub serves it; commits nothing")]
+[doc("LIVE; NEEDS the tap clone, a pushed release: set the tap formula's v<version> tarball and sha256 and commit it there, pushing nothing; raise go.mod's go line if Go no longer supports it, uncommitted")]
 tap-update:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ver="v$(go run ./cmd --version)"
-    url="https://github.com/benn-herrera/kbase/archive/refs/tags/${ver}.tar.gz"
-    sha="$(curl -fsSL "${url}" | shasum -a 256 | cut -d' ' -f1)"
-    f="{{TAP_DIR}}/Formula/kbase.rb"
-    sed -i '' \
-        -e "s|^  url \".*\"|  url \"${url}\"|" \
-        -e "s|^  sha256 \".*\"|  sha256 \"${sha}\"|" \
-        "${f}"
-    git -C "{{TAP_DIR}}" diff -- Formula/kbase.rb
+    @TAP_DIR="{{TAP_DIR}}" tools/scripts/tap-update.sh
+
+[doc("LIVE; NEEDS brew and the tap clone; DESTRUCTIVE to this machine's brew install of kbase: reinstall it from a scratch formula over a tarball of the working tree's tracked files; the tap is untouched")]
+tap-local:
+    @TAP_DIR="{{TAP_DIR}}" tools/scripts/tap-local.sh
 
 # Integration recipes are named test-integration-<process>-<corpus>: the
 # process first, the input corpus last, because a corpus is served by several
@@ -184,25 +196,25 @@ tap-update:
 # pin block above, one prep recipe, one recipe per process, and the hermetic
 # names on the omnibus.
 
-[doc("fetch and unpack the pinned arXiv sample, one source tree per id under test-data/transient/arxiv/ (no-op per id when present); pass ids= to take a subset")]
+[doc("LIVE: fetch and unpack the pinned arXiv sample into one source tree per id under test-data/transient/arxiv/, skipping ids present; ids= takes a subset")]
 prep-test-integration-arxiv ids=ARXIV_IDS:
     @ARXIV_IDS="{{ids}}" ARXIV_TGZ_DIR="{{ARXIV_TGZ_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" ARXIV_DELAY="{{ARXIV_DELAY}}" tools/scripts/prep-test-integration-arxiv.sh
 
-[doc("NEEDS git and the adjagent clone (excluded from test-integration); DESTRUCTIVE to dir: reset a hand-staged fixture repository to its `cleared` tag, install the current agent set for both harnesses (claude and opencode), copy this tree's freshly built bin/kbase to the fixture's own .kbase/kbase and tools/harness.sh to .kbase/harness.sh (refused when tools/harness.sh is missing) and move the `staged` tag; dir is absolute or relative to the invocation directory; refuses a dir that is not a git repository, has no `cleared` tag (tag the commit before any agent-set install or build commit by hand), has a kbase build running (asked of its .kbase/kbase, else of this tree's build, which follow its operation lock to the run's store), or whose `cleared` commit's root .gitignore does not ignore .kbase/ — the copy and its configuration both — read with no host or local excludes; every refusal comes before anything changes")]
+[doc("NEEDS git and the adjagent clone; DESTRUCTIVE to dir: reset fixture repository dir to its `cleared` tag, install the agent set, copy bin/kbase and tools/harness.sh into .kbase/, move the `staged` tag")]
 prep-test-integration-fixture dir: build
     @BIN_DIR="{{BIN_DIR}}" FIXTURE_DIR="{{dir}}" INVOCATION_DIR="{{invocation_directory()}}" JUST="{{just_executable()}}" AGENTS_DIR="{{AGENTS_DIR}}" tools/scripts/prep-test-integration-fixture.sh
 
-[doc("NEEDS git and the adjagent clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, six legs — refused-dirty: .gitignore not ignoring .kbase/, with a commit above `cleared`, the `staged` tag and an uncommitted edit, refused naming that .gitignore with HEAD, the edit and the tag all kept; refused-narrow: .gitignore ignoring only .kbase/kbase, refused; refused-host-excludes: .kbase/ ignored only by the fixture's core.excludesFile and .git/info/exclude, refused; refused-status-failed: an operation lock naming a store whose holder record no kbase writes, so status fails over it, refused naming the failed status; staged: a fixture ignoring .kbase/ staged, leaving .kbase/kbase a copy of bin/kbase (not a link), untracked, .kbase/harness.sh a copy of tools/harness.sh (executable, not a link), and the `staged` tag at HEAD; restaged-over-link: the same fixture re-staged over a .kbase/kbase that is a link to a sentinel file, leaving a copy of bin/kbase, .kbase/harness.sh a copy of tools/harness.sh and the sentinel untouched; every refusal leaves no .kbase/kbase copy; evidence under test-data/transient/test-integration-stage-fixture/")]
+[doc("NEEDS git and the adjagent clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, checking that it stages, re-stages and refuses")]
 test-integration-stage-fixture: build
     @mkdir -p "{{STAGE_FIXTURE_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" AGENTS_DIR="{{AGENTS_DIR}}" JUST="{{just_executable()}}" STAGE_FIXTURE_OUT_DIR="{{STAGE_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-stage-fixture.sh 2>&1 | tee "{{STAGE_FIXTURE_OUT_DIR}}/log.txt"
 
-[doc("NEEDS pandoc + python3 (excluded from test-integration): §8.3 Direction 1 — per slice paper ./bin/kbase build --no-inference in a fresh fixture repository, then the build's ledger and owned paths, the readiness documents, ./bin/kbase status and its result document checked; kill-and-resume, the double-run guard and stamping over an authored document on one paper; evidence under test-data/transient/test-integration-build-arxiv/")]
+[doc("NEEDS pandoc and python3 (excluded from test-integration): ./bin/kbase build --no-inference over each BUILD_ARXIV_IDS paper in a fresh fixture repository; fetches the papers first if absent")]
 test-integration-build-arxiv: (prep-test-integration-arxiv BUILD_ARXIV_IDS) build
     @mkdir -p "{{BUILD_ARXIV_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" BUILD_ARXIV_IDS="{{BUILD_ARXIV_IDS}}" BUILD_ARXIV_SPECIAL_ID="{{BUILD_ARXIV_SPECIAL_ID}}" BUILD_ARXIV_OUT_DIR="{{BUILD_ARXIV_OUT_DIR}}" tools/scripts/test-integration-build-arxiv.sh 2>&1 | tee "{{BUILD_ARXIV_OUT_DIR}}/log.txt"
 
-[doc("LIVE — NEEDS the inference endpoint the resolved configuration names (given no config argument, kbase resolves configuration as always: the global ~/.config/kbase plus any project .kbase/), pandoc and python3 (excluded from test-integration): ./bin/kbase build without --no-inference over the Slice-1 paper BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository; README.md with its passage; the asks' captures, cached answers and group records under the state store's scratch/; a second build through claims-discovered configured by KBASE_API_BASE_URL, KBASE_DECISION, KBASE_TEXT and KBASE_API_KEY_FILE alone, no configuration directory; an optional config argument, given positionally (`just test-integration-build-live-arxiv <dir>`), names one configuration directory every kbase call then passes as --config-dir; a third build naming no configuration directory at all, with HOME on a scratch home holding the providers.toml and api_keys/ of the layer that supplied the resolved provider as the global layer and configure --create --project dialing that provider out of it and writing three references into the repository layer, green with its base URL sourced global and its provider and each model sourced repository, its show-config the evidence; and a score run configured by the environment alone — KBASE_API_BASE_URL and the three role variables, no configuration directory — one item on the scoring model, which differs from the text model and is the only model the ledger names; counts in comparison.yaml; evidence under test-data/transient/test-integration-build-live-arxiv/")]
+[doc("LIVE; NEEDS the configured endpoint, pandoc and python3 (excluded from test-integration): ./bin/kbase build and score over the BUILD_ARXIV_SPECIAL_ID paper; config: a --config-dir")]
 test-integration-build-live-arxiv config="": (prep-test-integration-arxiv BUILD_ARXIV_SPECIAL_ID) build
     @mkdir -p "{{BUILD_LIVE_ARXIV_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" BUILD_ARXIV_SPECIAL_ID="{{BUILD_ARXIV_SPECIAL_ID}}" BUILD_LIVE_ARXIV_OUT_DIR="{{BUILD_LIVE_ARXIV_OUT_DIR}}" CONFIG="{{config}}" tools/scripts/test-integration-build-live-arxiv.sh 2>&1 | tee "{{BUILD_LIVE_ARXIV_OUT_DIR}}/log.txt"
@@ -212,61 +224,103 @@ test-integration-build-live-arxiv config="": (prep-test-integration-arxiv BUILD_
 # as positional arguments, passed on as given; the resume form takes build
 # flags only.
 [positional-arguments]
-[doc("LIVE — NEEDS the fixture's own .kbase/*.toml to name a reachable endpoint, and pandoc (excluded from test-integration); DESTRUCTIVE to dir's kb-root/: over a fixture repository prep-test-integration-fixture has staged (HEAD at its `staged` tag), the fixture's own kbase (.kbase/kbase) show-config captured, then probe --decision and probe --text from dir (either failing stops the run naming its role), then the fixture's own kbase build <roots...> from dir without --no-inference, configured by the fixture's own .kbase/*.toml; then the fixture's own kbase refresh and verify green; the counts the arXiv live recipe records in comparison.yaml, the log, the state store and each command's capture under .claude-temp/live-fixture/<timestamp>/; dir is absolute or relative to the invocation directory, at least one root is required, roots are relative to dir, and a build flag among them (e.g. --through document-graph) is passed as given")]
+[doc("LIVE; NEEDS pandoc and dir's .kbase/*.toml (excluded from test-integration); DESTRUCTIVE to dir's kb-root/: dir's own kbase builds dir-relative roots; evidence: .claude-temp/live-fixture/<timestamp>/")]
 test-integration-build-live-fixture dir +roots:
     @MODE=staged FIXTURE_DIR="${1}" INVOCATION_DIR="{{invocation_directory()}}" tools/scripts/test-integration-build-live-fixture.sh "${@:2}"
 
 [positional-arguments]
-[doc("LIVE — NEEDS the fixture's own .kbase/*.toml to name a reachable endpoint, and pandoc (excluded from test-integration); DESTRUCTIVE to dir's kb-root/ and state: over a fixture repository whose commit trail (its `kb-build: <stage> |` commits) has equations-minted as its newest stage — refused, naming the newest stage the trail holds, otherwise — using state, the prior run's state directory (answer cache and records), the fixture's own kbase (.kbase/kbase) show-config captured, probe --decision and probe --text from dir, then build --resume with the given flags from dir with --state-dir state, configured by the fixture's own .kbase/*.toml, which resumes at the trail's next stage (references-found); then the post-build checks of test-integration-build-live-fixture (the fixture's own kbase refresh and verify, comparison.yaml, the log and each command's capture) under a new .claude-temp/live-fixture/<timestamp>/; dir and state are absolute or relative to the invocation directory, and the flags are build flags only, passed as given")]
+[doc("LIVE; NEEDS pandoc and dir's .kbase/*.toml (excluded from test-integration); DESTRUCTIVE to dir's kb-root/ and state: dir's kbase resumes from state; evidence: .claude-temp/live-fixture/<timestamp>/")]
 test-integration-build-live-fixture-resume dir state *flags:
     @MODE=resume FIXTURE_DIR="${1}" STATE_DIR="${2}" INVOCATION_DIR="{{invocation_directory()}}" tools/scripts/test-integration-build-live-fixture.sh "${@:3}"
 
-[doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over MONITOR_ARXIV_ID in the background, an out-of-process loop polling ./bin/kbase status and cancelling it with ./bin/kbase cancel; cancelled (exit 4), the lock released and its file removed, status cancelled with its resume, the resume to done; evidence under test-data/transient/test-integration-monitor-arxiv/")]
+[doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over MONITOR_ARXIV_ID, fetched if absent, polled and cancelled with ./bin/kbase status and cancel, then resumed to done")]
 test-integration-monitor-arxiv: (prep-test-integration-arxiv MONITOR_ARXIV_ID) build
     @mkdir -p "{{MONITOR_ARXIV_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" MONITOR_ARXIV_ID="{{MONITOR_ARXIV_ID}}" MONITOR_ARXIV_OUT_DIR="{{MONITOR_ARXIV_OUT_DIR}}" tools/scripts/test-integration-monitor-arxiv.sh 2>&1 | tee "{{MONITOR_ARXIV_OUT_DIR}}/log.txt"
 
-[doc("hermetic: every maintenance subcommand, status and cancel through ./bin/kbase over the committed fixture KB, each result parsed against its documented keys — plus score's scoring role: a file-mode configuration naming no scoring refuses as models.scoring, --scoring-model supplies that role and reaches the pool's entry, a flag naming a provider the pool lacks refuses as --scoring-model with the pool listed, a flag naming the pool's entry reaches it and records provider-rule flag, and a run configured by the environment alone reaches the scoring model, names it in the ledger and never names text's; plus probe --decision against a Go stub answering only the SystemOne decision surface, its document parsed against the probe keys with no first token and no finish reason; evidence under test-data/transient/test-integration-results-fixture/")]
+[doc("hermetic: every maintenance subcommand, status, cancel, probe --decision and score's scoring role through ./bin/kbase over the results fixture KB, each result parsed against its documented keys")]
 test-integration-results-fixture: build
     @mkdir -p "{{RESULTS_FIXTURE_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" RESULTS_FIXTURE_DIR="{{RESULTS_FIXTURE_DIR}}" RESULTS_FIXTURE_OUT_DIR="{{RESULTS_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-results-fixture.sh 2>&1 | tee "{{RESULTS_FIXTURE_OUT_DIR}}/log.txt"
 
-[doc("hermetic, git-only: init legs over ./bin/kbase, each result checked against its documented keys — refused outside a worktree with nothing created, birth, birth-once, build refused over a created KB, the cross-process maintenance chain closed green, the no-dot placeholder; evidence under test-data/transient/test-integration-init/")]
+[doc("hermetic: ./bin/kbase init in scratch repositories, then the maintenance chain over the created KB, each result checked against its documented keys")]
 test-integration-init: build
     @mkdir -p "{{INIT_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" INIT_OUT_DIR="{{INIT_OUT_DIR}}" tools/scripts/test-integration-init.sh 2>&1 | tee "{{INIT_OUT_DIR}}/log.txt"
 
-[doc("hermetic: the compatibility op script test-data/fixtures/compat/ops.yaml staged by TestStageOpScript against a scratch copy of the results fixture whose leaf gains one prose line, every step through ./bin/kbase expecting done, verify green, every step re-issued expecting unchanged, and kb-root/ byte-identical after the re-issue; evidence under test-data/transient/test-integration-opscript-results/")]
+[doc("regenerate each committed fixture that pins kbase's own output from ./bin/kbase: init's skeleton, test-data/fixtures/init/skeleton/, from init in a fresh repository")]
+regenerate-fixtures: build
+    @mkdir -p "{{REGENERATE_FIXTURES_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}" REGENERATE_OUT_DIR="{{REGENERATE_FIXTURES_OUT_DIR}}" INIT_SKELETON_DIR="{{INIT_SKELETON_DIR}}" tools/scripts/regenerate-fixtures.sh 2>&1 | tee "{{REGENERATE_FIXTURES_OUT_DIR}}/log.txt"
+
+[doc("split a markdown monolith by heading level into linked leaves under out (optional link map TSV), then check the leaves reassemble it and every relative link resolves")]
+dice-doc monolith out map="": _docdicer
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-doc "{{monolith}}" "{{out}}" "{{map}}"
+
+[doc("dice the documents listed in a manifest TSV, read from src-dir, into linked volumes, with intermediates in work-dir, then verify all trees (see tools/docdicer/README.md)")]
+dice-docs manifest src work: _docdicer
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
+
+[doc("check every relative link and #anchor under PROJECT_DOCS and the top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
+check-links: _docdicer
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS *.md
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS NEW_MCP_CLI_DESIGN NEW_MCP_CLI_PLAN
+
+[private]
+_docdicer:
+    @[[ -d tools/docdicer ]] || git -C tools clone git@github.com:benn-herrera/docdicer
+
+[doc("hermetic: stage the compatibility op script test-data/fixtures/compat/ops.yaml through ./bin/kbase over a scratch copy of the results fixture, then re-issue it and check nothing changed")]
 test-integration-opscript-results: build
     @mkdir -p "{{OPSCRIPT_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" RESULTS_FIXTURE_DIR="{{RESULTS_FIXTURE_DIR}}" COMPAT_OP_SCRIPT="{{COMPAT_OP_SCRIPT}}" OPSCRIPT_OUT_DIR="{{OPSCRIPT_OUT_DIR}}" tools/scripts/test-integration-opscript-results.sh 2>&1 | tee "{{OPSCRIPT_OUT_DIR}}/log.txt"
 
-[doc("hermetic: stage the results fixture, feed each test-data/fixtures/mcp/*.jsonl transcript to ./bin/kbase mcp over pipes and compare every response line to the expected line, a gui-*.jsonl transcript fed to ./bin/kbase mcp --project-dir-required (GUI mode) from outside the staged repository so each call names its project; evidence under test-data/transient/test-integration-mcp/")]
+[doc("hermetic: feed each test-data/fixtures/mcp/*.jsonl transcript to ./bin/kbase mcp over pipes and compare every response with its expected line; compare each kbase://help/<command> resource with --help")]
 test-integration-mcp: build
     @mkdir -p "{{MCP_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" RESULTS_FIXTURE_DIR="{{RESULTS_FIXTURE_DIR}}" MCP_TRANSCRIPT_DIR="{{MCP_TRANSCRIPT_DIR}}" MCP_OUT_DIR="{{MCP_OUT_DIR}}" tools/scripts/test-integration-mcp.sh 2>&1 | tee "{{MCP_OUT_DIR}}/log.txt"
 
-[doc("NEEDS pandoc (excluded from test-integration): a build with no inference over test-data/fixtures/mcp/paper.tex through ./bin/kbase mcp, subscribed to kbase://build, sending nothing until the notification of its end arrives; evidence under test-data/transient/test-integration-mcp-build/")]
+[doc("NEEDS pandoc (excluded from test-integration): a no-inference build of test-data/fixtures/mcp/paper.tex through ./bin/kbase mcp, followed to its end by polling status, then a resume likewise")]
 test-integration-mcp-build: build
     @mkdir -p "{{MCP_BUILD_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" MCP_TRANSCRIPT_DIR="{{MCP_TRANSCRIPT_DIR}}" MCP_BUILD_OUT_DIR="{{MCP_BUILD_OUT_DIR}}" tools/scripts/test-integration-mcp-build.sh 2>&1 | tee "{{MCP_BUILD_OUT_DIR}}/log.txt"
 
-[doc("hermetic: ./bin/kbase show-config over staged configurations with HOME pointed at a staged home — absent, providers.toml alone and both files, each through KBASE_CONFIG_DIR and --config-dir, checked for its outcome, its mode, its one layer, that layer's existence flags, its diagnostic count, its roles and the absence of key material; a run setting KBASE_TEXT over the both files checked for the mixed-mode refusal it is, and one run supplying the environment alone checked for every role resolving on its own variable; a layered leg in a staged git repository whose .kbase adds a pool entry and overrides one by name, checked for the merged pool and each entry's layer, whole-entry replacement, each entry's decision surface (the value an entry names, systemone where it is silent), both layers in precedence order with exists/providersExists/configExists, the superseded provider key said once, and each role's entry, model, endpoint and the layer that supplied each field; legs for a leading ~ in the configuration directory a flag or the variable names, alone, and in an apiKeyFile (never joined to the configuration directory), with ~user and a/~/b staying literal, and with a home missing or not absolute; configure --create --project in a staged repository, checked for creating both files unchecked and without a request, for show-config reporting that layer holding both with models resolving the sole entry [local], for a second call coming back unchanged, for a --provider the pool lacks refusing against the absolute providers.toml with the creation remedy and writing nothing, for --config-dir beside --project refusing as usage, for --config-dir into an empty directory creating both files, and for --project outside a worktree refusing on the worktree; and a dial-free configure writing three references that show-config resolves for every role with no diagnostic, the writer and the resolver agreeing on the reference form; sampling legs: settings on an openai entry coming back done with the text role reporting both values and their layer, a [sampling.decision] table refused by strict load naming sampling.decision.temperature, and temperature 1.5 on an anthropic text entry coming back done with a diagnostic naming sampling.text.temperature; and one show-config tools/call over MCP from a directory holding no KB; evidence under test-data/transient/test-integration-config/")]
+[doc("hermetic, a measurement and no gate: ./bin/release/kbase mcp, the release build, under no repository; surface.yaml holds its sizes, run/served/ every resource read, the other modes and every --help")]
+measure-mcp-surface: build-release
+    @mkdir -p "{{MEASURE_MCP_SURFACE_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}/release" MEASURE_MCP_SURFACE_OUT_DIR="{{MEASURE_MCP_SURFACE_OUT_DIR}}" tools/scripts/measure-mcp-surface.sh 2>&1 | tee "{{MEASURE_MCP_SURFACE_OUT_DIR}}/log.txt"
+
+[doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over test-data/fixtures/lamb/ as committed and inputting lamb.bbl, then a rewind run by build-trail's commands")]
+test-integration-build-lamb: build
+    @mkdir -p "{{BUILD_LAMB_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}" LAMB_FIXTURE_DIR="{{LAMB_FIXTURE_DIR}}" BUILD_LAMB_OUT_DIR="{{BUILD_LAMB_OUT_DIR}}" tools/scripts/test-integration-build-lamb.sh 2>&1 | tee "{{BUILD_LAMB_OUT_DIR}}/log.txt"
+
+[doc("NEEDS pandoc (excluded from test-integration): ./bin/kbase build --no-inference over test-data/fixtures/lamb-cycle/lamb-cycle.tex in a fresh repository, checking its cycle cut")]
+test-integration-build-lamb-cycle: build
+    @mkdir -p "{{BUILD_LAMB_CYCLE_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}" LAMB_CYCLE_FIXTURE_DIR="{{LAMB_CYCLE_FIXTURE_DIR}}" BUILD_LAMB_CYCLE_OUT_DIR="{{BUILD_LAMB_CYCLE_OUT_DIR}}" tools/scripts/test-integration-build-lamb-cycle.sh 2>&1 | tee "{{BUILD_LAMB_CYCLE_OUT_DIR}}/log.txt"
+
+[doc("hermetic: ./bin/kbase show-config and the configure commands over staged configuration directories, repositories and a staged home, checking layers, roles and diagnostics, and show-config over MCP")]
 test-integration-config: build
     @mkdir -p "{{CONFIG_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" CONFIG_OUT_DIR="{{CONFIG_OUT_DIR}}" tools/scripts/test-integration-config.sh 2>&1 | tee "{{CONFIG_OUT_DIR}}/log.txt"
 
-[doc("hermetic: the default, release-shaped build carries no development replays (`score --replay`, `build --replay`) — TestDistBuildHasNoReplay in the untagged build; log under test-data/transient/test-dist-no-replay/")]
+[doc("hermetic: ./bin/kbase auth and show-config over a credentials store staged under the evidence directory, checking each key's reported source and that no stream or file holds a stored key")]
+test-integration-auth: build
+    @mkdir -p "{{AUTH_OUT_DIR}}"
+    @BIN_DIR="{{BIN_DIR}}" AUTH_OUT_DIR="{{AUTH_OUT_DIR}}" tools/scripts/test-integration-auth.sh 2>&1 | tee "{{AUTH_OUT_DIR}}/log.txt"
+
+[doc("hermetic: TestDistBuildHasNoReplay, run in the untagged build, which carries no development replays (`score --replay`, `build --replay`)")]
 test-dist-no-replay:
     @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay"
     @go test -count=1 -run '^TestDistBuildHasNoReplay$' ./cmd 2>&1 | tee "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay/log.txt"
 
-[doc("hermetic: every query case of the frozen 2.0.1 goldens internal/kbload/testdata/parity-2.0.1/NNN.args through ./bin/kbase over a scratch copy of internal/formats/testdata/adjagent-sheet-2.0.1 (converted at load, unsaved), each answer compared with its 2.0.1 golden by TestConvertedAnswersMatchTheGoldens under the conversion's stated rules; evidence under test-data/transient/test-integration-parity-adjagent-sheet/")]
+[doc("hermetic: every query case of the frozen goldens in internal/kbload/testdata/parity-2.0.1/ through ./bin/kbase over a scratch copy of the adjagent-sheet-2.0.1 fixture, compared with its golden")]
 test-integration-parity-adjagent-sheet: build
     @mkdir -p "{{PARITY_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" PARITY_OUT_DIR="{{PARITY_OUT_DIR}}" tools/scripts/test-integration-parity-adjagent-sheet.sh 2>&1 | tee "{{PARITY_OUT_DIR}}/log.txt"
 
-[doc("hermetic: set-rigor through ./bin/kbase over a scratch copy of internal/formats/testdata/adjagent-sheet-2.0.1 whose CLAUDE.md is not the redirect, refused agents-redirect with kb-root unchanged; evidence under test-data/transient/test-integration-refused-write-adjagent-sheet/")]
+[doc("hermetic: edit-claim through ./bin/kbase over a scratch copy of internal/formats/testdata/adjagent-sheet-2.0.1 with an altered kb-root/CLAUDE.md, checking it is refused and kb-root unchanged")]
 test-integration-refused-write-adjagent-sheet: build
     @mkdir -p "{{REFUSED_WRITE_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" REFUSED_WRITE_OUT_DIR="{{REFUSED_WRITE_OUT_DIR}}" tools/scripts/test-integration-refused-write-adjagent-sheet.sh 2>&1 | tee "{{REFUSED_WRITE_OUT_DIR}}/log.txt"
@@ -275,28 +329,28 @@ test-integration-refused-write-adjagent-sheet: build
 # already preserves its full output under its own name, and a second copy of
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
-[doc("run every hermetic integration test (the ones needing network, a provider, pandoc, python3 or the adjagent clone are excluded; run those by name)")]
-test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-parity-adjagent-sheet test-integration-refused-write-adjagent-sheet test-dist-no-replay
+[doc("run every hermetic integration test; the ones needing network, a provider, pandoc, python3 or the adjagent clone are excluded and run by name")]
+test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-auth test-integration-parity-adjagent-sheet test-integration-refused-write-adjagent-sheet test-dist-no-replay
 
-# Full suite: run once at checkpoints.
+[doc("the full gate, run once at checkpoints: edit-gate, test-race and build")]
 checkpoint: edit-gate test-race build
 
-[doc("remove the host build only (bin/kbase, bin/kbase.exe)")]
+[doc("remove the host builds only (bin/kbase, bin/release/kbase, each with .exe)")]
 clean:
     @echo "cleaning local kbase build"
-    @rm -f "{{BIN_DIR}}/kbase" "{{BIN_DIR}}/kbase.exe"
+    @rm -f "{{BIN_DIR}}/kbase" "{{BIN_DIR}}/kbase.exe" "{{BIN_DIR}}/release/kbase" "{{BIN_DIR}}/release/kbase.exe"
 
 _tag-clean:
     @git diff --quiet HEAD || { echo "tag: tracked files have uncommitted changes — commit them, then tag" >&2; exit 1; }
 
-[doc("NEEDS a signing key git tag -s can use (gpg, or ssh where gpg.format says so): refused while tracked files have uncommitted changes, then runs checkpoint and test-dist-no-replay, then creates a signed annotated tag v<version> locally, <version> being what go run ./cmd --version prints, refused unless it is <major>.<minor>.<patch>; pushes nothing")]
-tag: _tag-clean checkpoint test-dist-no-replay
-    @ver="v$(go run ./cmd --version)"; [[ "${ver}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag: version ${ver} is not v<major>.<minor>.<patch>" >&2; exit 1; }; git tag -s "${ver}" -m "release ${ver}"
+[doc("NEEDS a signing key git tag -s can use: create and verify a signed annotated tag v<version>, <version> being go run ./cmd --version; runs no gates, pushes nothing")]
+tag: _tag-clean
+    @ver="v$(go run ./cmd --version)"; [[ "${ver}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag: version ${ver} is not v<major>.<minor>.<patch>" >&2; exit 1; }; GPG_TTY=$(tty) git tag -s "${ver}" -m "release ${ver}"; git tag -v "${ver}"
 
 [doc("remove every build output: bin/ and build/ entirely")]
 nuke:
     @echo "cleaning all kbase builds"
-    rm -rf {{BIN_DIR}} build
+    rm -rf {{BIN_DIR}}
 
 # cover reports aggregate test coverage across all packages. -coverpkg
 # instruments every package for every test binary, so the number
@@ -331,7 +385,7 @@ fmt-check:
       exit 1; \
     fi
 
-[doc("render readme-assets/strength-walk.svg from readme-assets/strength-walk.dot with Graphviz dot")]
+[doc("NEEDS dot (Graphviz): render readme-assets/strength-walk.svg from readme-assets/strength-walk.dot")]
 strength-walk:
     @SVG_OUT="readme-assets/strength-walk.svg" tools/scripts/strength-walk.sh
 

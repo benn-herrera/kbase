@@ -16,8 +16,8 @@ set — a golden with no shape, or a shape with no golden, fails before any byte
 
 | File | Shape |
 |---|---|
-| `markers.md` | the `<!-- claim-rigor: … -->` statement marker, for a claim, an analysis and an experiment |
-| `citation.md` | the sanctioned `["excerpt"](path#anchor)` authority-citation form |
+| `markers.md` | the `<!-- kbase-id: … -->` statement marker, for a claim, an analysis and an experiment |
+| `citation.md` | a citation's quote form, `["excerpt"](path#anchor "id")`, the cited node's id its link title |
 
 ## What the goldens are for
 

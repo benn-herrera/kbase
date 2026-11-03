@@ -6,7 +6,7 @@ dispatchable package under CONVENTIONS' "Plan dispatchability" once it is unders
 ## Objective
 
 Sort out the scoring issues: what the rigor and bearing asks answer, against what the scheme
-(`RIGOR_AND_BEARING_SCORING_SCHEME.md`) says they should.
+([the rigor and bearing scheme](../PROJECT_DOCS/SPEC/scoring/rigor-and-bearing/entry-point.md)) says they should.
 
 ## Points to address
 
@@ -43,7 +43,7 @@ Sort out the scoring issues: what the rigor and bearing asks answer, against wha
 
 ### The rubric's open questions
 
-The scheme's `## Not settled` (`RIGOR_AND_BEARING_SCORING_SCHEME.md`) is the full statement of each;
+The scheme's `## Not settled` ([rigor and bearing, Not settled](../PROJECT_DOCS/SPEC/scoring/rigor-and-bearing/not-settled.md)) is the full statement of each;
 this names only what would move.
 
 8. **The bottom cut's height.** The last rung takes every strength under `0.20` and reads
@@ -72,7 +72,7 @@ this names only what would move.
     attribute per bearing drawn from the column every scoring row already carries, with the DOT
     goldens regenerated.
 15. **The index load does not refuse a text bearing that is neither a number nor `*pending*`**;
-    `edge-census` ranks such text with pending.
+    `stats`' `relations` ranks such text with pending.
 16. **The uncertainty pool and hit list, parked:** the declared categories yield nothing useful,
     and the hit list returns when a scoring pass has run on the fixture and a ranking signal puts
     the author's premises near the top (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed
@@ -81,8 +81,8 @@ this names only what would move.
 ## Post-sprint review
 
 Once the plan's last landing is committed, one pass reviews the changes its packages landed. The
-reviewers are an architect and a go-coder. Before they start they read THESIS.md, SPEC.md,
-ARCHITECTURE.md and CONVENTIONS.md, and they do not read this plan. They review the changes against
+reviewers are an architect and a go-coder. Before they start they read the [THESIS](../PROJECT_DOCS/entry-point.md), [SPEC](../PROJECT_DOCS/SPEC/entry-point.md),
+[ARCHITECTURE](../PROJECT_DOCS/ARCHITECTURE/entry-point.md) and [CONVENTIONS](../PROJECT_DOCS/CONVENTIONS/entry-point.md) volumes, and they do not read this plan. They review the changes against
 those standards and for fitness for their purpose, and their brief includes the tests.
 
 - **Review**: findings against the four documents.

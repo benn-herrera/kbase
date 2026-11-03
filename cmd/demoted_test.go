@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbload"
 	toolresult "kbase/internal/result"
@@ -34,9 +35,9 @@ func graphRecords(t *testing.T, repo string) kb.Graph {
 
 // TestDemotedRing builds a paper with a ring without inference and follows
 // its cut edge, which the analysis split moved onto the analysis of the lemma
-// it entered, through verify, stats and resolve-demoted: restoring it would
-// close the ring again, through both lemmas' analyses, and removing it
-// resolves it.
+// it entered, through verify, stats, restore-demoted and remove-edge: restoring
+// it would close the ring again, through both lemmas' analyses, and removing
+// its demoted record resolves it; a second removal is refused, no edge.
 func TestDemotedRing(t *testing.T) {
 	repo, state := buildRepoWith(t, ringPaper)
 	run := func(want string, args ...string) resultDoc {
@@ -67,12 +68,9 @@ func TestDemotedRing(t *testing.T) {
 		t.Errorf("stats demoted_edges = %v, want 1", stats["demoted_edges"])
 	}
 
-	// resolve-demoted names a cut by the node it went into, id, and the node it
-	// came from, target.
+	// restore-demoted and remove-edge name the cut as its edges row does.
 	values := t.TempDir()
-	resolve := func(name, action string) string {
-		return writeValues(t, values, name, "entry:\n- id: "+b+"\n  target: "+a+"\n  action: "+action+"\n")
-	}
+	cut := writeValues(t, values, "cut.yaml", "entry:\n- source: "+a+"\n  target: "+b+"\n  relation: "+kb.RelationDemoted+"\n")
 	lifted := map[string]string{}
 	for _, e := range g.Scorable {
 		if e.Relation == kb.RelationLifts {
@@ -83,16 +81,16 @@ func TestDemotedRing(t *testing.T) {
 	for ana, claim := range lifted {
 		analysisOf[claim] = ana
 	}
-	ring := a + " → " + analysisOf[a] + " → " + lifted[b] + " → " + b + " → " + a
-	cycle := run("refused", "resolve-demoted", "--values", resolve("restore.yaml", "restore")).items("refusals")
+	ring := a + " → " + b + " → " + lifted[b] + " → " + analysisOf[a] + " → " + a
+	cycle := run("refused", "restore-demoted", "--values", cut).items("refusals")
 	if len(lifted) != 2 || len(cycle) != 1 || cycle[0]["check"] != "dependency-cycle" || !strings.Contains(cycle[0]["detail"].(string), ring) {
 		t.Errorf("a restore closing the ring: %v, want the cycle %s", cycle, ring)
 	}
-	removed := run("done", "resolve-demoted", "--values", resolve("remove.yaml", "remove"))
-	if r := removed.items("resolved"); len(r) != 1 || r[0]["action"] != "removed" {
-		t.Errorf("remove resolved %v", r)
+	run("done", "remove-edge", "--values", cut)
+	if again := run("refused", "remove-edge", "--values", cut).items("refusals"); len(again) != 1 ||
+		again[0]["detail"] != "no edge "+index.EdgeName(kb.RelationDemoted, a, b) || again[0]["key"] != "relation" {
+		t.Errorf("a second removal of the demoted record: %v, want one refusal at relation, no edge", again)
 	}
-	run("unchanged", "resolve-demoted", "--values", resolve("remove.yaml", "remove"))
 	if f := run("done", "verify").items("findings"); len(f) != 0 {
 		t.Errorf("findings after both resolutions %v, want none", f)
 	}

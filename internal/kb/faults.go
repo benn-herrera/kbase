@@ -69,23 +69,6 @@ const BearingMaximum = 1.0
 // that do no work.
 const bearingMaximumHundredths = int(BearingMaximum * 100)
 
-// AuthoredRigor is an authored value as the system reads it: above
-// RigorMaximum it reads as RigorMaximum — a hand-edited 1.20 reads 1.00, a
-// value the write path refuses and a file edited by hand may still carry — and
-// nil is no value, pending staying pending. A value at the maximum is no
-// special case: an authored 1.00 is in domain and reads as itself, which is
-// what a converted experiment carries. The clamp is a reading rule and not a
-// rewrite: the file keeps the bytes it had, and refresh leaves its rigor as it
-// found it. A value the write path refuses therefore reads at the ceiling
-// rather than making its KB unreadable.
-func AuthoredRigor(v *float64) *float64 {
-	if v == nil || *v <= RigorMaximum {
-		return v
-	}
-	maximum := RigorMaximum
-	return &maximum
-}
-
 // FaultTable is one vocabulary's closed set of fault ids, in walk order, and
 // what one occurrence of each charges. The weight is per occurrence and the table
 // caps no count: a text committing one fault three times loses three weights.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Renders readme-assets/strength-walk.dot to SVG_OUT with Graphviz dot.
 #
-# readme-assets/strength-walk.svg is the rendering of STRENGTH_SCORING_SCHEME.md's
+# readme-assets/strength-walk.svg is the rendering of PROJECT_DOCS/SPEC/scoring/strength's
 # graph, and readme-assets/strength-walk.dot is its source of record: the file a
 # reader reviews and edits. dot lays the graph out itself, so the image is a
 # function of the .dot AND the Graphviz version that rendered it — an upgrade

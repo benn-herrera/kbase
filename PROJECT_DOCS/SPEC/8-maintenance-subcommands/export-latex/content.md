@@ -1,0 +1,23 @@
+#### Content
+
+The export walks every document the index child-list spine names, `overview.md`
+included, as ordinary leaf content; `references.md` leaves are read as bibliography data, never
+walked as documents. Author labels are namespaced per volume, so a label repeated across volumes
+stays distinct, and LaTeX numbers what they label. A reference naming a label its volume defines
+resolves to it; a cleveref-family anchor (`ref+label`, `ref+Label`) renders as one `\cref`/`\Cref`
+over every label it names, one or several, without the anchor's own text beside it. A link to an
+exported KB document becomes a hyperlink to that document's heading. Prose is exported as written:
+a hand-maintained KB's prose mentions of equations and works (`(eq:dv)`, `(Khalil, 2002)`) and its
+bold-line theorem blocks stay text. The bibliography holds `references.md`'s entries or, where a
+volume has none, the KB's work records.
+
+**Simplification, not refusal** ([§3](../../3-compatibility-contract/index.md)'s `dot` posture; [page §3.6](../../../../NEW_MCP_CLI_DESIGN/3-operations/3.6-checks-and-output/export-latex.md)): a reference whose label its volume does not
+define, a link to a document not exported, and a citation with no bibliography entry each become
+the text they carry; an image whose file is not in the KB becomes its alternative text; a figure or
+table the export cannot rebuild, or one LaTeX cannot float, is written as far as it can be; and
+maths the export cannot recover from the page is left out. Each carries a report line in the
+export report, `gen-tex/kbase-export-report.yaml` ([§7](../../7-tool-result-contract-and-exit-codes/index.md)'s `report` key). Idempotent: a re-issue over the tool's own previous export leaves the
+export byte-identical and reports `unchanged`. The export takes no KB write lock — nothing under
+`kb-root/` is written, so it reads as the queries do — and it runs no git. Result
+keys: [§7](../../7-tool-result-contract-and-exit-codes/index.md).
+

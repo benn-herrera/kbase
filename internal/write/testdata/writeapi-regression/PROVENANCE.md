@@ -4,9 +4,9 @@ The frozen failure corpus for the 2026-09-02 regression replay, held as KB forma
 `kb-root/.index/nodes.yaml` (23 claim records) and `kb-root/.index/edges.yaml` (their 21 premise
 edges, each a `supports` record at bearing `1.0`). These files are **inputs to tests only**. They
 are never re-derived and never shipped: they live under `internal/write/testdata`, which no build
-embeds and no install carries. `TestRegressionReplayOps` reads them through `kb.LoadAuthoredGraph`
-and writes the same population through `insert-claim-entry`, requiring the graph back isomorphic
-under the renaming.
+embeds and no install carries. `TestRegressionReplayOps` reads them through `kb.LoadGraph`
+and writes the same population through `add-claim`, its premises through `add-edge`, requiring the
+graph back isomorphic under the renaming.
 
 ## Freeze source
 

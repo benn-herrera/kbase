@@ -1,6 +1,9 @@
 package model_test
 
-import "kbase/internal/model"
+import (
+	"kbase/internal/model"
+	"kbase/internal/secret"
+)
 
 // The external tests' own copies of the two fixtures the in-package tests
 // keep in openai_client_test.go: an unexported name does not cross the package
@@ -13,6 +16,6 @@ func newTestEndpoint(baseURL string) model.Endpoint {
 	return model.Endpoint{
 		Name:    "test",
 		BaseURL: baseURL,
-		APIKey:  testAPIKey,
+		APIKey:  secret.NewKey(testAPIKey),
 	}
 }

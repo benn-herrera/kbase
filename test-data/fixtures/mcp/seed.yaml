@@ -1,9 +1,16 @@
+# Each claim is placed on its line of the results fixture's
+# values/statements.md, which the stager appends to the converted a.md before
+# this batch, so both are hosted under heading A alike and differ in title.
 entry:
 - title: A Result
   rigor: 0.5
   rationale: Shown.
   document: a.md
-  locator: A
-- title: A Result
+  line: 6
+  snippet: first result
+- title: A Second Result
   rigor: 0.5
   rationale: Shown.
+  document: a.md
+  line: 8
+  snippet: second result

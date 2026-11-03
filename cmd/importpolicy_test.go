@@ -64,30 +64,42 @@ var dependencyRules = []dependencyRule{{
 	why:       "the maintenance packages stand below the build",
 }, {
 	from:    []string{"internal/kb"},
-	allowed: []string{"internal/log", "internal/formats/format300"},
-	why:     "kb imports no other kbase package but log and format300, the live format it re-exports",
+	allowed: []string{"internal/log", "internal/formats/format400", "internal/argmark"},
+	why:     "kb imports no other kbase package but log, format400, the live format it re-exports, and argmark, to mark the arguments its refusals name",
+}, {
+	from:    []string{"internal/argmark"},
+	allowed: []string{},
+	why:     "the argument marker imports no kbase package, so every producer of text an MCP reader can receive reaches it",
+}, {
+	from:    []string{"internal/log"},
+	allowed: []string{"internal/argmark"},
+	why:     "log imports argmark and nothing else of kbase, to spell a marked argument in every line it writes",
 }, {
 	from:    []string{"internal/gitledger"},
-	allowed: []string{"internal/log"},
-	why:     "gitledger imports log and nothing else of kbase",
+	allowed: []string{"internal/log", "internal/argmark"},
+	why:     "gitledger imports log and nothing else of kbase, and reaches argmark only through it",
 }, {
 	from:    []string{"internal/model"},
-	allowed: []string{"internal/model"},
-	why:     "model imports no kbase package: it knows nothing of files, roles or consumers, and its test support, modeltest, imports model alone",
+	allowed: []string{"internal/model", "internal/secret"},
+	why:     "model imports no kbase package but secret, the key's type: it knows nothing of files, roles or consumers, and its test support, modeltest, imports model alone",
 }, {
 	from:    []string{"internal/config"},
-	allowed: []string{"internal/atomicfile", "internal/result"},
-	why:     "the configuration is grammar and resolution: it imports atomicfile to write its files and result to refuse, and never model or log — it opens no client, writes no output, and returns its faults as data, so each caller decides whether one is a warning or a result field",
+	allowed: []string{"internal/atomicfile", "internal/result", "internal/secret", "internal/argmark"},
+	why:     "the configuration is grammar and resolution: it imports atomicfile to write its files, result to refuse, argmark to mark the arguments a refusal names and secret for the key's type, and never model or log — it opens no client, writes no output, and returns its faults as data, so each caller decides whether one is a warning or a result field",
+}, {
+	from:    []string{"internal/secret"},
+	allowed: []string{},
+	why:     "the key's type imports no kbase package, so every package that carries a key can import it",
 }, {
 	except:    []string{"internal/build", "internal/mcp", "cmd"},
 	forbidden: []string{"internal/kbdocs"},
 	direct:    true,
-	why:       "only build and cmd stamp readiness documents: init at a KB's birth, a migration save whole; mcp reads the session rule alone",
+	why:       "only build and cmd stamp readiness documents: init at a KB's birth, update-format rewriting the maintained blocks; mcp reads the session rule alone",
 }, {
 	except:    []string{"internal/build", "internal/buildstore", "internal/gitledger", "cmd"},
 	forbidden: []string{"internal/gitledger"},
 	direct:    true,
-	why:       "only build, buildstore and cmd's init verb import gitledger",
+	why:       "only build, buildstore and cmd's update-format and write verbs import gitledger",
 }, {
 	except:    []string{"internal/build", "internal/buildstore", "cmd"},
 	forbidden: []string{"internal/statedir"},
@@ -118,7 +130,7 @@ var dependencyRules = []dependencyRule{{
 	direct:    true,
 	why:       "outside the formats tree only the loader and kb import it: an older KB is converted where it is opened, and nowhere else, kb re-exports the live format, and no other package reaches a format (I8)",
 }, {
-	from:    []string{"internal/formats/format300"},
+	from:    []string{"internal/formats/format400"},
 	allowed: []string{},
 	why:     "the live format imports no kbase package, common included, and restates any declaration it shares with an earlier format",
 }, {
@@ -136,7 +148,7 @@ var dependencyRules = []dependencyRule{{
 	except:    []string{"cmd", "internal/score", "internal/mcp"},
 	forbidden: []string{"internal/score"},
 	direct:    true,
-	why:       "only cmd and the MCP server import score: the score verb and the verbs that read a run, and the server's score launch and its kbase://build resource",
+	why:       "only cmd and the MCP server import score: the score verb and the verbs that read a run, and the server's score launch",
 }, {
 	except:    []string{"cmd", "internal/build", "internal/write", "internal/kbload"},
 	forbidden: []string{"internal/kbload"},
@@ -144,12 +156,12 @@ var dependencyRules = []dependencyRule{{
 	why:       "only the openers import the loader: a reader takes the source it is handed, and a refusal is result's",
 }, {
 	from:    []string{"internal/kbload"},
-	allowed: []string{"internal/kb", "internal/buildrecords", "internal/formats", "internal/result", "internal/log"},
-	why:     "the loader stands between kb and every reader: it imports no reader, buildrecords only for the records' paths, and the formats tree to convert an older KB",
+	allowed: []string{"internal/kb", "internal/buildrecords", "internal/formats", "internal/result", "internal/log", "internal/argmark"},
+	why:     "the loader stands between kb and every reader: it imports no reader, buildrecords only for the records' paths, the formats tree to convert an older KB, and argmark only through kb and result",
 }, {
 	from:    []string{"internal/mcp/protocol"},
-	allowed: []string{"internal/log"},
-	why:     "the MCP wire is framing and dispatch over a table its caller injects: it imports log only",
+	allowed: []string{"internal/log", "internal/argmark"},
+	why:     "the MCP wire is framing and dispatch over a table its caller injects: it imports log only, and reaches argmark only through it",
 }, {
 	from:      []string{"internal/mcp"},
 	forbidden: []string{"internal/model", "internal/asks/call"},
@@ -180,6 +192,15 @@ var dependencyRules = []dependencyRule{{
 	allowed: []string{"internal/kb", "internal/atomicfile"},
 	direct:  true,
 	why:     "export imports kb and atomicfile and nothing else of kbase: the verb opens the KB and supplies every pandoc call",
+}, {
+	from:    []string{"internal/auth"},
+	allowed: []string{"internal/atomicfile", "internal/secret"},
+	why:     "the credentials store imports nothing of kbase but atomicfile, to write its files at their mode, and secret, the key's type",
+}, {
+	except:    []string{"cmd"},
+	forbidden: []string{"internal/auth"},
+	direct:    true,
+	why:       "only cmd imports the credentials store: it reads the stored keys and hands them to config as data",
 }}
 
 func underAny(pkg string, prefixes []string) bool {
@@ -365,9 +386,9 @@ func TestDependencyRules(t *testing.T) {
 
 // TestFormatsTreeRules: over a synthetic graph, the formats tree importing
 // within itself, the loader importing its root and kb, and kb importing
-// format300 pass the rules; kb importing another format, a live package
-// importing format300, the loader importing format300 or format200 directly,
-// format300 importing common, and a tree package importing internal/kb each
+// format400 pass the rules; kb importing another format, a live package
+// importing format400, the loader importing format400 or format200 directly,
+// format400 importing common, and a tree package importing internal/kb each
 // fail them, at exactly the packages named. Within the tree, a format
 // importing itself or a later format, a non-root package importing a
 // converter, common importing a format, a converter importing a format past
@@ -381,8 +402,8 @@ func TestFormatsTreeRules(t *testing.T) {
 		"internal/formats/format100":    {"internal/formats/common"},
 		"internal/formats/format200":    {"internal/formats/common"},
 		"internal/formats/from100to200": {"internal/formats/common", "internal/formats/format100", "internal/formats/format200"},
-		"internal/formats/format300":    nil,
-		"internal/kb":                   {"internal/formats/format300"},
+		"internal/formats/format400":    nil,
+		"internal/kb":                   {"internal/formats/format400"},
 	}
 	if got := dependencyViolations(base, dependencyRules); len(got) != 0 {
 		t.Errorf("the base graph breaks %v, want no rule broken", got)
@@ -395,11 +416,11 @@ func TestFormatsTreeRules(t *testing.T) {
 			"internal/kb → internal/formats/common",
 			"internal/kb → internal/formats/format200",
 		}},
-		{"internal/index", "internal/formats/format300", []string{
-			"internal/index → internal/formats/format300",
+		{"internal/index", "internal/formats/format400", []string{
+			"internal/index → internal/formats/format400",
 		}},
-		{"internal/kbload", "internal/formats/format300", []string{
-			"internal/kbload → internal/formats/format300",
+		{"internal/kbload", "internal/formats/format400", []string{
+			"internal/kbload → internal/formats/format400",
 		}},
 		{"internal/formats/format100", "internal/kb", []string{
 			"internal/formats → internal/kb",
@@ -409,9 +430,9 @@ func TestFormatsTreeRules(t *testing.T) {
 		{"internal/kbload", "internal/formats/format200", []string{
 			"internal/kbload → internal/formats/format200",
 		}},
-		{"internal/formats/format300", "internal/formats/common", []string{
+		{"internal/formats/format400", "internal/formats/common", []string{
 			"internal/kb → internal/formats/common",
-			"internal/formats/format300 → internal/formats/common",
+			"internal/formats/format400 → internal/formats/common",
 		}},
 	} {
 		graph := withImport(base, tc.pkg, tc.dep)
@@ -465,11 +486,13 @@ func withImport(graph map[string][]string, pkg, dep string) map[string][]string 
 var cmdFileImporters = map[string][]string{
 	// the build verb's role closure, the score verb's ask, and the probe's one call
 	"internal/model": {"cmd/build.go", "cmd/score.go", "cmd/probe.go"},
-	// the init verb, the only cmd path that commits
-	"internal/gitledger": {"cmd/init.go"},
-	// the init verb, which stamps readiness documents at a KB's birth, and the
-	// render every cmd verb that saves a migration puts in its source
-	"internal/kbdocs": {"cmd/init.go", "cmd/restamp.go"},
+	// update-format's git mv of the root build records, and a committing
+	// write's commits, made where every write surface runs its batch; every
+	// one opens its repository through buildstore.OpenRepo
+	"internal/gitledger": {"cmd/update-format.go", "cmd/write_op.go"},
+	// the init verb, which stamps readiness documents at a KB's birth, and
+	// update-format, which rewrites their maintained blocks
+	"internal/kbdocs": {"cmd/init.go", "cmd/update-format.go"},
 }
 
 // TestCmdFileImporters: within cmd, each package of cmdFileImporters is

@@ -8,7 +8,7 @@ import "testing"
 // compiles out the development replays. The score and build commands it
 // carries hold none of their flags and neither replay hook is set.
 func TestDistBuildHasNoReplay(t *testing.T) {
-	for _, name := range []string{"replay", "failed"} {
+	for _, name := range []string{"replay", "failed", "limit"} {
 		if scoreCmd.Flags().Lookup(name) != nil {
 			t.Errorf("score --%s is in the default build", name)
 		}

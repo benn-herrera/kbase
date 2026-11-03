@@ -110,6 +110,143 @@ func TestLandLeafMarksEveryClaim(t *testing.T) {
 	}
 }
 
+// TestTheBuildsWritesKeepTitlesUniqueWithinAKind: a claim read twice in one
+// leaf is one claim, the second entry taking the first's id; the same title
+// read in another leaf is a claim of its own, its title made unique with a
+// counter; and two works of one title are two works under two titles.
+func TestTheBuildsWritesKeepTitlesUniqueWithinAKind(t *testing.T) {
+	root := seedKB(t, "# Entry\n\n- [V](v/index.md)\n", map[string]string{
+		"v/index.md": "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n- [B](b.md)\n",
+		"v/a.md":     "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n\nThe bound holds, again.\n",
+		"v/b.md":     "[↑ V](index.md)\n\n# B\n\nThe bound holds here too.\n",
+	}, kb.Graph{})
+	w := writer{kbRoot: root, lg: log.Discard()}
+	ids, err := w.landLeaves([]entry{
+		{title: "The bound", rationale: "Prose.", document: "v/a.md", locator: "The bound holds."},
+		{title: "The bound", rationale: "Prose.", document: "v/a.md", locator: "The bound holds, again."},
+		{title: "The bound", rationale: "Prose.", document: "v/b.md", locator: "The bound holds here too."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || ids[0] != ids[1] || ids[2] == ids[0] {
+		t.Fatalf("ids = %v, want the first leaf's two entries one claim and the second leaf's another", ids)
+	}
+	minted, _, err := w.writeWorks([]CitedWork{{Key: "k1", Title: "On bounds", Named: true}, {Key: "k2", Title: "On bounds", Named: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := loadRecords(t, root)
+	var claims, works []string
+	for _, n := range g.Claims {
+		claims = append(claims, n.Title)
+	}
+	for _, n := range g.Works {
+		works = append(works, n.Title)
+		if minted[n.Label] != n.ID {
+			t.Errorf("work %s, label %s: writeWorks gave %q for its key", n.ID, n.Label, minted[n.Label])
+		}
+	}
+	if len(minted) != 2 {
+		t.Errorf("writeWorks gave ids %v, want one per key", minted)
+	}
+	slices.Sort(claims)
+	slices.Sort(works)
+	if want := []string{"The bound", "The bound (2)"}; !slices.Equal(claims, want) {
+		t.Errorf("claim titles %q, want %q", claims, want)
+	}
+	if want := []string{"On bounds", "On bounds (2)"}; !slices.Equal(works, want) {
+		t.Errorf("work titles %q, want %q", works, want)
+	}
+}
+
+// TestACitedWorksEdgeTakesItsMintedID: the plan's works land through add-work,
+// each citation key its label, and the edge pass names each work by the id
+// add-work minted it: the claim resting on the cited work is founded by that
+// work's record.
+func TestACitedWorksEdgeTakesItsMintedID(t *testing.T) {
+	root := seedKB(t, "# Entry\n\n- [V](v/index.md)\n", map[string]string{
+		"v/index.md": "[↑ Entry](../entry-point.md)\n\n# V\n\n- [A](a.md)\n",
+		"v/a.md":     "[↑ V](index.md)\n\n# A\n\nThe bound holds.\n",
+	}, kb.Graph{})
+	w := writer{kbRoot: root, lg: log.Discard()}
+	if _, err := w.writePlan(plan{
+		entries: []entry{{title: "The bound", rationale: "Prose.", document: "v/a.md", locator: "The bound holds."}},
+		works:   []CitedWork{{Key: "Smith2020", Title: "On bounds", Named: true}},
+		restsOn: []restsOn{{entry: 0, workKey: "Smith2020"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := loadRecords(t, root)
+	if len(g.Works) != 1 || len(g.Claims) != 1 || g.Works[0].Label != "Smith2020" {
+		t.Fatalf("works %+v, claims %+v, want one work labelled Smith2020 and one claim", g.Works, g.Claims)
+	}
+	if want := (kb.BearingEdge{Source: g.Works[0].ID, Target: g.Claims[0].ID, Bearing: kb.Bearing{Pending: true}}); !slices.Contains(g.Founds, want) {
+		t.Errorf("founds %+v, want %+v", g.Founds, want)
+	}
+}
+
+// TestACounteredBlockTitleKeepsItsBlockJoin: "Theorem 1" in two papers lands
+// as two claims, the second titled with a counter, and each still joins its
+// own block — its display as its locator and its block's identifier — the
+// countered one by the display line its marker stands on, never by its title.
+func TestACounteredBlockTitleKeepsItsBlockJoin(t *testing.T) {
+	theorem := func(holds string) string {
+		return "[↑ Entry](../entry-point.md)\n\n# Results\n\n> **Theorem**\n>\n> **Theorem 1.** " + holds + "\n"
+	}
+	root := seedKB(t, "# Entry\n\n- [One](one/index.md)\n- [Two](two/index.md)\n", map[string]string{
+		"one/index.md": theorem("Alpha holds."),
+		"two/index.md": theorem("Beta holds."),
+	}, kb.Graph{})
+	recs := []records.Record{
+		{Kind: records.KindBlock, Order: 1, Document: "one/index.md", Name: "Theorem", Identifier: "thm:one"},
+		{Kind: records.KindBlock, Order: 2, Document: "two/index.md", Name: "Theorem", Identifier: "thm:two"},
+	}
+	tree, err := readTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := scanInventory(tree, recs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := assemblePlan(tree, &inv, blockClaims(&inv))
+	if len(p.entries) != 2 {
+		t.Fatalf("plan entries %+v, want the two theorems", p.entries)
+	}
+	w := writer{kbRoot: root, lg: log.Discard()}
+	ids, err := w.addClaims("pass-1", p.entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := readTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv2, err := scanInventory(after, recs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := readGraph(after, &inv2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var titles []string
+	for i, b := range inv2.claimBlocks() {
+		n, ok := g.node(ids[i])
+		titles = append(titles, n.Title)
+		if !ok || n.Locator != b.Display || n.Identifier != b.Identifier {
+			t.Errorf("%s (%q) joins locator %q, identifier %q; want its block's %q, %q", ids[i], n.Title, n.Locator, n.Identifier, b.Display, b.Identifier)
+		}
+		if c, ok := claimOf(&b, g.hostedBy(b.Document)); !ok || c.ID != ids[i] {
+			t.Errorf("block %s joins %+v, want %s", b.Identifier, c, ids[i])
+		}
+	}
+	if !slices.Equal(titles, []string{"Theorem 1", "Theorem 1 (2)"}) {
+		t.Errorf("titles %q, want the second countered", titles)
+	}
+}
+
 // TestCleanlinessRefusesNodeRecords: the double-run guard passes a tree whose
 // node records file is empty and refuses one holding a record.
 func TestCleanlinessRefusesNodeRecords(t *testing.T) {

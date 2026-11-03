@@ -4,7 +4,7 @@ The sheet composer reads the rows `index.Derive` yields from a KB root's records
 markers, the H1s of `entry-point.md` and each volume's `index.md`, and the leaves hosting its
 claims. This directory is such a repository: `kb-root/` is a KB in metadata format `3.0.0` — the
 `2.0.x → 3.0.0` converter's golden output (`internal/formats/testdata/adjagent-sheet-3.0.0/kb-root/`),
-stamped `3.0.0`, with the register pages `kbase refresh` renders in place of the `2.0.1` registers —
+stamped `3.0.0`, with `3.0.0` register pages in place of the `2.0.1` registers —
 and an unmarked-reference build record beside it that the sheets do not read. `kbase verify` over it
 reports the four unhosted claims' `statement marker` fault and the two `demoted` records, and
 nothing of the pages. kbase's sheet tests load it, compose the sheets and byte-compare them with the
@@ -21,7 +21,7 @@ These are inputs to tests only.
 | `kb-root/entry-point.md`, `kb-root/alpha/index.md`, `kb-root/beta/index.md` | the KB title (a plain entry point; the format stamp `kb-format: "3.0.0"` stands in `.index/format.yaml`) and the two volume titles, Beta's carrying `&`, `"` and `<` |
 | `kb-root/gamma/index.md` | a volume directory no node sits in, which gets no sheet and no digest box |
 | `kb-root/alpha/results.md`, `kb-root/beta/governance.md` | the leaves whose statement markers place claim kinds |
-| `kb-root/alpha/claim-rigor.md`, `kb-root/beta/claim-rigor.md`, `kb-root/claim-rigor.md` | the register pages `kbase refresh` renders from the records, which the sheets do not read |
+| `kb-root/alpha/claim-rigor.md`, `kb-root/beta/claim-rigor.md`, `kb-root/claim-rigor.md` | the `3.0.0` register pages, part of the frozen conversion input, which the sheets do not read |
 | `kb-root/axioms.md` | the two axioms `founds` edges name, as prose |
 | `kb-root/alpha/analysis.md`, `kb-root/alpha/experiments/flow.md` | the leaves hosting the analysis and the experiment, each marker directly after the first heading |
 | `kb-root/.index/nodes.yaml`, `kb-root/.index/edges.yaml` | the node and edge records |
@@ -62,20 +62,17 @@ These are inputs to tests only.
 No edge names a node no record carries, so the fixture draws no ghost box; `TestGhostDraws` covers
 that box in the sheet package.
 
-## Regenerating
+## Replacing a golden
 
-`kb-root/` is authored — the records, the markers and the documents — but for the register pages,
-which `kbase refresh` renders. After a change to the records, the markers or what refresh renders,
-run `./bin/kbase refresh` over a scratch copy of this directory with an empty `.git` beside its
-`kb-root/`, and copy the three `claim-rigor.md` pages it writes back over these. Refresh also draws
-`kb-root/*.svg` from whatever Graphviz it finds; this directory commits none of them, so discard
-them.
+`kb-root/` is a frozen `3.0.0` conversion input, which the sheet tests convert at load. It is never
+regenerated and never hand-edited.
 
 The DOT text is ours and deterministic, so it needs no Graphviz and no version pin. No SVG is
 committed and no test runs Graphviz: `dot`'s layout and bytes change between releases, so the DOT
-text is the only pin on what is drawn. No recipe writes these three goldens either; the composer's
-own bytes for each sheet are the golden, and a deliberate change is applied from a failing compare
-or from a dump of `sheet.dot(false)`.
+text is the only pin on what is drawn. On a mismatch, `TestAdjagentSheetGoldens` writes
+the drawn sheet under `test-data/transient/unit_tests/sheet/got/` with the golden's name. A
+golden is replaced only by copying that file over it, and the commit names each golden replaced
+and the change that moved it.
 
 **A golden update is a decision, not a repair.** Its whole value is that a change nobody meant to
 make shows up as a failing byte-compare; editing one to turn a red test green throws that away.

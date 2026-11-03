@@ -22,7 +22,7 @@ func invocationDir(cmd *cobra.Command) (string, error) {
 		}
 	}
 	if flagProjectDir != "" {
-		return buildstore.ProjectRoot(flagProjectDir, "--project-dir")
+		return buildstore.ProjectRoot(flagProjectDir)
 	}
 	return os.Getwd()
 }
@@ -35,26 +35,40 @@ func absIfSet(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
+// mcpCommandName is the server's subcommand.
+const mcpCommandName = "mcp"
+
 func mcpCommand() *cobra.Command {
 	var projectRequired bool
 	cmd := &cobra.Command{
-		Use:   "mcp",
+		Use:   mcpCommandName,
 		Short: "serve the KB's subcommands as MCP tools over stdio",
 		Long: `mcp serves kbase to an agent harness over the Model Context Protocol:
-newline-delimited JSON-RPC on stdin and stdout. Every tool is one subcommand,
-with the same arguments and the same result document, as text and as
-structured content, but for rewind-build, which reports the build's trail and
-is no subcommand; a result whose exit code is not 0 is an error result. Every
-tool also takes project-dir, the project the call runs in. Without
---project-dir-required the server locates its project from the working
-directory, as every subcommand finds it, and a call naming none runs there;
-with it the server locates none and every call names its project. mcp takes
-no --project-dir. stdout carries protocol frames and nothing else;
-diagnostics go to stderr and --log-file. EOF on stdin ends the server.`,
+newline-delimited JSON-RPC on stdin and stdout. Each tool binds one
+subcommand, but for write and query, which each take a family of subcommands
+as operations. A tool takes the subcommand's arguments and returns its result
+document, as text and as structured content, except where its description
+names a difference: build and score return once their run has started. A
+result whose exit code is not 0 is an error result. Three commands are served
+by no tool: auth, since a key never travels through MCP; wait, since an MCP
+call cannot block, so a session polls status instead; and mcp, the server
+itself. help and completion are the CLI framework's own.
+
+Every tool also takes project-dir, the project the call runs in: the absolute
+path of its git worktree root, the directory holding .git, never kb-root/
+itself. The server searches upward from its working directory for the
+repository root, as every subcommand finds it; where it finds one, a call
+naming no project-dir runs there, and project-dir is optional in every
+schema. Where it finds none, or under --project-dir-required even inside a
+repository, the server locates no project: project-dir is
+required in every schema, and the instructions say how a session gets the
+path. Startup never fails for want of a project. mcp takes no --project-dir.
+stdout carries protocol frames and nothing else; diagnostics go to stderr and
+--log-file. EOF on stdin ends the server.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("project-dir") {
-				return toolresult.Refusal{{Check: checkUsage, Key: "--project-dir",
+				return toolresult.Refusal{{Check: toolresult.CheckUsage, Key: "--project-dir",
 					Detail: "kbase mcp takes no project; each tool call names its own with project-dir",
 					Remedy: "run `kbase mcp` from inside the project, or `kbase mcp --project-dir-required` where the harness has no project working directory"}}
 			}
@@ -65,18 +79,17 @@ diagnostics go to stderr and --log-file. EOF on stdin ends the server.`,
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&projectRequired, "project-dir-required", false, "every tool call names its project with project-dir; the server locates no project of its own")
+	cmd.Flags().BoolVar(&projectRequired, "project-dir-required", false, "every tool call names its project with project-dir; the server locates no project of its own, even inside a repository")
 	return cmd
 }
 
 // serveMCP serves the command tree under cmd's root. Where projectRequired,
 // the server locates no project; otherwise it locates the repository that
-// holds the invocation directory, or none.
+// holds the invocation directory, and where there is none it serves as it
+// would where projectRequired.
 func serveMCP(cmd *cobra.Command, projectRequired bool) error {
-	var located mcp.Located
-	if projectRequired {
-		located = mcp.ProjectRequired()
-	} else {
+	located := mcp.ProjectRequired()
+	if !projectRequired {
 		dir, err := invocationDir(cmd)
 		if err != nil {
 			return err

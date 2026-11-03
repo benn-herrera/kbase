@@ -1,0 +1,48 @@
+% lamb.tex with one property added: a dependency cycle a build must cut.
+%
+% PROPERTY — two lemmas whose proofs cite each other. Each proof opens with the
+% plain "Proof." head, naming no result, so it binds to the lemma directly above
+% it; each cites the other lemma in its body. A --no-inference build drafts each
+% contained reference as "supported by", giving a supports edge each way. The
+% cycle walk at the end of depends-attributed cuts one into a demoted record,
+% and analyses-split then moves that record onto the analysis it splits from
+% its lemma. Keep the references out of the proofs' opening runs: a reference
+% there would bind the proof to the lemma it names and the cycle would not form.
+%
+% No bibliography travels with this file and it cites nothing: lamb.tex covers
+% citations, and this fixture isolates the cycle.
+\documentclass{article}
+\usepackage{amsthm}
+\newtheorem{lemma}{Lemma}
+\title{Mary and Her Lamb: A Mutual Account}
+\author{A. Nonymous}
+\begin{document}
+\maketitle
+\begin{abstract}
+We recount the case of Mary, who had a little lamb, and prove that each went
+wherever the other did.
+\end{abstract}
+
+\section{Introduction}
+Mary had a little lamb. Its fleece was white as snow.
+
+\section{Results}
+\begin{lemma}\label{lem:follows}
+Everywhere that Mary went, the lamb was sure to go.
+\end{lemma}
+\begin{proof}
+Let Mary go somewhere. Mary is never seen without the lamb, by
+Lemma~\ref{lem:accompanied}, so the lamb is there too.
+\end{proof}
+
+\begin{lemma}\label{lem:accompanied}
+Mary is never seen without the lamb.
+\end{lemma}
+\begin{proof}
+Wherever Mary is seen, she went there. The lamb goes wherever Mary goes, by
+Lemma~\ref{lem:follows}, so it is seen with her.
+\end{proof}
+
+\section{Conclusion}
+It waited patiently about till Mary did appear.
+\end{document}

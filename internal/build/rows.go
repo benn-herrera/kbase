@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -46,41 +47,17 @@ func PandocRefusal(err error) error {
 	return err
 }
 
-// The kb-root/ tri-state: absent, holding only the derived index, or holding
-// something a build could destroy.
-const (
-	kbRootAbsent    = "absent"
-	kbRootSpineOnly = "spine-only"
-	kbRootPopulated = "populated"
-)
-
-func kbRootState(kbRoot string) (string, error) {
-	entries, err := os.ReadDir(kbRoot)
-	if errors.Is(err, os.ErrNotExist) {
-		return kbRootAbsent, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	for _, e := range entries {
-		if e.Name() != kb.IndexDir {
-			return kbRootPopulated, nil
-		}
-	}
-	return kbRootSpineOnly, nil
-}
-
-// kbRootGuard refuses to open a build over a kb-root/ something is in.
+// kbRootGuard refuses a fresh build where kb-root/ exists, in any state, as
+// init refuses it.
 func kbRootGuard(kbRoot string) error {
-	state, err := kbRootState(kbRoot)
-	if err != nil {
-		return err
+	_, err := os.Lstat(kbRoot)
+	switch {
+	case err == nil:
+		return result.Refusal{buildstore.KBRootExists(kbRoot)}
+	case errors.Is(err, os.ErrNotExist):
+		return nil
 	}
-	if state == kbRootPopulated {
-		return result.Refusal{{Check: checkKBRoot, Path: kbRoot,
-			Detail: fmt.Sprintf("%s is %s: it holds documents and this repository has no kb-build: trail to resume; move that tree aside to build afresh", kbRoot, state)}}
-	}
-	return nil
+	return err
 }
 
 // bibliographies is the set every volume is offered: the build's own, in the
@@ -112,18 +89,56 @@ func (w *walk) bibliographies() ([]string, error) {
 	return beside, nil
 }
 
+// referenceWrapperRE is a link pandoc wraps around a cross-reference, as
+// \hyperref[label]{Appendix \ref{label}} writes it: the cross-reference inside
+// its text, its own destination the bare LaTeX label, which names no heading.
+var referenceWrapperRE = regexp.MustCompile(`\[([^\[\]]*<a\s[^<>]*\bdata-reference-type="[^"]*"[^<>]*>[^<>]*</a>[^\[\]]*)\]\(#[^()\s]*\)`)
+
+// unwrapReferences is text with each link wrapped around a cross-reference
+// replaced by its text: the cross-reference inside it links the target
+// document's heading.
+func unwrapReferences(text string) string { return referenceWrapperRE.ReplaceAllString(text, "$1") }
+
+// unwrapTree rewrites each document under dir that holds a wrapped
+// cross-reference with it unwrapped.
+func unwrapTree(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(p) != ".md" {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if text := unwrapReferences(string(data)); text != string(data) {
+			return atomicfile.Write(p, []byte(text), nil)
+		}
+		return nil
+	})
+}
+
+// buildTree is the document graph's tree of the walk's inputs, written under
+// kbRoot with every wrapped cross-reference unwrapped.
+func (w *walk) buildTree(kbRoot string) (docgraph.Report, error) {
+	bibs, err := w.bibliographies()
+	if err != nil {
+		return docgraph.Report{}, err
+	}
+	report, err := docgraph.Build(w.ctx, w.opts.Logger, docgraph.Options{
+		VolumeRoots: w.opts.VolumeRoots, Bibliographies: bibs, KBRoot: kbRoot,
+	})
+	if err != nil {
+		return report, documentGraphFailure(err)
+	}
+	return report, unwrapTree(kbRoot)
+}
+
 // documentGraph builds the tree from the volume roots in the walk's path
 // order, and writes its records into the state store.
 func documentGraph(w *walk) (result.Record, error) {
-	bibs, err := w.bibliographies()
+	report, err := w.buildTree(w.kbRoot)
 	if err != nil {
 		return nil, err
-	}
-	report, err := docgraph.Build(w.ctx, w.opts.Logger, docgraph.Options{
-		VolumeRoots: w.opts.VolumeRoots, Bibliographies: bibs, KBRoot: w.kbRoot,
-	})
-	if err != nil {
-		return nil, documentGraphFailure(err)
 	}
 	if err := docgraph.WriteRecords(w.stateDir, report); err != nil {
 		return nil, err
@@ -211,15 +226,9 @@ func (w *walk) ensureRecords() error {
 	}
 	defer os.RemoveAll(scratch)
 	built := filepath.Join(scratch, kb.KBDir)
-	bibs, err := w.bibliographies()
+	report, err := w.buildTree(built)
 	if err != nil {
 		return err
-	}
-	report, err := docgraph.Build(w.ctx, w.opts.Logger, docgraph.Options{
-		VolumeRoots: w.opts.VolumeRoots, Bibliographies: bibs, KBRoot: built,
-	})
-	if err != nil {
-		return documentGraphFailure(err)
 	}
 	if report.Failed() {
 		return buildstore.Failure(failedChecks(report))
@@ -352,7 +361,7 @@ func validationGate(w *walk) (result.Record, error) {
 	if err != nil {
 		return rec, err
 	}
-	found, err := index.BuildVerify(src)
+	found, err := index.Verify(src)
 	if err != nil {
 		return rec, err
 	}
@@ -444,7 +453,7 @@ func overview(w *walk) (result.Record, error) {
 	var incomplete asks.IncompleteError
 	switch {
 	case errors.As(askErr, &incomplete):
-		return rec, buildstore.Failure{{Check: checkInference, Detail: "the overview passage was never answered: " + incomplete.Error()}}
+		return rec, buildstore.Failure{{Check: checkInference, Remedy: incomplete.Remedy, Detail: "the overview passage was never answered: " + incomplete.Error()}}
 	case askErr != nil:
 		return rec, askErr
 	case writeErr != nil:

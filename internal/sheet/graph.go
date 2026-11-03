@@ -41,7 +41,7 @@ type node struct {
 	id, kind, title string
 	// href is the register entry, relative to kb-root; "" for a ghost.
 	href string
-	// band is a claim's or an analysis's build band slug, "" for any other node.
+	// band is a claim's or an analysis's strength band slug, "" for any other node.
 	band string
 	// group is the top-level directory of the node's canonical path, "" for
 	// a node registered at kb-root.
@@ -100,7 +100,7 @@ func load(src *kb.Source, claims []kb.NodeRow, rows []kb.EdgeRow, cites []kb.Cit
 		switch c.NodeType {
 		case kb.NodeKindClaim:
 			n.kind = kinds.claimKind(c.ID, c.Title, leaves[c.ID])
-			n.band = c.BuildBand
+			n.band = c.StrengthBand
 			if _, ok := bandFills[n.band]; !ok {
 				n.band = kb.UnknownBandSlug
 			}

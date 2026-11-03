@@ -19,6 +19,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/argmark"
 	"kbase/internal/asks"
 	"kbase/internal/buildstore"
 	"kbase/internal/kb"
@@ -218,7 +219,7 @@ func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
 
 	// A run walking both sends all three: the statement, the method and then
 	// the bearing instruction, each rendered once.
-	both, err := askDigest(query.PassBoth)
+	both, err := askDigest(query.PassAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,6 +419,53 @@ func TestLastIsTheLastLinesEntry(t *testing.T) {
 	}
 }
 
+// TestAFailedLineCarriesItsRemedy: a failed attempt's remedy is the line's
+// `remedy`, read back by a resume; a line naming none — as every line written
+// before the field — carries no key and reads back with none, under the same
+// ledger format.
+func TestAFailedLineCarriesItsRemedy(t *testing.T) {
+	dir := t.TempDir()
+	l := kept(t, dir)
+	refused, other := node(kb.NodeKindClaim, "clm-1"), node(kb.NodeKindClaim, "clm-2")
+	if err := l.Append(refused, Entry{Status: StatusFailed, Reply: "http 401", Remedy: "the command that lets the call through", Note: "the note"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(other, Entry{Status: StatusFailed, Reply: "http 500"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recs := lines(t, filepath.Join(l.Dir(), linesFile))
+	if len(recs) != 2 || recs[0]["remedy"] != "the command that lets the call through" {
+		t.Errorf("the refused line = %v, want its remedy", recs)
+	}
+	if _, carried := recs[1]["remedy"]; carried {
+		t.Errorf("a line naming no remedy carries the key: %v", recs[1])
+	}
+	if recs[0]["note"] != "the note" {
+		t.Errorf("the refused line = %v, want its note", recs[0])
+	}
+	if _, carried := recs[1]["note"]; carried {
+		t.Errorf("a line naming no note carries the key: %v", recs[1])
+	}
+	back := reopened(t, dir)
+	for _, tc := range []struct {
+		it   query.Item
+		want string
+	}{{refused, "the command that lets the call through"}, {other, ""}} {
+		if got, ok := back.Last(tc.it); !ok || got.Remedy != tc.want {
+			t.Errorf("%s read back with remedy %q, %t; want %q", ItemName(tc.it), got.Remedy, ok, tc.want)
+		}
+	}
+	if got, _ := back.Last(refused); got.Note != "the note" {
+		t.Errorf("the refused line read back with note %q", got.Note)
+	}
+	if got, _ := back.Last(other); got.Note != "" {
+		t.Errorf("a line naming no note read back with note %q", got.Note)
+	}
+}
+
 // TestResumeAfterAnUpdateContinues: a run whose header records an ask other than
 // the one this kbase would put to the model — or which records none, as a run
 // written before the field does — is resumed rather than refused: the lines it
@@ -509,7 +557,7 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	// so the resume prices it at the statement maximum — a run landed under one
 	// table re-prices under its items' classes.
 	stale := node(kb.NodeKindClaim, "clm-1")
-	moved := Entry{Status: StatusDone, Value: "0.30",
+	moved := Entry{Status: StatusDone, Value: "0.30", Judged: askedHash,
 		Faults: []Charge{{ID: kb.FaultOverreach, Passage: passageStatement, Citation: "A span", Offset: 4}}, Reply: "flt-overreach: A span"}
 	if err := l.Append(stale, moved); err != nil {
 		t.Fatal(err)
@@ -742,11 +790,16 @@ func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
 	}
 }
 
-// landedEntry is a landed entry recording one charge of id.
+// landedEntry is a landed entry recording one charge of id, asked under
+// askedHash.
 func landedEntry(value, id string) Entry {
-	return Entry{Status: StatusDone, Value: value, Reply: id + ": A span",
+	return Entry{Status: StatusDone, Value: value, Reply: id + ": A span", Judged: askedHash,
 		Faults: []Charge{{ID: id, Passage: passageStatement, Citation: "A span", Offset: 4}}}
 }
+
+// askedHash is the judged hash a seeded line records its call composed under;
+// a stub write compares nothing against it.
+var askedHash = strings.Repeat("ab", 32)
 
 // TestResumeDropsTheTornLine: a line a kill left half-written never landed, so
 // its item is asked again — and the line this resume writes for it is not glued
@@ -791,9 +844,8 @@ func TestResumeDropsTheTornLine(t *testing.T) {
 	}
 }
 
-// TestResumeRefusesAnotherRun: a run naming another KB root, another pass or a
-// ledger this kbase does not read is refused, and so is a run that stands
-// nowhere.
+// TestResumeRefusesAnotherRun: a run naming another KB root or a ledger this
+// kbase does not read is refused, and so is a run that stands nowhere.
 func TestResumeRefusesAnotherRun(t *testing.T) {
 	dir := t.TempDir()
 	kept(t, dir).Close()
@@ -815,7 +867,6 @@ func TestResumeRefusesAnotherRun(t *testing.T) {
 		want string
 	}{
 		{"another KB root", RunHeader{Run: "run-1", KBRoot: "/elsewhere/kb-root", Pass: query.PassRigor}, "/elsewhere/kb-root"},
-		{"another pass", RunHeader{Run: "run-1", KBRoot: "/repo/kb-root", Pass: query.PassBearing}, "bearing"},
 		{"a newer ledger", RunHeader{Run: "run-2", KBRoot: "/repo/kb-root", Pass: query.PassRigor}, "ledger format 2"},
 		{"no run", RunHeader{Run: "run-9", KBRoot: "/repo/kb-root", Pass: query.PassRigor}, "is missing"},
 	} {
@@ -825,8 +876,8 @@ func TestResumeRefusesAnotherRun(t *testing.T) {
 			if !errors.As(err, &ref) {
 				t.Fatalf("Resume(%s) = %v, want a refusal", tc.name, err)
 			}
-			if len(ref) != 1 || ref[0].Check != checkUsage || ref[0].Key != "--resume" || !strings.Contains(ref[0].Detail, tc.want) {
-				t.Errorf("the refusal = %v; want check %s, key --resume, detail naming %q", ref, checkUsage, tc.want)
+			if len(ref) != 1 || ref[0].Check != result.CheckUsage || ref[0].Key != argmark.Flag("resume") || !strings.Contains(ref[0].Detail, tc.want) {
+				t.Errorf("the refusal = %v; want check %s, key --resume, detail naming %q", ref, result.CheckUsage, tc.want)
 			}
 		})
 	}

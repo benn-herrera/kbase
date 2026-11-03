@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbload"
 	"kbase/internal/log"
@@ -34,71 +35,60 @@ func unmigratedKB(t *testing.T) string {
 	return root
 }
 
-// TestAWriteOnAnUnmigratedKBWritesTheEdgeFileFirst: an op on a KB still in
-// the 2.0.0 form that moves only the node records writes both record files,
-// the edge file first, and its refresh saves the KB.
-func TestAWriteOnAnUnmigratedKBWritesTheEdgeFileFirst(t *testing.T) {
+// TestAWriteOverAnUnmigratedKBIsRefused: an op over a KB still in the 2.0.0
+// form is refused while its conversion is pending, check index and remedy
+// kbase update-format, and kb-root stands byte-identical — no node file
+// gained, whatever CLAUDE.md holds.
+func TestAWriteOverAnUnmigratedKBIsRefused(t *testing.T) {
 	root := unmigratedKB(t)
-	res := Run("set-rigor", Options{KBRoot: root, Values: []byte("entry:\n- id: clm-aaaaaa\n  rigor: 0.75\n"), Logger: log.Discard()})
-	if res.Outcome != result.Done || !slices.Equal(res.Written, []string{kb.GraphEdgesFile, kb.GraphNodesFile}) {
-		t.Fatalf("set-rigor over 2.0.0: %+v, want done having written %s then %s", res, kb.GraphEdgesFile, kb.GraphNodesFile)
+	writeFile(t, filepath.Join(root, kb.AgentsRedirectFile), "Instructions kept here.\n")
+	before := snapshot(t, root)
+	res := Run(EditClaim, Options{KBRoot: root, Values: []byte("entry:\n- id: clm-aaaaaa\n  rigor: 0.75\n"), Logger: log.Discard()})
+	if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Check != index.CheckIndex || res.Refusals[0].Remedy != index.UpdateFormatRemedy {
+		t.Errorf("edit-claim over 2.0.0: %+v, want refused while the conversion is pending", res)
 	}
-	stampFile, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(kb.FormatFile)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stamp, err := kb.DecodeFormatStamp(stampFile); err != nil || stamp != kb.FormatVersion {
-		t.Errorf("the op's refresh left the stamp at %q (%v), want %s", stamp, err, kb.FormatVersion)
+	if after := snapshot(t, root); !maps.Equal(after, before) {
+		t.Errorf("kb-root moved under a refused write:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
 	}
 }
 
-// TestAWriteRefusedByItsRefreshWritesNothing: an op that ends with a refresh,
+// TestAWriteRefusedByItsRefreshWritesNothing: a batch the derivation follows,
 // over a KB whose CLAUDE.md is not the redirect, refuses before it writes, so
-// kb-root stands byte-identical, and an unmigrated KB gains no node file.
+// kb-root stands byte-identical.
 func TestAWriteRefusedByItsRefreshWritesNothing(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		kb   func(*testing.T) string
-	}{
-		{"2.0.0", unmigratedKB},
-		{"3.0.0", seedKB},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := tc.kb(t)
-			writeFile(t, filepath.Join(root, kb.AgentsRedirectFile), "Instructions kept here.\n")
-			before := snapshot(t, root)
-			res := Run("set-rigor", Options{KBRoot: root, Values: []byte("entry:\n- id: clm-aaaaaa\n  rigor: 0.75\n"), Logger: log.Discard()})
-			if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Check != kb.UnmigratedAgentsCheck {
-				t.Fatalf("set-rigor: %+v, want refused with one %s item", res, kb.UnmigratedAgentsCheck)
-			}
-			if after := snapshot(t, root); !maps.Equal(after, before) {
-				t.Errorf("kb-root moved under a refused write:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
-			}
-		})
+	root := seedKB(t)
+	writeFile(t, filepath.Join(root, kb.AgentsRedirectFile), "Instructions kept here.\n")
+	before := snapshot(t, root)
+	res := Run(EditClaim, Options{KBRoot: root, Values: []byte("entry:\n- id: clm-aaaaaa\n  rigor: 0.75\n"), Logger: log.Discard()})
+	if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Check != kb.UnmigratedAgentsCheck {
+		t.Fatalf("edit-claim: %+v, want refused with one %s item", res, kb.UnmigratedAgentsCheck)
+	}
+	if after := snapshot(t, root); !maps.Equal(after, before) {
+		t.Errorf("kb-root moved under a refused write:\nbefore %v\nafter  %v", slices.Sorted(maps.Keys(before)), slices.Sorted(maps.Keys(after)))
 	}
 }
 
-// TestAWriteStoppedBeforeTheNodeFileConvertsAfresh: a write that stopped
-// after the edge file, before the node file, leaves a KB whose next load
-// reads that edge file as the derived 2.0.0 one it replaced and converts the
-// KB from its 2.0.0 sources: an edge only that file holds is not read.
-func TestAWriteStoppedBeforeTheNodeFileConvertsAfresh(t *testing.T) {
+// TestASaveStoppedBeforeTheNodeFileConvertsAfresh: an update-format save that
+// stopped after the edge file, before the node file, leaves a KB whose next
+// load reads that edge file as the derived 2.0.0 one it replaced and converts
+// the KB from its 2.0.0 sources: an edge only that file holds is not read.
+func TestASaveStoppedBeforeTheNodeFileConvertsAfresh(t *testing.T) {
 	root := unmigratedKB(t)
 	src, err := kbload.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := kb.LoadAuthoredGraph(src)
+	g, err := kb.LoadGraph(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.Founds = append(g.Founds, kb.BearingEdge{Source: "wrk-smith2020", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.5}})
+	g.Founds = append(g.Founds, kb.BearingEdge{Source: "wrk-s00000", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: 0.5}})
 	writeFile(t, src.KBPath(kb.GraphEdgesFile), string(kb.EncodeEdges(g)))
 	reopened, err := kbload.Open(root)
 	if err != nil {
 		t.Fatalf("reopening the KB the write stopped on: %v", err)
 	}
-	again, err := kb.LoadAuthoredGraph(reopened)
+	again, err := kb.LoadGraph(reopened)
 	if err != nil {
 		t.Fatal(err)
 	}

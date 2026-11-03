@@ -1,4 +1,4 @@
-// The strength walk of ../STRENGTH_SCORING_SCHEME.md, drawn from the page's
+// The strength walk of ../PROJECT_DOCS/SPEC/scoring/strength/entry-point.md, drawn from the page's
 // worked example. Each box carries the values its node holds: a claim or an
 // analysis its rigor and its derived strength, a work, an experiment or an
 // axiom its rigor (which is that node's source strength) — the axiom's 1.00 by

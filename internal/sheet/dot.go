@@ -67,7 +67,7 @@ func plural(kind string) string {
 	return kind + "s"
 }
 
-// ladderFills is the fill of each rung of kb.BuildBandLadder, in its order;
+// ladderFills is the fill of each rung of kb.StrengthBandLadder, in its order;
 // pendingFill is kb.UnknownBandSlug's.
 var (
 	ladderFills = []string{"#b7e4c0", "#e3f2b5", "#ffe1a8", "#ffb8a1", "#e3a7c4"}
@@ -80,7 +80,7 @@ type band struct{ slug, label, fill string }
 // bands is the ladder's bands and then the pending one, in legend order.
 var bands = func() []band {
 	var out []band
-	for i, b := range kb.BuildBandLadder {
+	for i, b := range kb.StrengthBandLadder {
 		out = append(out, band{b.Slug, b.Label, ladderFills[i]})
 	}
 	return append(out, band{kb.UnknownBandSlug, kb.PendingLiteral, pendingFill})

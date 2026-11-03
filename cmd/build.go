@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,10 +11,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"kbase/internal/argmark"
 	"kbase/internal/build"
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/mcp"
 	"kbase/internal/model"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
@@ -59,7 +62,7 @@ func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 		return 0, err
 	}
 	outcome, fields := buildRun(ctx, opts)
-	if err := toolresult.Emit(opts.Stdout, outcome, fields...); err != nil {
+	if err := toolresult.Emit(documentOut(opts.Stdout), outcome, fields...); err != nil {
 		return 0, fmt.Errorf("build: writing the result: %w", err)
 	}
 	return toolresult.ExitCode(outcome), nil
@@ -114,18 +117,33 @@ func providerFor(opts buildOptions, reg *modelclient.Registry, queue *model.Queu
 	}
 }
 
-// refused is a refusal of every item, after fields.
+// refused is a refusal of every item, after fields. A configuration or
+// provider item leaves here with show-config in its remedy, after the
+// clearing text the item carries; show-config reports its own without it.
 func refused(fields []toolresult.Field, items ...toolresult.Item) (string, []toolresult.Field) {
-	return toolresult.Refused, append(fields, toolresult.Field{Key: toolresult.RefusalsKey, Value: items})
+	out := make([]toolresult.Item, len(items))
+	for i, it := range items {
+		if it.Check == config.CheckProvider {
+			it.Remedy = config.ShowConfigRemedy(it.Remedy)
+		}
+		out[i] = it
+	}
+	return toolresult.Refused, append(fields, toolresult.Field{Key: toolresult.RefusalsKey, Value: out})
 }
 
 // checkError names a failure kbase has no narrower class for.
 const checkError = buildstore.CheckError
 
-// failed is a failure of err, after fields.
+// failed is a failure of err, after fields, carrying the remedy err names
+// where the provider refused a call for its key.
 func failed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
-	return toolresult.Failed, append(fields, toolresult.Field{Key: toolresult.FailuresKey,
-		Value: []toolresult.Item{{Check: checkError, Detail: err.Error()}}})
+	item := toolresult.Item{Check: checkError, Detail: err.Error()}
+	var refused modelclient.KeyRefusedError
+	if errors.As(err, &refused) {
+		item.Remedy = refused.Remedy
+		item.Detail = config.WithRefusedKeyNote(item.Detail)
+	}
+	return toolresult.Failed, append(fields, toolresult.Field{Key: toolresult.FailuresKey, Value: []toolresult.Item{item}})
 }
 
 // exitCode carries a non-zero exit out of a verb that has already written
@@ -148,44 +166,32 @@ var (
 // asks on the decision role, the overview passage on the text role — or what
 // it lacks. A key bound for a non-loopback http:// endpoint is said on stderr,
 // and the build proceeds.
-func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) func(reg *modelclient.Registry) (build.Provider, error) {
+func buildProvider(p providerOptions, stderr io.Writer) func(reg *modelclient.Registry) (build.Provider, error) {
 	return func(reg *modelclient.Registry) (build.Provider, error) {
-		s := p.inputs(env)
-		mode, err := config.ModeOf(s)
-		if err != nil {
-			return build.Provider{}, err
-		}
-		if mode == config.ModeFile {
-			// An environment-mode invocation reads no file value, so it says
-			// nothing of the keys the files state.
-			supersededProvider(stderr, p.Config)
-			supersededReaderConcurrency(stderr, p.Config)
-		}
+		s := p.inputs()
 		warnFaults(stderr, p.Faults)
 		var records []toolresult.Record
 		warned := map[string]bool{}
-		role := func(r config.Role) (model.Client, string, error) {
-			ep, err := config.Resolve(s, mode, r, "")
+		role := func(r config.Role) (model.Client, string, string, error) {
+			ep, err := config.Resolve(s, r, "")
 			if err != nil {
-				return nil, "", err
+				return nil, "", "", err
 			}
-			// One line per endpoint, however many roles reach it: the key is
-			// what the run sends, and the registry is what read it.
+			// One line per endpoint, however many roles reach it.
 			if !warned[ep.BaseURL] {
-				warned[ep.BaseURL] = warnCleartextKey(stderr, reg, ep)
-			}
-			client, err := reg.Get(ep)
-			if err != nil {
-				return nil, "", err
+				warned[ep.BaseURL] = warnCleartextKey(stderr, ep)
 			}
 			records = append(records, roleRecord(ep))
-			return client, ep.Model, nil
+			return reg.Get(ep), ep.Provider, ep.Model, nil
 		}
-		var provider build.Provider
-		if provider.MultichoiceClient, provider.Multichoice, err = role(config.RoleDecision); err != nil {
+		var (
+			provider build.Provider
+			err      error
+		)
+		if provider.MultichoiceClient, provider.MultichoiceProvider, provider.Multichoice, err = role(config.RoleDecision); err != nil {
 			return build.Provider{}, err
 		}
-		if provider.OverviewClient, provider.Overview, err = role(config.RoleText); err != nil {
+		if provider.OverviewClient, provider.OverviewProvider, provider.Overview, err = role(config.RoleText); err != nil {
 			return build.Provider{}, err
 		}
 		provider.Roles = records
@@ -198,44 +204,65 @@ func buildProvider(p providerOptions, env config.Overrides, stderr io.Writer) fu
 // or nil where they select none. It is nil in a build that carries no replay.
 var buildReplay func(cmd *cobra.Command, args []string) func(context.Context, buildOptions) (int, error)
 
-var buildCmd = &cobra.Command{
-	Use:   "build [<volume-root>...]",
-	Short: "build the KB from LaTeX volume roots into <git root>/kb-root",
-	Long: `build converts LaTeX volume roots — each a paper's top .tex file, never one
-another includes — into a KB, at kb-root/ beside the repository's .git: one
+// buildLong is build's shared help body.
+var buildLong = `build converts LaTeX volume roots — each a paper's top .tex file, never one
+another includes — into a KB at kb-root/, in the git worktree root: one
 tree, each volume its own directory, entry-point.md listing every volume in
-path order. A relative volume root or --bibliography resolves against the
-project root, and the build orders each list by full path, whatever order it
-was given in. It walks the build's stages in order through the
-stage --through names (an id or a display name; every stage when absent).
-Each stage's boundary is a commit in the repository, its subject
-"kb-build: <stage> | <display>", scoped to the paths the build owns, and
-records the inputs; the start boundary also records started-at, the commit the
-build began from. A build is given volume roots only over an empty trail;
---resume takes none and continues from the last boundary the commit trail
-holds, with the inputs it records. A build resumes from any recorded boundary,
-not only the last: status names each stage's commit, so reset the repository
-to one and run build --resume; a build over other inputs starts over from
-started-at. The rewind-build MCP tool and the kbase://build-trail resource
-print the commands for either.
---no-inference drops every row that spends inference and walks the rest;
-without it, the claim graph's multichoice asks go to the endpoint [models] decision
-names and the overview passage to the one [models] text names — each value a
-provider/model reference, the providers.toml entry that supplies the endpoint
-then the model it serves. KBASE_API_BASE_URL, KBASE_DECISION and KBASE_TEXT
-configure the build from the environment with no configuration directory at
-all: the environment supplies the whole inference configuration or nothing, so
-a variable set beside a config.toml model is refused, and KBASE_API_KEY_FILE —
-no mode, a key — replaces the key of whichever endpoint is in force. With no
---bibliography,
+path order. A volume root is the file 00README.json's toplevel entry names,
+else the sole file containing \documentclass. A relative ` + argmark.Positional("volume-root") + ` or
+` + argmark.Flag("bibliography") + ` resolves against the project root, and the build orders each
+list by full path, whatever order it was given in. With no ` + argmark.Flag("bibliography") + `,
 every .bib beside any volume root is offered to every volume, in sorted order.
-Build state — the holder lock, progress.jsonl, the document graph's records, each
-stage's report under reports/, each call's capture and the answer cache under
-scratch/ — lives in --state-dir, by default $XDG_STATE_HOME/kbase/<key>.
-SIGINT or SIGTERM (kbase cancel) stops it resumably. Its result is one YAML
-document on stdout, naming each stage walked, its boundary commit and its
-report, and the command that resumes the build where it did not finish.`,
-	Args: cobra.ArbitraryArgs,
+Where two nodes of one kind would share a title, the build suffixes the later
+" (2)", " (3)" and so on: every title is unique within its kind, as every
+write requires.
+
+It walks the build's stages in order through the stage ` + argmark.Flag("through") + ` names.
+Each stage's boundary is a commit, its subject "kb-build: <stage> | <display>",
+scoped to kb-root/, the build's records in kb-root/.build/ included; the
+commit records the inputs, and the start boundary also records started-at, the
+commit the build began from. The trail is the kb-build: commits on the current branch.
+
+A fresh build takes volume roots and is refused where kb-root/ exists in any
+state, a skeleton-only one and one an interrupted build left included.
+` + argmark.Flag("resume") + ` takes no volume roots and no ` + argmark.Flag("bibliography") + `, and continues the trail with
+the inputs it records. It is refused where kb-root/ does not exist (run a
+fresh build) and where kb-root/ stands with nothing to resume; removing
+kb-root/ is how to start over: kbase does not inspect half-built state. ` + argmark.Call("build-trail", nil) + ` lists each
+boundary's commit with the command that rewinds to it — a reset, then a resume
+— and started-at's, the reset alone. A finished ` + argmark.Flag("no-inference") + ` build never
+runs its dropped steps — a step is a part of a stage's work — and a resume
+over it changes nothing: to build with inference, run started-at's command
+from ` + argmark.Call("build-trail", nil) + `, then a fresh build.
+
+` + argmark.Flag("no-inference") + ` drops each step that would spend inference; every stage
+is still walked and committed. Without it, the claim graph's multichoice
+asks go to the endpoint [models] decision names and the overview passage to
+the one [models] text names — each value a provider/model reference, the
+provider that supplies the endpoint then the model it serves — and a build
+missing either is refused.
+
+Build state lives in ` + argmark.Flag("state-dir") + `, by default ` + stateStoreDefault + `.
+One repository carries one run at a time, a build or a score run: a second is
+refused, naming the holder's verb and pid. A run's own result names each stage
+walked, its boundary commit and its report, and the call that resumes the
+build where it did not finish.`
+
+// runLaunchMCPNote is what differs for build and score over MCP.
+const runLaunchMCPNote = `The call returns once the run has started, as a detached process that carries
+on without the server. Its result gives "pid", "state-dir" and "wait", a shell
+command line that blocks until the run ends; no tool waits. The status tool
+follows the run and the cancel tool stops it.`
+
+// buildCLINote is what differs for build at the command line.
+const buildCLINote = `build runs in the foreground, and its result is the run's own; SIGINT or
+SIGTERM (kbase cancel) stops it resumably.`
+
+var buildCmd = mcp.Notes(&cobra.Command{
+	Use:   "build [<volume-root>...]",
+	Short: "build the KB from LaTeX volume roots into kb-root/ at the git worktree root",
+	Long:  buildLong,
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)
 		if err != nil {
@@ -275,7 +302,7 @@ report, and the command that resumes the build where it did not finish.`,
 			AskConcurrency:        givenAskConcurrency(cmd, flagAskConcurrency),
 			ConfiguredConcurrency: providers.Config.Asks.Concurrency,
 			WorkDir:               wd,
-			Provider:              buildProvider(providers, config.EnvOverrides(os.Getenv), cmd.ErrOrStderr()),
+			Provider:              buildProvider(providers, cmd.ErrOrStderr()),
 			Stdout:                cmd.OutOrStdout(),
 			Stderr:                cmd.ErrOrStderr(),
 			Logger:                processLog.logger,
@@ -288,14 +315,17 @@ report, and the command that resumes the build where it did not finish.`,
 		}
 		return nil
 	},
-}
+}, runLaunchMCPNote, buildCLINote)
 
 func init() {
 	buildCmd.Flags().StringArrayVar(&flagBibliographies, "bibliography", nil,
-		"a .bib citations resolve against; repeat per file, the files read in path order (default: every .bib beside any volume root, sorted)")
+		"a .bib citations resolve against, one per file, read in path order (default: every .bib beside any volume root, sorted)")
 	buildCmd.Flags().BoolVar(&flagResume, "resume", false, "continue the build the commit trail records, with the inputs it records")
-	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id or display name (default: every stage)")
-	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", "the build's state store (default: $XDG_STATE_HOME/kbase/<key>)")
-	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "drop every row that spends inference and walk the rest")
+	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id — "+
+		proseSeries(buildstore.StageIDs(), "or")+" — or by display name (default: every stage)")
+	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", runStateDirUsage)
+	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "skip each step that would spend inference; every stage is still walked")
 	registerAskConcurrencyFlag(buildCmd, &flagAskConcurrency)
+	mcp.DescribePositional(buildCmd, "volume-root", "each paper's top .tex file, a relative path resolving against the project root; required unless "+
+		argmark.Flag("resume")+", refused with it")
 }

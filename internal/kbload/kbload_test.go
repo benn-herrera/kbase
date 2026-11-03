@@ -11,6 +11,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/buildrecords"
 	"kbase/internal/formats"
 	"kbase/internal/kb"
 	"kbase/internal/result"
@@ -56,16 +57,17 @@ func TestOpen(t *testing.T) {
 		refused          string
 		remedy           string
 	}{
-		{name: "current", entryPoint: "---\nkb-format: \"3.0.0\"\n---\n# KB\n", version: kb.FormatVersion},
-		{name: "a newer patch", entryPoint: "---\nkb-format: \"3.0.4\"\n---\n# KB\n", version: kb.FormatVersion},
-		{name: "the previous major", entryPoint: "---\nkb-format: \"2.0.0\"\n---\n# KB\n", migrated: true, version: "2.0.0"},
+		{name: "current", entryPoint: "---\nkb-format: \"4.0.0\"\n---\n# KB\n", version: kb.FormatVersion},
+		{name: "a newer patch", entryPoint: "---\nkb-format: \"4.0.4\"\n---\n# KB\n", version: kb.FormatVersion},
+		{name: "the previous major", entryPoint: "---\nkb-format: \"3.0.0\"\n---\n# KB\n", migrated: true, version: "3.0.0"},
+		{name: "the major before it", entryPoint: "---\nkb-format: \"2.0.0\"\n---\n# KB\n", migrated: true, version: "2.0.0"},
 		{name: "the previous major, a later patch", entryPoint: "---\nkb-format: \"2.0.1\"\n---\n# KB\n", migrated: true, version: "2.0.1"},
 		{name: "the first major", entryPoint: "---\nkb-format: \"1.0.0\"\n---\n# KB\n", migrated: true, version: "1.0.0"},
 		{name: "the first major, a later patch", entryPoint: "---\nkb-format: \"1.0.4\"\n---\n# KB\n", migrated: true, version: "1.0.4"},
 		{name: "unstamped, no frontmatter", entryPoint: "# KB\n", refused: CheckFormat},
 		{name: "YAML frontmatter, unstamped", entryPoint: "---\nkind: entry-point\n---\n# KB\n", refused: CheckFormat},
-		{name: "a newer major", entryPoint: "---\nkb-format: \"4.0.0\"\n---\n", refused: CheckFormat, remedy: UpdateRemedy},
-		{name: "a newer minor", entryPoint: "---\nkb-format: \"3.1.0\"\n---\n", refused: CheckFormat, remedy: UpdateRemedy},
+		{name: "a newer major", entryPoint: "---\nkb-format: \"5.0.0\"\n---\n", refused: CheckFormat, remedy: UpdateRemedy},
+		{name: "a newer minor", entryPoint: "---\nkb-format: \"4.1.0\"\n---\n", refused: CheckFormat, remedy: UpdateRemedy},
 		{name: "not a version", entryPoint: "---\nkb-format: \"one\"\n---\n", refused: CheckFormat},
 		{name: "not a string", entryPoint: "---\nkb-format: [1]\n---\n", refused: CheckFormat},
 		{name: "no entry point", refused: kb.CheckKBRoot},
@@ -100,11 +102,11 @@ func TestOpenStampFile(t *testing.T) {
 		version, refused  string
 		remedy, detail    string
 	}{
-		{name: "current", stamp: "kb-format: \"3.0.0\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
-		{name: "a newer patch", stamp: "kb-format: \"3.0.4\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
-		{name: "the previous major", stamp: "kb-format: \"2.0.0\"\n", entryPoint: "# KB\n", migrated: true, version: "2.0.0"},
-		{name: "a newer minor", stamp: "kb-format: \"3.1.0\"\n", entryPoint: "# KB\n", refused: CheckFormat, remedy: UpdateRemedy},
-		{name: "a newer major", stamp: "kb-format: \"4.0.0\"\n", entryPoint: "# KB\n", refused: CheckFormat, remedy: UpdateRemedy},
+		{name: "current", stamp: "kb-format: \"4.0.0\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
+		{name: "a newer patch", stamp: "kb-format: \"4.0.4\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
+		{name: "the previous major", stamp: "kb-format: \"3.0.0\"\n", entryPoint: "# KB\n", migrated: true, version: "3.0.0"},
+		{name: "a newer minor", stamp: "kb-format: \"4.1.0\"\n", entryPoint: "# KB\n", refused: CheckFormat, remedy: UpdateRemedy},
+		{name: "a newer major", stamp: "kb-format: \"5.0.0\"\n", entryPoint: "# KB\n", refused: CheckFormat, remedy: UpdateRemedy},
 		{name: "not a version", stamp: "kb-format: one\n", entryPoint: "# KB\n", refused: CheckFormat},
 		{name: "another key", stamp: "kind: entry-point\n", entryPoint: "# KB\n", refused: CheckFormat},
 		{name: "no key", stamp: "{}\n", entryPoint: "# KB\n", refused: CheckFormat},
@@ -113,7 +115,7 @@ func TestOpenStampFile(t *testing.T) {
 		{name: "an empty file", stamp: "\n", entryPoint: "# KB\n", refused: CheckFormat},
 		{name: "the file over the frontmatter", stamp: "kb-format: \"2.0.0\"\n",
 			entryPoint: "---\nkb-format: \"3.0.0\"\n---\n# KB\n", migrated: true, version: "2.0.0"},
-		{name: "a stamp file and no entry point", stamp: "kb-format: \"3.0.0\"\n", version: kb.FormatVersion},
+		{name: "a stamp file and no entry point", stamp: "kb-format: \"4.0.0\"\n", version: kb.FormatVersion},
 		{name: "stamped in neither place", entryPoint: "# KB\n", refused: CheckFormat,
 			detail: "neither " + kb.FormatFile + " nor " + kb.EntryPointFile + "'s frontmatter"},
 	} {
@@ -221,6 +223,39 @@ func TestOpenConvertsTheReaderFileSet(t *testing.T) {
 	}
 }
 
+// TestABuildRecordIsReadInKBRootBuild: a 3.0.0 KB's build record at the
+// repository root is read in kb-root/.build/ once converted, its root path
+// obsolete; a current KB's record standing in kb-root/.build/ is read there.
+func TestABuildRecordIsReadInKBRootBuild(t *testing.T) {
+	const record = "about: the unmarked record\nplanned: null\npairs: []\n"
+	for _, tc := range []struct {
+		name, stamp, at string
+		migrated        bool
+	}{
+		{"converted from the repository root", "3.0.0", buildrecords.RootRecordFile(buildrecords.UnmarkedFile), true},
+		{"standing in kb-root/.build/", kb.FormatVersion, buildrecords.UnmarkedFile, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeEntryPoint(t, "# KB\n")
+			writeFiles(t, root, map[string]string{
+				kb.FormatFile: "kb-format: \"" + tc.stamp + "\"\n", kb.GraphNodesFile: "[]\n", kb.GraphEdgesFile: "[]\n",
+				"a.md": "[↑ KB](entry-point.md)\n\n# A\n",
+			})
+			writeFiles(t, filepath.Dir(root), map[string]string{tc.at: record})
+			src, err := Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := src.ReadText(src.Path(buildrecords.UnmarkedFile)); err != nil || got != record {
+				t.Errorf("%s reads %q (%v), want the record", buildrecords.UnmarkedFile, got, err)
+			}
+			if tc.migrated && !slices.Contains(src.Obsolete(), tc.at) {
+				t.Errorf("obsolete = %q, want the root record %s among them", src.Obsolete(), tc.at)
+			}
+		})
+	}
+}
+
 // TestOpenRefusesAnInvariantDocumentWithProse: an invariants.md holding
 // content beside its declarations is refused as a conversion, naming the file
 // and the line, and its bytes stand.
@@ -241,8 +276,8 @@ func TestOpenRefusesAnInvariantDocumentWithProse(t *testing.T) {
 
 // TestOpenRefusesWhatThe200LoadRefuses: a 2.0.0 KB the 2.0.x load refuses is
 // refused with that load's own items — one metadata item per fault, its field,
-// file, line, allowed values, remedy and detail as that load's golden states
-// them — and not as one format refusal.
+// file, line, remedy and detail as that load's golden states them, and no
+// allowed, the bearing's domain being open — and not as one format refusal.
 func TestOpenRefusesWhatThe200LoadRefuses(t *testing.T) {
 	root := writeEntryPoint(t, "---\nkb-format: \"2.0.0\"\n---\n# KB\n")
 	register, err := os.ReadFile("../formats/testdata/bad-token-2.0.0/kb-root/claim-rigor.md")
@@ -254,7 +289,7 @@ func TestOpenRefusesWhatThe200LoadRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var faults []struct{ Field, Path, Line, Allowed, Remedy, Detail string }
+	var faults []struct{ Field, Path, Line, Remedy, Detail string }
 	if err := yaml.Unmarshal(golden, &faults); err != nil {
 		t.Fatal(err)
 	}
@@ -266,9 +301,56 @@ func TestOpenRefusesWhatThe200LoadRefuses(t *testing.T) {
 	for i, f := range faults {
 		got := r[i]
 		if got.Check != kb.CheckMetadata || got.Key != f.Field || got.Path != f.Path || strconv.Itoa(got.Line) != f.Line ||
-			!slices.Equal(got.Allowed, []string{f.Allowed}) || got.Remedy != f.Remedy || got.Detail != f.Detail {
+			got.Allowed != nil || got.Remedy != f.Remedy || got.Detail != f.Detail {
 			t.Errorf("item %d = %+v, want the fault %+v", i, got, f)
 		}
+	}
+}
+
+// TestOpenRefusesWhatThe300LoadRefuses: a 3.0.0 KB whose record file the
+// 3.0.0 load refuses is refused with that load's own items, one metadata item
+// per fault naming the record file, the line and the field, and not as one
+// format refusal.
+func TestOpenRefusesWhatThe300LoadRefuses(t *testing.T) {
+	root := writeEntryPoint(t, "# KB\n")
+	writeFiles(t, root, map[string]string{
+		kb.FormatFile:     "kb-format: \"3.0.0\"\n",
+		kb.GraphNodesFile: "- id: \"clm-aaaaaa\"\n  title: \"T\"\n  rigor: 0.5\n  manually-scored: false\n  rationale: \"\"\n  strengthen-by: []\n",
+		kb.GraphEdgesFile: "[]\n",
+	})
+	_, err := Open(root)
+	var r result.Refusal
+	if !errors.As(err, &r) || len(r) != 1 {
+		t.Fatalf("Open = %v, want one item", err)
+	}
+	if got := r[0]; got.Check != kb.CheckMetadata || got.Path != kb.GraphNodesFile || got.Line != 1 || got.Key != "no-edge" || got.Detail == "" {
+		t.Errorf("item = %+v, want the 3.0.0 load's missing no-edge at %s:1", got, kb.GraphNodesFile)
+	}
+}
+
+// TestOpenReportsTheDroppedFields: a 3.0.0 claim's no-edge and strengthen-by
+// texts reach the migration's warnings with their list, id and text.
+func TestOpenReportsTheDroppedFields(t *testing.T) {
+	root := writeEntryPoint(t, "# KB\n")
+	writeFiles(t, root, map[string]string{
+		kb.FormatFile: "kb-format: \"3.0.0\"\n",
+		kb.GraphNodesFile: "- id: \"clm-aaaaaa\"\n  title: \"T\"\n  rigor: 0.5\n  manually-scored: false\n  rationale: \"\"\n" +
+			"  no-edge: \"cited as contrast\"\n  strengthen-by:\n    - \"Tighten it.\"\n",
+		kb.GraphEdgesFile: "[]\n",
+	})
+	src, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type reported struct{ path, list, id, text string }
+	var got []reported
+	m, _ := src.Migration()
+	for _, w := range m.Warnings {
+		got = append(got, reported{w.Path, w.List, w.ID, w.Text})
+	}
+	want := []reported{{kb.GraphNodesFile, "no-edge", "clm-aaaaaa", "cited as contrast"}, {kb.GraphNodesFile, "strengthen-by", "clm-aaaaaa", "Tighten it."}}
+	if !slices.Equal(got, want) {
+		t.Errorf("warnings %+v, want %+v", got, want)
 	}
 }
 
