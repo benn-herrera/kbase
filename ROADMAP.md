@@ -7,8 +7,6 @@ Finished items are deleted, not archived.
 
 ## Maintenance
 
-- update to go go 1.27.X (edit in `go.mod`)
-- update dependencies (`just update-dependencies`)
 - review of `PROJECT_DOCS/CONVENTIONS/house-rules/`
   - some have rotted
   - some were never fresh in the first place 
