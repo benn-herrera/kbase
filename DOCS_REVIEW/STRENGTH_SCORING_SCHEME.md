@@ -2,7 +2,7 @@
 
 The claim graph: five node types, three quantities, four scoring relations, and the
 arithmetic that turns them into a number. This page is the scoring model's statement; [SPEC.md](PROJECT_DOCS/SPEC/entry-point.md)
-§10 carries the format, and [ARCHITECTURE.md](PROJECT_DOCS/ARCHITECTURE/entry-point.md) the implementation.
+§10 contains the format, and [ARCHITECTURE.md](PROJECT_DOCS/ARCHITECTURE/entry-point.md) the implementation.
 
 ## The three values
 
@@ -13,6 +13,8 @@ Each value is a number in `[0,1]` or `*pending*`.
 | `rigor` | one node's own worth – the quality of a claim's statement, an analysis's method, or a work's soundness |
 | `bearing` | one scoring edge's relevance (relevance of the source node to the target node) |
 | `strength` | computed from rigor and effects of incoming edges – what the sheet draws and bands use |
+
+**`*pending*`** is a null: a value not yet judged, which is not a low one. It propagates by its own rules, written with `⊥` in [The walk](#the-walk): `max(⊥, x) = x` and `min(⊥, c) = ⊥`. [Pending inputs do not participate](#pending-inputs-do-not-participate) states what a pending value does to the nodes and edges around it.
 
 Rigor and bearing are orthogonal values. A source may be exquisite, but have no bearing on the node
 it is supposed to support. It may also be shoddy, but exactly on point.
@@ -30,16 +32,16 @@ it is not.
 | `analysis` | `ana-xxxxxx` | `rigor` (its method's own quality) | `strength` derived |
 | `work` | `wrk-xxxxxx` | `rigor` (the paper's soundness) | none — `rigor` is the source strength |
 | `experiment` | `exp-xxxxxx` | `rigor` (the method's soundness) | none — `rigor` is the source strength |
-| `axiom` | `axm-xxxxxx` | `rigor` `1.00` by rule — no authored file carries it | none — `rigor` is the source strength |
+| `axiom` | `axm-xxxxxx` | `rigor` `1.00` by rule — no authored file contains it | none — `rigor` is the source strength |
 
 **A claim is, by definition, a statement shorn of supporting argument.** Its `rigor` is therefore the
 quality of the assertion its text makes — fixed, consistent, single-sensed — never the quality of an
-argument, which a claim does not display. Supporting argument is separated from the claim and stands
+argument, which a claim does not display. Supporting argument is separated from the claim and is placed
 in an analysis or an experiment, reaching the claim through an edge; an analysis's `rigor` is the
-quality of the method it displays against what it sets out to establish. A claim whose text carries a
+quality of the method it displays against what it sets out to establish. A claim whose text contains a
 derivation is mis-typed: the derivation belongs in the analysis it should have been, and until it
 moves, the claim's strength says what actually carries it — nothing. Whether anything carries a node
-is `strength`'s business, and the walk below says how.
+is `strength`'s business, and strength propagation, below, says how.
 
 ## Relations: endpoints and arithmetic
 
@@ -62,7 +64,7 @@ Unscored relations:
 | `references` | claim → claim | — | not scored |
 | `demoted` | claim → claim (at build time only, for breaking cycles) | — | not scored |
 
-An axiom premise is a `founds` edge from an axiom; it carries its bearing like every scoring edge,
+An axiom premise is a `founds` edge from an axiom; it has its bearing like every scoring edge,
 and the axiom's `rigor` of `1.00` by rule leaves its contribution the bearing alone.
 
 ## The graph
@@ -71,21 +73,21 @@ and the axiom's `rigor` of `1.00` by rule leaves its contribution the bearing al
 
 Every arrow runs from the supporter to what it supports, the way the verb reads: C2 *supports* C1,
 S1 *founds* C1, W *founds* C1, E *lifts* C1, R *refutes* C1. Every box lists `rigor` first and
-`strength` last, and each line holds a value or says why there is none. A claim or an analysis has
-both: its own `rigor` and the `strength` the walk derives. A work, an experiment or an axiom has no
+`strength` last, and each line contains a value or says why there is none. A claim or an analysis has
+both: its own `rigor` and the `strength` that strength propagation derives. A work, an experiment or an axiom has no
 derived value of its own — its `rigor` *is* its strength, which is what its edges multiply — so its
 box names both and marks the second `strength=rigor`. An axiom's `rigor` is `1.00` by rule, and no
-authored file carries it. Each edge is labelled with its relation and its `bearing`.
+authored file contains it. Each edge is labelled with its relation and its `bearing`.
 
-Two boxes carry a strength whose premises this fragment does not draw: R's `0.75` and C2's `0.65`. A
+Two boxes have a strength whose premises this fragment does not draw: R's `0.75` and C2's `0.65`. A
 claim with no incoming scoring edge reads `0`, so neither value could hold without a premise set
 outside the picture — R is a refuter whose derivation lies outside the fragment, and C2 stands on
 premises not shown. An analysis is constituted by the nodes it cites, so one carrying no premise is
-its own method's case rather than a claim's: the walk reads it at its `rigor` (§ The walk), and the
-fragment holds none.
+its own method's case rather than a claim's: strength propagation reads it at its `rigor` (§ The walk), and the
+fragment contains none.
 
-C1's box carries `strength 0.40`, the value the sheet draws and the bands read. The `0.26` the min
-derives is not a value any node holds: a lift stands above it and a refutation caps it, and those
+C1's box has `strength 0.40`, the value the sheet draws and the bands read. The `0.26` the min
+derives is not a value any node has: a lift is placed above it and a refutation caps it, and those
 compositions are the worked example below.
 
 `readme-assets/strength-walk.dot` is the image's source and the file to review;
@@ -119,22 +121,24 @@ min(⊥, c)  = ⊥      min(x, +∞) = x
 σ(n)  = min( max(D(n), L(n)), C(n) )
 ```
 
+A **station** is the term of the formula that an edge feeds: `supports` and `founds` edges feed the min in `D(n)`, `lifts` edges feed the max `L(n)` above it, and `refutes` edges feed the cap `C(n)`.
+
 **`r(n)` caps what the premises establish, and is not a premise.** Where `P(n)` is empty no premise
 carries the node, and `D(n)` is what the node's kind is worth bare: `0` for a claim, whatever `r(n)`
 says — judged, pending or absent — and `r(n)` itself for an analysis, whose method is the evidence
 its premises would otherwise supply. Support is
-structural: the walk reads that nothing supports the claim without knowing how good the node's own
+structural: strength propagation reads that nothing supports the claim without knowing how good the node's own
 text is, so it does not wait for a judgement. Where `P(n)` is non-empty and `r(n)` is pending, `D(n)`
 stays `⊥`, because `min(⊥, c) = ⊥`. The asymmetry is the rule's content: an absent cap is unknown, an
 absent premise is nothing.
 
 `⊥` is "no number", not a small one: a lift over an unjudged node publishes the lift, and a cap over
 one publishes nothing. So an empty `P(n)` with a pending `r(n)` publishes `0` for a claim — or the
-lift standing over it — and not `⊥`, while an analysis publishes `⊥`, having no method's number to
-stand on; and a non-empty `P(n)` with a pending `r(n)` stays `⊥` for either kind, and a lift standing
-over it publishes the lift's product. The walk carries full precision, so a dependent multiplies its
+lift over it — and not `⊥`, while an analysis publishes `⊥`, having no method's number to
+stand on; and a non-empty `P(n)` with a pending `r(n)` stays `⊥` for either kind, and a lift over
+it publishes the lift's product. Strength propagation uses full precision, so a dependent multiplies its
 source's exact strength. The record writes a value to four decimals — trailing zeros trimmed, and
-more only where four would lose it, so it reads back as the value; a query result carries the value
+more only where four would lose it, so it reads back as the value; a query result contains the value
 at two decimals and the trace prints it, and a `verify` message quotes the record. The trace on a
 `- strength:` line prints the innermost station first, so the formula reads back: the min, the lift
 above it, then the cap.
@@ -147,7 +151,7 @@ the lift. Either way the product is a contribution through an edge, and an empty
 not suppress it. A claim whose only incoming edge is a refutation takes `min(0, C) = 0`: a cap is a
 ceiling and never a floor, so an attack with nothing under it establishes nothing. An analysis takes
 `min(r, C)` there — its method's number where the cap sits above it. A claim with no incoming
-scoring edge at all has an empty `L` and an empty `C`, and lands `0`; an analysis with none lands
+scoring edge at all has an empty `L` and an empty `C`, and reads `0`; an analysis with none reads
 its `r`.
 
 One premise proves the weaker of the two things in play — the claim's own statement and the premise's
@@ -208,8 +212,8 @@ Change one bearing and the graph answers differently:
 
 ## Worked examples
 
-The example above is the diagram's own fragment, so its figures are the diagram's and move with it. This
-set holds the inputs still instead: the same values are authored on every node in every case, and the only
+The example above is the diagram's own fragment, so its figures are the diagram's and change with it. This
+set keeps the inputs fixed instead: the same values are authored on every node in every case, and the only
 thing that varies is which edges exist. Nothing requires a KB to author the same values everywhere — the repetition
 is the exercise's, not the format's — and it is what lets each relation be read against the same operands.
 
@@ -229,9 +233,9 @@ reaches eight — every fifteen hundredths — and `0.70` is one of them, and th
 reaches eleven — every tenth
 ([RIGOR_AND_BEARING_SCORING_SCHEME.md](PROJECT_DOCS/SPEC/scoring/rigor-and-bearing/the-band-outcomes/the-method-table.md), "The method table", "The
 bearing values"). Three of the four bearings are `1.00`, a link with no bearing charge, and those
-contributions are their sources' own values: the sources are what this set holds still. The exception is
+contributions are their sources' own values: the sources are what this set keeps fixed. The exception is
 the supporting edge's `0.20` — eight bearing charges, a claim
-speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly moves a
+speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly changes a
 number.
 
 The four products, one per relation, are therefore:
@@ -278,7 +282,7 @@ D(C1)                 min(rigor 1.00, C2 0.14) = 0.14
 `σ(C1) = 0.14`, band `unsubstantiated`. At neither node does the `1.00` bind — a rigor caps what the premises
 establish, and at both nodes the premise is the lower operand — while the second hop costs exactly the
 bearing: `0.70` in, `0.14` out. The work is cited at full relevance and `σ(C2)` carries its `0.70`
-unchanged; what puts C1 under the `0.85` cut is the link it stands on, not the work.
+unchanged; what puts C1 under the `0.85` threshold is the link it stands on, not the work.
 
 ### 2. A lift over a weak base
 
@@ -300,9 +304,9 @@ C(C1)                 none — no refute edge, so +∞
 ```
 
 `σ(C1) = 1.00`, band `ok-to-build`. `D(C1)` is case 1's `0.14`, untouched: a lift is not a premise and
-does not enter the min, so the derivation still says the node stands on `0.14`. What `max` does is stand
-the lift's `1.00` beside that derivation and keep the larger — the only station in the walk that can raise
-a value, and here it carries the node from `unsubstantiated` to `ok-to-build`, four rungs. Take the edge away
+does not enter the min, so the derivation still says the node stands on `0.14`. What `max` does is place
+the lift's `1.00` beside that derivation and keep the larger — the only station in the formula that can raise
+a value, and here it takes the node from `unsubstantiated` to `ok-to-build`, four rungs. Take the edge away
 and this is case 1 exactly; that is the case the station exists for.
 
 ### 3. Refutation lowers the ceiling
@@ -364,7 +368,7 @@ C(C1)                 +∞      (no refute edge)
 vocabulary's maximum — `1.00`, no fault charged: fixed, consistent, single-sensed and fully specified —
 and that number is nowhere in the arithmetic. `r(n)` caps what a premise set establishes and is not a
 premise, and `P(C1)` is empty, so there is nothing for the cap to cap. What the node proves is what its
-text says, and nothing about whether anything carries it: no improvement to the statement could move this
+text says, and nothing about whether anything carries it: no improvement to the statement could change this
 `0`, and only an edge can.
 
 ### 5. Only own rigor makes a node pending
@@ -434,7 +438,7 @@ min is a different judgement: on C1 it is the statement vocabulary charged nothi
 is fixed, consistent and single-sensed, and says nothing about an argument, which a claim does not display;
 on A1 it is the method vocabulary charged nothing — the derivation engages what it sets out to establish
 and states its steps. A claim has no method and an analysis no statement quality, so one number stands for
-two different absences of fault; the node's class decides which criteria priced it, and the walk reads only
+two different absences of fault; the node's class decides which criteria priced it, and strength propagation reads only
 the number.
 
 ### Summary table
@@ -462,9 +466,9 @@ the number.
 | pending refute | no cap; an unfinished attack establishes nothing, and a cap alone publishes no number where the derivation is `⊥` |
 
 **An edge that does not contribute is no supporter.** A pending bearing, a pending source strength,
-an edge from a non-`run` experiment and a premise the walk no longer holds all add no operand, so
+an edge from a non-`run` experiment and a premise that no longer participates all add no operand, so
 where such an edge is a claim's only one `P(n)` is empty and the claim reads `0`: an unjudged bearing
-is not support yet, and a claim behind one reads `unsubstantiated` until that bearing lands, never
+is not support yet, and a claim behind one reads `unsubstantiated` until that bearing is written, never
 `*pending*`. An analysis behind one is a method with no premise it can cite, and reads its own
 rigor. `bearing 0.0` reaches the same `0` for a claim by the other road — it participates, and the
 min takes the zero — and the two stay different states in the record whatever the strength reads.
@@ -479,20 +483,23 @@ the first case, not the second: there is nothing to multiply, so there is no pro
 
 ## Authoring and storage
 
-The register is claim-centric: a claim lists what it rests on.
+Each edge is one record, written by `add-edge` with its `source`, `target`, `relation`, and
+optionally its `bearing` and `context` ([SPEC §8 Edge ops](PROJECT_DOCS/SPEC/8-maintenance-subcommands/edge-ops.md)).
+The author names the relation, over the legal pairings of the relations table above. The record
+is stored as it runs, and a scoring edge pushes from the node that gives strength into the node
+that takes it ([SPEC §10 Edge direction and authoring](PROJECT_DOCS/SPEC/10-metadata-format-version/edge-direction-and-authoring.md)):
 
-| register (claim C1) | stored edge (push) |
+| authored | stored edge (push) |
 |---|---|
-| `- rests-on:` | |
-| `  - clm-c20000 — the lemma (strength 0.65) (bearing 0.40)` | `clm-c20000 --supports--> clm-c10000` |
-| `  - wrk-w00000 — A Cited Work (bearing 0.70)` | `wrk-w00000 --founds--> clm-c10000` |
-| `  - axm-a00000 — a labelling rule (bearing 0.90)` | `axm-a00000 --founds--> clm-c10000` |
+| a lemma C2 supports claim C1 | `clm-c20000 --supports--> clm-c10000` |
+| a cited work founds C1 | `wrk-w00000 --founds--> clm-c10000` |
+| an axiom founds C1 | `axm-a00000 --founds--> clm-c10000` |
 
-A bullet's target decides the relation: a `clm-` or `exp-` token is a `supports` edge into the entry,
-and a `wrk-` or `axm-` token a `founds` edge into it. Every node is named by its minted id, a work
-and an axiom included; a label is a field, never an id ([page §1.1](NEW_MCP_CLI_DESIGN/1-model/1.1-nodes.md)). An `ana-` token is refused — an analysis lifts or refutes and never supplies a
-premise — and so is a bullet naming more than one scoring target.
+Every node is named by its minted id, a work and an axiom included; a label is a field, never an id
+([SPEC §10 Five node types](PROJECT_DOCS/SPEC/10-metadata-format-version/five-node-types.md)). An
+analysis lifts or refutes and never supplies a premise, so a `supports` or `founds` edge from one is
+refused.
 
 `edges --id <id>` reads the stored edges from the reader's side ([§8](PROJECT_DOCS/SPEC/8-maintenance-subcommands/edges.md)): with `--direction in`
 those whose target is the node (the other end supports it), with `out` those whose source is the
-node, each row carrying its `bearing` — null on a row that cannot carry one.
+node, each row carrying its `bearing` — null on a row that cannot have one.

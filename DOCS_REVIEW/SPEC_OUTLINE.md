@@ -314,5 +314,8 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
 - Code: rename the decision-API setting on every interface — `providers.toml` key `decisionApi`,
   `configure-providers` flag `--decision-api`, `show-config` field `decision-api` — with no alias for
   the old names.
+- SPEC: §7's long table cells (the `remedy` rule; the `write`, `show` and `stats` result rows) need
+  restructuring into lists or sub-tables.
 - Code: the `trace` help carries the hint that `trace` sorted by contribution shows what would
   strengthen a node, and the edge-op help carries the bearing-copy advice (SPEC §11 Served text).
+- Code: `update-format`'s help says to run it after upgrading kbase (SPEC §11 Served text).
