@@ -10,11 +10,11 @@ Every write goes through a batch, on every interface. An entry is one item of a 
 
 **Interfaces.** Over MCP, the `write` tool takes a batch (§11). At the command line, `kbase write` takes a mixed batch, each entry naming its op, with `--dry-run` and `--commit`. Each write op also has its own subcommand (`kbase add-edge`, …), which takes a batch of that op alone with the same options; its entries have no `operation`, since the subcommand names the op.
 
-**Order.** Entries apply in the order given. Each entry is checked against the records as the earlier entries left them. kbase never reorders a batch; the caller orders it so that each entry is valid where it stands.
+**Order.** Entries apply in the order given. Each entry is checked against the records as the earlier entries left them. kbase never reorders a batch; the caller orders it so that each entry is valid at its position.
 
 **No reference between entries.** No entry names an id that another entry of the same batch mints. Every add mints its node's id, for every kind ([§10](#five-node-types)), and the result gives each minted id beside the entry that minted it. Adding nodes and their edges takes two batches: the first adds the nodes, the second the edges. Between the two the KB is consistent, since a node with no edges is a valid node.
 
-**Two phases.** Before anything applies, every entry's shape is checked: an unknown op, an unknown or missing key, a value's type, and a value outside a fixed set (`relation`, `status`, …). Every shape error is reported at once. Then the entries apply in order, each checked in full against the records as they stand at that point, and the batch stops at the first refusal. An entry that would leave the records invalid is refused even if a later entry would repair it; the refusal's remedy names the order that works. No separate end-of-batch check exists. Each refusal item has the keys of [§7](#item), with `entry` the entry's 1-based position in the batch.
+**Two phases.** Before anything applies, every entry's shape is checked: an unknown op, an unknown or missing key, a value's type, and a value outside a fixed set (`relation`, `status`, …). Every shape error is reported at once. Then the entries apply in order, each checked in full against the records as they are at that point, and the batch stops at the first refusal. An entry that would leave the records invalid is refused even if a later entry would repair it; the refusal's remedy names the order that works. No separate end-of-batch check exists. Each refusal item has the keys of [§7](#item), with `entry` the entry's 1-based position in the batch.
 
 **All or nothing.** A batch that is refused or fails writes nothing. The rebuild of the derived views is part of the batch, so the records are never written while their derived views are stale. A crash between the writes of two files is not atomic on disk; git recovers that case ([Git holds the recoverable record](#git-holds-the-recoverable-record)).
 
@@ -64,11 +64,11 @@ Every write batch is followed by the rebuild of the derived views (strengths, su
 
 A write batch and `update-format` hold the KB write lock for the whole run: from loading the KB to the result, the rebuild of the derived views included. `init` holds it from before `kb-root/` exists — the lock sits on the directory that contains `kb-root/`, so it is available at creation — through the scaffold, the final rebuild and the initial commit to the result. `score` takes it around writing its results — every value the run produced, after the item loop — and around its rebuild at the start, never across the run ([§8](#writing-the-results)).
 
-A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the repository root, and the remedy. A write verb probes for a run holding the run lock ([§6](#git-holds-the-recoverable-record)) before it waits on the write lock and again after taking it: where one runs, the verb is `refused` with the `lock` item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes (`retry` if it cannot). A scoring run's own writes make no run-lock probe, writing as the run that holds it. `verify` and the queries take no lock. On Windows no advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and one writer at a time is the operator's to keep.
+A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the repository root, and the remedy. A write verb probes for a run holding the run lock ([§6](#git-holds-the-recoverable-record)) before it waits on the write lock and again after taking it: where one runs, the verb is `refused` with the `lock` item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes (`retry` if it cannot). A scoring run's own writes make no run-lock probe, writing as the run that holds it. `verify` and the queries take no lock. On Windows no advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and the operator must keep to one writer at a time.
 
 #### Write ops
 
-The write ops are `add-claim`, `add-analysis`, `add-experiment`, `add-work`, `add-axiom`, `edit-claim`, `edit-analysis`, `edit-experiment`, `edit-work`, `edit-axiom`, `remove-node`, `move-node`, `add-edge`, `edit-edge`, `remove-edge`, `restore-demoted` and `add-citation`. Each is an entry of a batch, as above; each result's keys are [§7](#item)'s.
+The write ops are `add-claim`, `add-analysis`, `add-experiment`, `add-work`, `add-axiom`, `edit-claim`, `edit-analysis`, `edit-experiment`, `edit-work`, `edit-axiom`, `remove-node`, `move-node`, `add-edge`, `edit-edge`, `remove-edge`, `restore-demoted` and `add-citation`. Each is an entry of a batch, as above; each result's keys are defined in [§7](#item).
 
 **`commit`.** `commit: true` (`--commit`) makes git the batch's undo. It is never on by default, and no configuration sets it. Every commit it makes covers `kb-root/` only. A committing batch:
 1. applies every entry in memory; on any error it returns the error with nothing written and nothing committed;
@@ -93,13 +93,13 @@ kbase init [--title TEXT]
 Creates a KB directly — no LaTeX, no build: the equivalent of `git init` for a KB. Run at any depth in a git worktree; it resolves the repository root and works at `kb-root/` in the git worktree root (placement: §3).
 
 **Refusals come before any write** ([§7](#item)):
-- a `--title` holding a line break (CR or LF): `check: usage`, `key` the `title` argument as [§7](#item)'s `key` states it; the title is the entry point's one heading line;
+- a `--title` containing a line break (CR or LF): `check: usage`, `key` the `title` argument as [§7](#item)'s `key` states it; the title is the entry point's one heading line;
 - outside a git worktree: `check: worktree`, `path` the start directory, remedy `git init`, which the tool never runs itself;
 - a `kb-root/` that exists in any state, an empty one included: `check: kb-root`, no remedy. `init` creates once, so a repeat where a tree exists is `refused`, never `unchanged`. A fresh `build` over an existing `kb-root/` gives the same refusal ([§5](#starting-over)): one item, `path` the `kb-root/`, the same detail. The result of a refusal that found no `kb-root/` has no `kb-root` key; the refusal items name the paths.
 
 Under the KB write lock, held from before the directory exists ([One write lock](#one-write-lock)), `init` writes:
 - `entry-point.md`, with the `--title` text, or the repository's directory name, as its only heading, no children and no frontmatter ([§10](#documents-of-a-kb));
-- the format version file, `.index/format.yaml` ([§10](#the-record-files)), and the two record files, `.index/nodes.yaml` and `.index/edges.yaml`, holding no record;
+- the format version file, `.index/format.yaml` ([§10](#the-record-files)), and the two record files, `.index/nodes.yaml` and `.index/edges.yaml`, containing no record;
 - `AGENTS.md`, `CONVENTIONS.md` and the `CLAUDE.md` redirect, each only where absent. `AGENTS.md` states that this KB is authored, not distilled: its author writes what it contains, a claim at a time.
 
 It then rebuilds the derived views, so they are present when the KB is created: the full sheet is always drawn, the placeholder where `dot` is absent (§3); the volume overview diagram and the per-volume sheets are not drawn, since no volume contains a node. `verify` ([§8](#verify)) over a freshly created KB is green.
@@ -113,7 +113,7 @@ Finally it commits `kb-root/` with the plain subject `kb-init: knowledge base cr
 - **Keys**, all required: `source` and `target` (the ids of the demoted record's ends; each a claim, an analysis or an experiment) and `relation`, which must be `demoted`. Any other relation is refused at `relation`.
 - **Result**: `source`, `target`, `relation`, and `restored`, the relations put back, in the records' order.
 - **Refusals**:
-  - an entry no demoted record from `source` to `target` answers is refused "no edge", as the edge writes' ([§8](#edge-ops)): no `check`, `key` `relation`, `detail` `no edge demoted <source> → <target>`. So a repeated restore, and a repeat of an entry within one batch, is refused, `entry` the repeat's number;
+  - an entry with no demoted record from `source` to `target` is refused "no edge", as the edge writes are ([§8](#edge-ops)): no `check`, `key` `relation`, `detail` `no edge demoted <source> → <target>`. So a repeated restore, and a repeat of an entry within one batch, is refused, `entry` the repeat's number;
   - a restore that would close a cycle: `check: dependency-cycle`, `key` `target`, the `detail` naming the cycle in edge direction. The remedy names removing another edge of the cycle and, to leave the edge out of the graph, `remove-edge` with `relation: demoted`, which leaves no record of it.
 
 ### `add-<kind>`
@@ -131,11 +131,11 @@ Finally it commits `kb-root/` with the plain subject `kb-init: knowledge base cr
 | `line` | integer ≥ 1 | required | required | required | — | — |
 | `snippet` | string | required | required | required | — | — |
 
-An omitted `rigor` is `*pending*`. The `manually-scored` flag and the `judged-hash` an add writes are [§10](#provenance-and-the-judged-hash)'s; an add given a `rigor` hashes the node's statement as its marker places it.
+An omitted `rigor` is `*pending*`. The `manually-scored` flag and the `judged-hash` an add writes are defined in [§10](#provenance-and-the-judged-hash); an add given a `rigor` hashes the node's statement as its marker places it.
 
 **Result**, per entry: `id`, the minted id; `add-axiom` adds `heading`, `marked` or `appended`.
 
-**Identity.** A node exists where another node of its kind has its `title` anywhere in the KB; a work also exists where another work has its `label`, and an axiom where another axiom has its `label`. Title and label rules are [§10](#five-node-types)'s. An add of a node that exists is refused "node exists" at `title` or `label`, its `detail` `node exists: <id>`. Entries apply in order, so a batch adding one node twice is refused at the repeat.
+**Identity.** A node exists where another node of its kind has its `title` anywhere in the KB; a work also exists where another work has its `label`, and an axiom where another axiom has its `label`. Title and label rules are defined in [§10](#five-node-types). An add of a node that exists is refused "node exists" at `title` or `label`, its `detail` `node exists: <id>`. Entries apply in order, so a batch adding one node twice is refused at the repeat.
 
 **Refusals**, each at the key named:
 - a missing `document`, `line` or `snippet`: a shape refusal naming the key;
@@ -146,7 +146,7 @@ An omitted `rigor` is `*pending*`. The `manually-scored` flag and the `judged-ha
 - an `add-work` `label` that is not a citation key ([§10](#five-node-types)): at `label`.
 
 **`add-axiom`** writes the axiom's record and gives it its heading in `axioms.md`, `### Axiom <label>: <title><!-- kbase-id: <id> -->` ([§10](#axioms)). The axiom's prose under the heading is the author's.
-- It reads an unmarked heading of its text as a `###` heading whose text, markers removed and trimmed, is `Axiom <label>: <title>`. Where exactly one exists, it marks that heading by ending its line, trailing whitespace dropped, in the axiom's marker (`heading: marked`). Otherwise it appends its marked heading (`heading: appended`), creating `axioms.md` where the file is absent. It never leaves two headings of one text.
+- An unmarked heading of its text is a `###` heading whose text, markers removed and trimmed, is `Axiom <label>: <title>`. Where exactly one exists, it marks that heading by ending its line, trailing whitespace dropped, in the axiom's marker (`heading: marked`). Otherwise it appends its marked heading (`heading: appended`), creating `axioms.md` where the file is absent. It never leaves two headings of one text.
 - More than one unmarked heading of its text is refused: `key` `label`, `path` `axioms.md`, `line` the first, the `detail` naming their lines, since kbase does not guess which one the axiom is.
 - It appends its heading after every other, so it shifts no anchor of `axioms.md`.
 
@@ -168,7 +168,7 @@ Fields take the domains of the adds ([§8](#add-kind)). `label` is checked as `a
 
 **Result**: `id`; and on an `edit-work` entry that changes `label`, `rewritten`, each line it rewrote a reference on, `path` and `line`. An edit is `unchanged` where it changes no value, no `manually-scored` flag and no `judged-hash`.
 
-**Rigor.** The `manually-scored` flag and the `judged-hash` an edit writes are [§10](#provenance-and-the-judged-hash)'s. An edit given a `rigor` on a claim, an analysis or an experiment hashes the node's statement as the edit leaves it; an edit giving no `rigor` keeps the record's `judged-hash`.
+**Rigor.** The `manually-scored` flag and the `judged-hash` an edit writes are defined in [§10](#provenance-and-the-judged-hash). An edit given a `rigor` on a claim, an analysis or an experiment hashes the node's statement as the edit leaves it; an edit giving no `rigor` keeps the record's `judged-hash`.
 
 **Links stay live.** A title change, or an axiom's label change, keeps every link to the node live, in the same write:
 - `edit-axiom` rewrites every `axioms.md` heading that ends in its marker, keeping the marker, and appends its heading where none exists, creating `axioms.md` where the file is absent.
@@ -192,11 +192,11 @@ kbase citations need no rewrite, since they name the node by id and the naming f
 - a `title` or a `label` another node of the kind has: at that key, the `detail` naming that node;
 - a work `label` that is not a citation key ([§10](#five-node-types)): at `label`;
 - a work `label` a citation span or a reference-list entry already uses as a key, since the rewrite would merge two references into one: at `label`, one item per such line, each naming it by `path` and `line`;
-- a `title` under which a naming-form citation of the node would not read, whole, as one link — an unbalanced `[` or `]` —: at `title`, naming the citing `path:line`.
+- a `title` under which a naming-form citation of the node would not parse, whole, as one link — an unbalanced `[` or `]` —: at `title`, naming the citing `path:line`.
 
 ### Edge ops
 
-`add-edge`, `edit-edge` and `remove-edge` each write one edge; many edges are many entries. An edge is named by `source`, `target` and `relation`, over the relations and legal pairings of [§10](#four-scoring-relations-one-arithmetic); a `demoted` record is [§10](#the-demoted-relation)'s.
+`add-edge`, `edit-edge` and `remove-edge` each write one edge; many edges are many entries. An edge is named by `source`, `target` and `relation`, over the relations and legal pairings of [§10](#four-scoring-relations-one-arithmetic); a `demoted` record is defined in [§10](#the-demoted-relation).
 
 | Op | Keys |
 |---|---|
@@ -207,10 +207,10 @@ kbase citations need no rewrite, since they name the node by id and the naming f
 **Results**: `source`, `target`, `relation` for each.
 
 **`add-edge`**
-- Over an edge of that identity the entry is refused "edge exists", whatever its values; changing them is `edit-edge`'s job. Over a demoted record of that relation from `source` to `target`, the add writes the edge with its own values and deletes the record.
-- The `manually-scored` flag and the `judged-hash` an edge write sets are [§10](#provenance-and-the-judged-hash)'s. A `bearing` given on a `supports`, `lifts` or `refutes` edge hashes the edge's two ends' statements as the batch leaves them.
+- Over an edge of that identity the entry is refused "edge exists", whatever its values; `edit-edge` changes them. Over a demoted record of that relation from `source` to `target`, the add writes the edge with its own values and deletes the record.
+- The `manually-scored` flag and the `judged-hash` an edge write sets are defined in [§10](#provenance-and-the-judged-hash). A `bearing` given on a `supports`, `lifts` or `refutes` edge hashes the edge's two ends' statements as the batch leaves them.
 
-**`edit-edge`** changes a standing edge's `bearing`, `context`, or both. `unchanged` where it changes no value, no flag and no judged hash. A `bearing` given on a `supports`, `lifts` or `refutes` edge hashes the edge's two ends' statements as `add-edge` does; an edit giving none keeps the record's `judged-hash`.
+**`edit-edge`** changes an existing edge's `bearing`, `context`, or both. `unchanged` where it changes no value, no flag and no judged hash. A `bearing` given on a `supports`, `lifts` or `refutes` edge hashes the edge's two ends' statements as `add-edge` does; an edit giving none keeps the record's `judged-hash`.
 
 **`remove-edge`** removes the one edge record the entry names. With `relation: demoted` it removes every demoted record from `source` to `target`, leaving the edge out of the graph. Every other record stays byte for byte as it was.
 
@@ -240,11 +240,11 @@ kbase citations need no rewrite, since they name the node by id and the naming f
 
 ### `move-node`
 
-`move-node` moves a hosted node's statement marker to the end of the line `document`, `line` and `snippet` name ([§10](#statements-and-anchors)), taking it from where it stood, and updates each citation of the node to its new host and section anchor in the same entry.
+`move-node` moves a hosted node's statement marker to the end of the line `document`, `line` and `snippet` name ([§10](#statements-and-anchors)), removing it from its previous line, and updates each citation of the node to its new host and section anchor in the same entry.
 
 - **Keys**, all required: `id`, `document`, `line`, `snippet`.
 - **Result**: `id`; `unchanged` where the marker already ends the named line.
-- **Refusals**: the named line's are the add ops' ([§8](#add-kind)). A work's or an axiom's `id` is refused at `id`, since it has no statement marker; an `id` no node has is refused as an edit's is ([§8](#edit-kind)); a node with no statement marker is refused `check: statement-marker` at `id`.
+- **Refusals**: the named line's refusals are those of the add ops ([§8](#add-kind)). A work's or an axiom's `id` is refused at `id`, since it has no statement marker; an `id` no node has is refused as an edit's is ([§8](#edit-kind)); a node with no statement marker is refused `check: statement-marker` at `id`.
 - Every other occurrence of the node's marker is taken from its line, and a line it leaves without prose goes with it, so a node with more than one marker is left with one.
 - Every citation of the node outside code, in every document but the summary pages, points at its new target after the move, written relative to the citing document, whatever it pointed at before; only the link target changes, its link text stays. A citation an author's own edit breaks, such as by a heading rename, is a broken link, which `verify`'s `dead-link` check reports like any other.
 
@@ -272,4 +272,4 @@ kbase citations need no rewrite, since they name the node by id and the naming f
 - a hosted node with no statement marker, which has no link target: `check: statement-marker` at `id`;
 - a quote or a paraphrase of a work or an axiom: at `snippet`, the remedy naming the naming form;
 - a quote absent from the cited statement: at `snippet`, or at `quote` where it is given;
-- a link that would not read, whole, as one link to the target — an unbalanced `[` or `]` in the `snippet`, or in the title the naming form writes: at `snippet`, or at `id` for the title.
+- a link that would not parse, whole, as one link to the target — an unbalanced `[` or `]` in the `snippet`, or in the title the naming form writes: at `snippet`, or at `id` for the title.

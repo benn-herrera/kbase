@@ -24,7 +24,7 @@ Every subcommand accepts:
 - `--config-dir DIR`: the one configuration directory read (the introduction above). The flag outranks `$KBASE_CONFIG_DIR`, and a blank value of either counts as unset.
 - `--log-level debug|info|warn|error` (default `warn`).
 - `--log-file PATH`: copies diagnostics to a file; console output is never redirected away.
-- `--project-dir PATH`: the project root, the git worktree root that contains `kb-root/` or will. The subcommand's search for the repository starts there instead of the working directory. A path that is not a git worktree root is refused: `check: worktree`, `key` the `project-dir` argument formatted as [§7](#item)'s `key` states (an MCP call's `project-dir` is refused the same way), `path` the absolute path.
+- `--project-dir PATH`: the project root, the git worktree root that contains `kb-root/` or will. The subcommand's search for the repository starts there instead of the working directory. A path that is not a git worktree root is refused: `check: worktree`, `key` the `project-dir` argument formatted as the `key` rule in [§7](#item) states (an MCP call's `project-dir` is refused the same way), `path` the absolute path.
 - `-h`/`--help`.
 
 The root command also accepts `-v`/`--version`, which prints exactly the version string and a newline.
@@ -33,7 +33,7 @@ A relative path a subcommand takes (a volume root, `--bibliography`, `--state-di
 
 ### Provider commands
 
-`models`, `configure-providers`, `configure-models` and `auth` read and write the configuration. `show-config` is [§9.6](#96-kbase-show-config) and `probe` is [§8](#probe). Each writes its result under [§7](#item). The inputs and outputs of all of them name a provider in lowercase (§9.1).
+`models`, `configure-providers`, `configure-models` and `auth` read and write the configuration. `show-config` is defined in [§9.6](#96-kbase-show-config) and `probe` in [§8](#probe). Each writes its result under [§7](#item). The inputs and outputs of all of them name a provider in lowercase (§9.1).
 
 **`kbase models [--provider NAME] [--timeout DURATION]`** lists the selected provider's model identifiers, sorted ascending, as `models`. The provider is selected as [Provider selection](#provider-selection-is-the-catalogue-verbs-alone) states. `--timeout` bounds one request (default 30 s). `models` reports each configuration fault of the configuration it read as an item of `warnings` and as a line on stderr: `path` the file or directory the fault is against, `detail` what is wrong. A fault is a `providers.toml` entry dropped from the pool, a key file that is readable beyond its owner (§9.4) or cannot be read, a stored key file that does not open, or a store directory that exists and does not list ([The files are the one source of inference](#the-files-are-the-one-source-of-inference)). `warnings` is `[]` where there are none, and is present on every outcome, refusals included. A provider that refuses the call's key is a failure with the remedy [A refused key](#a-refused-key) states.
 
@@ -50,7 +50,7 @@ A relative path a subcommand takes (a volume root, `--bibliography`, `--state-di
   No refusal of `--base-url` names any part of it.
 - `--remove` of a provider whose `providers.toml` has no entry is refused: `check: provider`, `path` that `providers.toml`, detail ``no provider `<name>` in <path>``, and `kbase show-config` as the remedy, which lists the entries that exist ([Idempotence](#idempotence)).
 - Where the written entry has a key, stored or read from the file its `apiKeyFile` names, `configure-providers` sends a request to the provider under a 30 s deadline and gives the catalogue, sorted ascending, as `models`; this vets the connection. A failed request leaves the provider written, with the outcome `done`.
-- `next` lists the steps that follow, as commands formatted as [§7](#item)'s `remedy` states. It is absent where there are none.
+- `next` lists the steps that follow, as commands formatted as the `remedy` rule in [§7](#item) states. It is absent where there are none.
   - With no key, `next` is two commands: the `kbase auth add` pipe with the provider's name filled in, then `kbase models --provider <name>`.
   - Where the request fails, `next` is one entry naming the failure, then the `configure-providers` call for a wrong URL, the `kbase auth add` pipe for a wrong key, and `kbase models --provider <name>`.
   - Where the stack written into does not reload, `next` is one entry naming that and `kbase show-config`. Where the written entry does not load, it is one entry naming the fault's reason and `kbase show-config`. The written entry's own fault is both an item of `warnings` and, with its remedy, a step of `next`.
@@ -88,7 +88,7 @@ The call failures that have it are a build's (the `inference-failed` stop of a c
 - Where that provider was dropped from the pool by a fault, the fault's own reason is the `detail`, with `kbase show-config` alone as the remedy.
 - Two or more providers with none chosen list every provider name as `allowed`, with `key` the `provider` argument.
 
-The argument, and each command a remedy names, are formatted as [§7](#item)'s `key` and `remedy` state. `show-config` reports any of these in its document and still exits 0.
+The argument, and each command a remedy names, are formatted as the `key` and `remedy` rules in [§7](#item) state. `show-config` reports any of these in its document and still exits 0.
 
 ### The configure commands' write location
 
@@ -98,7 +98,7 @@ The argument, and each command a remedy names, are formatted as [§7](#item)'s `
 - `--global` and `--local` together are a usage refusal keyed `--local`. Either beside `--config-dir` is a usage refusal keyed by that flag. `--local` outside a worktree is refused with `check: worktree`, `path` the directory the search started from, and `git init` as the remedy.
 - `configure-providers`' `layer` names the layer written: `global`, `repository` (`--local`), `explicit` or `environment`.
 - The stack a command writes into is the layer it writes and the layers beneath it: the global layer is beneath the repository layer, and nothing is beneath any other layer. The command reads that stack only.
-- `configure-providers` creates `providers.toml` where absent, containing its comment header, an example entry commented out, and the entry written, and no other entry. `configure-models` creates `config.toml` where absent from its commented template: comments that explain the file and guide the `[models]` ids (the guidance `kbase://model-hints` serves, [§11](#resources)), an empty value for each role it is not given (which reads as unset), and `[asks]` and `[sampling]` commented out. Each otherwise edits the file under §9.5. A refusal writes nothing, and so does a `configure-models` catalogue failure.
+- `configure-providers` creates `providers.toml` where absent, containing its comment header, an example entry commented out, and the entry written, and no other entry. `configure-models` creates `config.toml` where absent from its commented template: comments that explain the file and guide the `[models]` ids (the guidance `kbase://model-hints` serves, [§11](#resources)), an empty value for each role it is not given (which parses as unset), and `[asks]` and `[sampling]` commented out. Each otherwise edits the file under §9.5. A refusal writes nothing, and so does a `configure-models` catalogue failure.
 
 ### The files are the one source of inference
 
@@ -115,7 +115,7 @@ There is no plaintext-transport switch. When a key is configured and the base UR
 
 Top-level tables are provider names, an open set the user chooses. A provider name is one or more ASCII letters, digits, `_` or `-`, not beginning with `-` (`^[A-Za-z0-9_][A-Za-z0-9_-]*$`). A table whose name breaks the rule fails the file's load, naming the file and the entry.
 
-**A provider name is case-insensitive everywhere.** Every input naming a provider is case-folded to lowercase without complaint: each table name read from `providers.toml`, `--provider`, the provider part of a model reference, the provider that `configure-providers` or `configure-models` is given, and the provider that `auth add` or `auth remove` is given. Every output names a provider in lowercase. Two tables of one file whose names differ only by case refuse the load, naming both spellings and the file.
+**A provider name is case-insensitive everywhere.** Every input naming a provider is case-folded to lowercase without complaint: each table name read from `providers.toml`, `--provider`, the provider part of a model reference, the provider that `configure-providers` or `configure-models` is given, and the provider that `auth add` or `auth remove` is given. Every output names a provider in lowercase. Two tables of one file whose names differ only by case refuse the load, naming both names as written and the file.
 
 An entry:
 
@@ -155,7 +155,7 @@ A Messages request:
 
 This mapping targets servers that implement the Messages protocol: oMLX, LiteLLM-style proxies, OpenRouter. Anthropic's own endpoint rejects a temperature beside thinking, and its newer models may reject `budget_tokens`, `temperature` or `thinking: {type: disabled}`. A Messages entry's catalogue is `GET <baseUrl>/models`, whose `created_at` is RFC 3339.
 
-An `openai` request carries the role's `temperature`, 0 where unset. Thinking `off` sends `chat_template_kwargs: {enable_thinking: false}` and `reasoning: {enabled: false}`. A level sends it three ways at once, since a server reads whichever it speaks: `reasoning_effort: <level>`, `reasoning: {effort: <level>}` and `chat_template_kwargs: {enable_thinking: true}`.
+An `openai` request contains the role's `temperature`, 0 where unset. Thinking `off` sends `chat_template_kwargs: {enable_thinking: false}` and `reasoning: {enabled: false}`. A level sends it three ways at once, since a server reads whichever it speaks: `reasoning_effort: <level>`, `reasoning: {effort: <level>}` and `chat_template_kwargs: {enable_thinking: true}`.
 
 `decisionApi` is unaffected by `api`, and both decision APIs are OpenAI-shaped: the `decision` role's multichoice questions always go to the decision API's endpoint on its entry's base URL, authenticated as an `openai` entry is, whatever the entry's `api`. A server that speaks only Messages has no such endpoint, and the decision call fails with that server's HTTP status.
 
@@ -187,7 +187,7 @@ thinking = "off"               # optional; off | low | medium | high
 [sampling.scoring]             # optional; kbase score's sampling, the same two keys
 ```
 
-**A `[models]` value is a reference**, `<provider>/<model>`, split at the **first** `/`: a provider name is a `providers.toml` table's and contains none, while a model id may (`openrouter/anthropic/…`). Either part empty, or no `/` at all, is not a reference and is refused at resolution, naming `models.<role>` and the form. Nothing is normalised but surrounding whitespace and the provider part, case-folded to lowercase (§9.1): a model id is the provider's spelling, not kbase's.
+**A `[models]` value is a reference**, `<provider>/<model>`, split at the **first** `/`: a provider name is the name of a `providers.toml` table and contains none, while a model id may (`openrouter/anthropic/…`). Either part empty, or no `/` at all, is not a reference and is refused at resolution, naming `models.<role>` and the form. Nothing is normalised but surrounding whitespace and the provider part, case-folded to lowercase (§9.1): a model id keeps the provider's formatting, not kbase's.
 
 A role left unset resolves to "not configured": no defaulting, no guessing, and no role falls back to another.
 
@@ -230,7 +230,7 @@ The report states:
 
 - the layers this invocation read, in precedence order, each with its path, the source that named it (`explicit` for a flag, `environment` for `$KBASE_CONFIG_DIR`, `repository` or `global`), and whether the directory and each of its two files exist;
 - `config.toml`'s merged `[models]` values, null where a role is unset, and its `[sampling]` values, null where unset;
-- every provider in name order, with the layer that supplied it and the chat protocol and decision API it speaks, each default filled in (so a provider silent on `decisionApi` reads `systemone`), including a provider that a dropping fault removed (unusable, with the fault's reason);
+- every provider in name order, with the layer that supplied it and the chat protocol and decision API it speaks, each default filled in (so a provider silent on `decisionApi` is reported as `systemone`), including a provider that a dropping fault removed (unusable, with the fault's reason);
 - the provider the selection names and the rule that named it, or why none was named;
 - one record per role: the endpoint it resolves to, the layer that supplied each field, a chat role's sampling settings, or why it does not resolve.
 
@@ -242,7 +242,7 @@ Its diagnostics are, in order:
 - one `provider` item per provider whose stored key leaves the `apiKeyFile` it states unread, `path` the `providers.toml` that states it and `remedy` removing that line from the file, or `kbase auth remove <provider>` to use the file;
 - one item per role that does not resolve, its `path` naming the file the setting belongs in: the write target's `providers.toml` or `config.toml`.
 
-The upgrade (below) and the unread-`apiKeyFile` warning are this report's alone: no other verb's output has them.
+The upgrade (below) and the unread-`apiKeyFile` warning appear in this report only: no other verb's output has them.
 
 #### Names and paths, never secrets
 

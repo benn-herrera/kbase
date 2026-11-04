@@ -12,7 +12,7 @@ changed, their meaning did not. The current version is `4.0.0`.
 
 Before any other read, kbase reads `kb-format` from `kb-root/.index/format.yaml`; where that file
 does not exist, from the entry point's frontmatter, the stamp's superseded place, which every KB
-older than `3.0.0` uses; where both exist, the file's stamp is the KB's. A `kb-root/` with neither
+older than `3.0.0` uses; where both exist, the file's stamp governs. A `kb-root/` with neither
 stamp file nor entry point is refused (`check: kb-root`). A KB stamped in neither place, an
 unreadable stamp in either, and a stamp that is not a `<major>.<minor>.<patch>` version are refused
 (`check: kb-format`), the refusal naming where it looked. Every producer of a KB writes the stamp
@@ -115,13 +115,13 @@ are never read back. `verify` renders each in memory and compares bytes; a diffe
   records; do not edit."
 - A hosted node has its entry on the page of the volume its host lies in. A work has its entry on
   the root page. An axiom has no entry, and neither has a node with no statement marker.
-- Each entry is headed `## <title><!-- kbase-id: <id> -->`. Its anchor is its heading's among every
-  heading its page renders (Statements and anchors).
+- Each entry is headed `## <title><!-- kbase-id: <id> -->`. Its anchor is the anchor of its heading,
+  computed among every heading its page renders (Statements and anchors).
 - Entries come in the reading order of their markers, then works by label.
 - Every link a page renders is computed from each node's derived page and anchor. A prose link
   `<page>#<anchor>` holds while its node stays on that page with that anchor, and `verify`'s
   `dead-link` check reports one that no longer does ([§8](#verify)).
-- What an entry shows is presentation: the node's standing — the leaves that host it, its rigor
+- What an entry shows is presentation: the node's current state — the leaves that host it, its rigor
   (marked where manually scored), every edge into it with the source's title, strength and bearing,
   the demoted records into it, its rationale and, for a claim or an analysis, a `### Strength`
   section with its derived strength line and trace. An experiment's entry shows its `status`.
@@ -136,7 +136,7 @@ double-quoted, escaping `\`, `"`, every control character below U+0020 but tab, 
 YAML reader would take as a line break or refuse as unprintable, as `\uXXXX`; a string holds no line
 break, and a stored prose value has each whitespace run collapsed to one space, its ends trimmed —
 an op's `unchanged` test compares the collapsed value. Numbers are plain decimals, the shortest that
-reads back as the value, with at least one fractional digit (`1.0`, `0.85`); booleans `true` and
+parses back as the value, with at least one fractional digit (`1.0`, `0.85`); booleans `true` and
 `false`; keys in the type's field order. Nodes are written in `id` byte order and edges by identity —
 `relation` in the order `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted`, a
 `demoted` record's `replaced-relation` in the same order, then `source`, then `target`. Every
@@ -207,8 +207,8 @@ text.
   statement is that heading's section.
 - An analysis's or an experiment's statement is the section of the nearest heading at or above its
   marker, or the text above the first heading where none precedes it. So a claim marker and an
-  analysis marker abutting at the end of a heading line both read as that heading's section.
-- Two layouts that the build's analysis split (§5) writes read differently:
+  analysis marker abutting at the end of a heading line both parse as that heading's section.
+- Two layouts that the build's analysis split (§5) writes parse differently:
   - an analysis marker alone on a blank line inside a blockquote: the analysis's statement is the
     whole quoted run, and a claim the analysis lifts, marked in the same blockquote, has as its
     statement the text of its own marker's line before the marker;
@@ -217,7 +217,7 @@ text.
     analysis's is the whole paragraph.
 - Markers and `>` prefixes are removed from every statement.
 - No public write op places the blockquote layout; the add ops and `move-node` can place the
-  paragraph layout, and a marker placed into either layout reads by it.
+  paragraph layout, and a marker placed into either layout parses by it.
 - A hosted node with no marker, or with more than one, is a `verify` fault (`statement-marker`). It
   does not stop the KB loading. A node with more than one marker is hosted by the first in path
   order. A node with no marker has no host, no section anchor and no summary entry.
@@ -265,7 +265,7 @@ leaf and section anchor, while its `canonical_path` is its summary entry.
 ### `canonical_path` and `canonical_anchor`
 
 Each node has a canonical path and anchor, derived at load, which the claim-graph sheet links to;
-no result carries them, `show` and `find` naming `host`, `host_anchor` and `summary` instead
+no result contains them, `show` and `find` naming `host`, `host_anchor` and `summary` instead
 ([§7](#item)).
 
 | Node | Canonical path | Canonical anchor |
@@ -283,7 +283,7 @@ An axiom is declared by its node record, which `add-axiom` writes (§8). `axioms
 it, one heading each, `### Axiom <label>: <title><!-- kbase-id: <id> -->`; the marker pairs the
 heading with its record, and `axioms.md` is not read for declarations. That marker is not a
 statement marker, and the axiom stays unhosted. `verify`'s `axiom-heading` check holds the heading
-and the record together by three checks: each axiom record has exactly one heading carrying its
+and the record together by three checks: each axiom record has exactly one heading ending in its
 marker; that heading's text is `Axiom ` followed by the record's label, `: ` and its title; and each
 marked heading names an axiom record. A fault of these checks is one the author's prose edit clears
 ([§8](#verify)).
@@ -300,12 +300,12 @@ file and its line or record:
 5. one node id on two records;
 6. a pairing that no relation joins (the relations table below);
 7. one edge identity on two records;
-8. an edge naming a node no record carries;
+8. an edge naming a node that has no record;
 9. a cycle among the scoring edges.
 
 Faults 7 to 9 are found only once the record files decode without fault. A record file missing from
 a KB stamped at the current version is refused `check: index`, remedy "restore it from git". Faults
-7 to 9, which no write op produces, carry the remedy "return the record files to a consistent
+7 to 9, which no write op produces, have the remedy "return the record files to a consistent
 commit in git, such as the one before a merge, and reapply the other side's changes through write
 ops". The remedy of a `rigor` above `1.0` says kbase never writes such a value, so whatever wrote
 it is the way to undo it. No op resolves a load error.
@@ -358,7 +358,7 @@ and the one token on every scoring edge; `strength` is the derived value, a numb
 pending, on a claim and on an analysis, derived and never stored. `*pending*` is the format's one
 no-number literal: written for a value nobody has judged, and read wherever a value is absent. It
 means unjudged, not low. A work, an experiment and an axiom have no derived value — their `rigor` is
-terminal, and an axiom's is `1.0` by rule, which no authored file carries — so each one's strength is
+terminal, and an axiom's is `1.0` by rule, which no authored file contains — so each one's strength is
 its `rigor`.
 
 ### Four scoring relations, one arithmetic
@@ -373,7 +373,7 @@ strength bears on B.
 | `founds` | work, axiom | claim, analysis | `bearing × the source's rigor` into the minimum; an axiom's rigor is `1.0` by rule |
 | `lifts` | analysis, experiment | claim, analysis | `bearing × the lifter's strength`, maxed above the minimum |
 | `refutes` | claim, analysis, experiment | claim, analysis | a cap, `1 − bearing × refuter strength`; the smallest cap wins |
-| `references` | any kind | any kind | none: it carries `context` only, saying why a node names another without bearing on its strength |
+| `references` | any kind | any kind | none: it has `context` only, saying why a node names another without bearing on its strength |
 | `demoted` | ([The `demoted` relation](#the-demoted-relation)) | | none |
 
 The four *scoring relations* are `supports`, `founds`, `lifts` and `refutes`. A node's *dependents*
@@ -383,7 +383,7 @@ are the distinct targets of its outgoing scoring edges.
 cited work, or an axiom the argument leans on. An axiom's declaration in `axioms.md` is bookkeeping,
 not origin: what it states is an external fact.
 
-`references` and `demoted` are the two unscored relations: `references` carries no bearing and no
+`references` and `demoted` are the two unscored relations: `references` has no bearing and no
 value, and `demoted` keeps the bearing of the edge it replaced, which strength propagation does not
 read. A bearing is required on every scoring edge and illegal on these two. A bearing weights the
 contribution and never modifies its source's value. The scoring edges form no cycle, and an edge
@@ -411,7 +411,7 @@ a refutation takes `0`; an analysis composes the same two around its own rigor, 
 
 Strength propagation uses full precision: nothing rounds a value on its way into a derivation, so a
 dependent multiplies its source's exact strength. A summary page — its `- strength:` line and a
-premise's `(strength …)` — shows the value in the fewest decimals that read back as it: four in the
+premise's `(strength …)` — shows the value in the fewest decimals that parse back as it: four in the
 ordinary case, more only where four would lose it, trailing zeros trimmed. A query result gives it as
 a number at two decimals, the trace on a `- strength:` line writes it at two, and a `verify` message
 quotes the record's form, being about the record. A pending bearing, or a pending source strength,
@@ -420,14 +420,14 @@ taking a minimum to zero and a cap to `1.0`. A non-`run` experiment is inert as 
 and its `supports` edge is excluded like any unjudged premise.
 
 **A value is derived from a charge list, not composed from the interior of the scale.** Each of the
-two scoring passes asks a model for the faults the text commits — the ids
+two scoring passes makes a model call for the faults the text commits — the ids
 [RIGOR_AND_BEARING_SCORING_SCHEME.md](PROJECT_DOCS/SPEC/scoring/rigor-and-bearing/entry-point.md) defines, each with the
-line that shows it — and kbase prices the list: the pass's maximum less its ids' weights per
+line that shows it — and kbase computes the value from the list: the pass's maximum less its ids' weights per
 occurrence, floored at zero and exact at two decimals (§8). A written `rigor` is a value in
 `[0, 1]` or `*pending*`, and a bearing's the same. `1.00` is the rigor tables' maximum — the largest
 a `rigor` pass derives, which reads *no charge*, never *the text displays its reasoning*. An axiom's
 `1.00` by rule is that same number and no separate case on the read path: an authored `rigor: 1.0`
-is in domain and reads as itself everywhere the system shows it — the summary page's strength line,
+is in domain and keeps that value everywhere the system shows it — the summary page's strength line,
 the derivation, a query's display and strength propagation. An authored `rigor` above the maximum is
 outside the domain, as an infinity (`.inf`) is, and the load refuses it (`check: metadata`), naming
 the record file, the record and the field (The load). A bearing's `1.0` is in domain, its table
@@ -442,7 +442,7 @@ input only*, `0.20` *do not build on, rework needed*, and `0.00` **unsubstantiat
 rung states an outcome and not a cause: every strength below `0.20` falls in it from either
 direction — a refuter's cap, or a minimum no premise carries — and what it says is that nothing a
 claim built on this would inherit substantiates the claim. The cause, where a reader needs it, is
-the run's fault record and the derivation trace. One value carries one band wherever a band is
+the run's fault record and the derivation trace. One value has one band wherever a band is
 shown: a claim's or an analysis's record (`build_status`, `strength_band`), the `stats`
 distribution's row, and the sheet's fill and tooltip. A pending strength has no band, and a strength
 below `0.00` cannot occur.
@@ -468,7 +468,7 @@ line and the field: a missing bearing is never read as `0`, nor as pending.
 
 **The `manually-scored` flag** records whether a person's call wrote a record's rigor or bearing. It
 is on claim, analysis and experiment records, and on `supports`, `lifts`, `refutes` and `demoted`
-records. A work's rigor, an axiom and a `founds` edge carry no flag, since no scoring pass reaches
+records. A work's rigor, an axiom and a `founds` edge have no flag, since no scoring pass reaches
 them.
 
 - A public op writes the flag `true` on a rigor or a bearing the caller supplied, `*pending*`
@@ -486,7 +486,7 @@ stale.
 - It is the field `judged-hash`, the last field of claim, analysis and experiment records and of
   `supports`, `lifts` and `refutes` edge records, required on every one of them: a record without
   it is a load error. It is a SHA-256 digest as 64 lowercase hex digits.
-- It covers the item's text plus the digest of the ask template that judges it. For a node the text
+- It covers the item's text plus the digest of the prompt template that judges it. For a node the text
   is its statement (Statements and anchors); for an edge, the statements of its two ends. The model
   is not part of the hash.
 - A rigor or a bearing that an add or an edit is given — `*pending*` included — records the judged
@@ -494,13 +494,13 @@ stale.
   text its call was composed under. A value set otherwise keeps the hash it has. An add given no
   value writes the never-judged hash.
 - The never-judged hash is all zeros. No computed hash matches it, so the item is stale. A demoted
-  record carries no hash, so an edge restored from one has the never-judged hash.
+  record has no hash, so an edge restored from one has the never-judged hash.
 - An item is *stale* when its current hash differs from the recorded one; a value never judged is
-  stale. `score` asks the stale items ([§8](#score)).
+  stale. `score` scores the stale items ([§8](#score)).
 
 ### The vocabulary
 
-A node's local value is `rigor` and its derived value `strength`, on every surface: a summary page's
+A node's local value is `rigor` and its derived value `strength`, everywhere they appear: a summary page's
 `- strength:` line and `(strength …)` annotation, the derived views, the query keys, the sheet's
 bands and `find`'s `strength` sort. The summary page is `kb-summary.md`, placed by host (Documents
 of a KB); the statement marker is `<!-- kbase-id: … -->`.
@@ -511,7 +511,7 @@ The `1.0.0` form is standard YAML frontmatter (`---` fenced) in each document. A
 key groups (`exp-id`, `status`, `strengthens`; `sup-id`, `supports`) are one mapping each in a
 top-level `experiment-nodes:` or `support-nodes:` list, a one-node leaf a one-element list; the build
 records are YAML (`kb-build-*.yaml`); `.index/*.yaml` are YAML streams, one document per line, each
-the record as a JSON object after the `--- ` marker; a writer never folds a record across lines. The
+the record as a JSON object after the `--- ` marker; a writer never splits a record across lines. The
 frontmatter is at the top of the file, so the up-link line (§3) is the first line after its closing
 `---`.
 
@@ -522,9 +522,9 @@ derived line, and nothing else.
 
 One converter reads a `1.0.0` KB's files as bytes and writes the `2.0.0` form's, which the
 `2.0.x → 3.0.0` converter (below) then takes. A file it does not locate it does not touch, and a
-file already malformed under `1.0.0` is carried as bytes for the `2.0.x` load the next step runs to
+file already malformed under `1.0.0` is passed through as bytes for the `2.0.x` load the next step runs to
 refuse by name — the converter never makes invalid `1.0.0` bytes valid. Nor does it drop bytes: a
-file holding content the converter cannot carry refuses the conversion, `check: conversion`, naming
+file holding content the converter cannot convert refuses the conversion, `check: conversion`, naming
 the file, the line and the content, so the load writes nothing and the KB remains as it was. It
 
 - renames `- confidence:` on a claim entry, `- quality:` on an analysis entry and a work's
@@ -541,10 +541,10 @@ the file, the line and the content, so the load writes nothing and the KB remain
   the claim's own marker line, after the claim's, in the leaf the claim's statement is read from; a
   claim its leaf lists and does not mark takes one on the leaf's first heading. An argument stating
   no premise gives its analysis no premise list, which strength propagation reads at the analysis's
-  own rigor. A claim no leaf carries is not split: it keeps its premise list and its rationale,
+  own rigor. A claim no leaf contains is not split: it keeps its premise list and its rationale,
   since the analysis would hold them on behalf of no host — the `2.0.x` load reads no node for it;
 - gives every scoring edge its bearing: an old `(applicability X)` becomes `(bearing X)` with its
-  value carried, an untokened premise bullet takes `(bearing 1.0)` — work and axiom bullets included
+  value kept, an untokened premise bullet takes `(bearing 1.0)` — work and axiom bullets included
   — and every experiment's mapping gains `rigor: 1.0`;
 - rewrites each entry's `### Quality` to `### Rigor` and `### Solidity` to `### Strength`, and
   renames the register file `claim-quality.md` to `claim-rigor.md` with its Tier-2 marker
@@ -556,7 +556,7 @@ the file, the line and the content, so the load writes nothing and the KB remain
 - writes `axioms.md` — one `### Axiom <label>: Title` heading per `### INVARIANT-<label>:` section
   and per `- Axiom N: **…**` bullet of `invariants.md` or a legacy `AGENTS.md`, each axiom bullet's
   body beneath its heading — rewrites every `INVARIANT-<label>` citation in the register to
-  `Axiom <label>`, a legacy `Axiom N` citation already being the `2.0.0` spelling, gives that bullet
+  `Axiom <label>`, a legacy `Axiom N` citation already being the `2.0.0` form, gives that bullet
   the bearing an axiom premise requires, and moves a legacy bullet's trailing parenthetical into
   `[context]`; labels are preserved and nothing is renumbered;
 - splits a bullet naming several scoring targets into one bullet per target; and
@@ -565,30 +565,30 @@ the file, the line and the content, so the load writes nothing and the KB remain
   byte and no index file is converted: the `1.0.0` index files were derived.
 
 **The migration is not value-identical, and no derived-value equality is promised.** Four causes,
-and every one of them is a value a reader will see move:
+and every one of them is a value a reader will see change:
 
-1. **An analysis's lift moves station; an experiment's does not.** Under `1.0.0` an analysis's
+1. **An analysis's lift changes station; an experiment's does not.** Under `1.0.0` an analysis's
    support contribution was maxed into the claim's local value, which then entered the minimum: a
    corroborating analysis could be dragged down by a weak premise. Under `2.0.0` a lift sits above
    the minimum. A supported claim whose lift exceeds its derivation rises to the lift; where the
    derivation is at or above the lift, the value is unchanged. An experiment's pair already sat
-   above the minimum, so its station does not move.
+   above the minimum, so its station does not change.
 2. **`founds` scales.** An old `applicability X` was a gate: any positive value contributed the
    work's whole rigor, and `0` skipped the edge. A `2.0.0` `bearing X` contributes `X × rigor`, so
    every work edge below `1` falls, a `0` drives its claim to zero, and `1` is unchanged.
 3. **An untokened or pending work edge stops pending.** A work bullet with no applicability, or an
-   explicit pending one, left its claim pending. The untokened bullet carries `1.0` and
-   contributes the work's rigor; an explicit `*pending*` token is carried and the edge is excluded.
+   explicit pending one, left its claim pending. The untokened bullet now has `1.0` and
+   contributes the work's rigor; an explicit `*pending*` token is kept and the edge is excluded.
    In both cases the claim reads a number where it withheld one.
 4. **A claim nobody judged reads `0`.** A `1.0.0` claim whose `confidence` is `*pending*` withheld a
    number. The split gives that unjudged value to the claim's analysis, and an analysis whose
    premises are judged reads pending — so the claim's lift from it is excluded, the claim derives
-   nothing, and it reads `0.00` and falls in `unsubstantiated`. That is strength propagation's rule
+   nothing, and it reads `0.00` and falls in `unsubstantiated`. That is the rule of strength propagation
    and not a defect: an unjudged analysis is no lift, exactly as an unjudged bearing is no
    supporter.
 
 An old applicability was authored as a gate, not a weight, so every non-`1` value needs a human
-re-read before it is trusted; the converter carries the number and does not reinterpret it, and it
+re-read before it is trusted; the converter keeps the number and does not reinterpret it, and it
 invents neither a finding nor a context where a migrated work bullet's context names none.
 
 ### The `2.0.x → 3.0.0` migration
@@ -612,7 +612,7 @@ warns — one item each, `path`, `line` and `detail` — wherever it drops data 
 
 - A claim's and a work's register entry becomes its node record — `title` its heading, `rigor`,
   `rationale`, `no-edge`, `strengthen-by` — and which `2.0.x` register held it is dropped silently:
-  its page is its host's (Documents of a KB), so a node printed in another volume's register moves,
+  its page is determined by its host (Documents of a KB), so a node printed in another volume's register moves,
   and a prose link to its old anchor is reported by `verify`'s `dead-link` check. A second register
   entry for one id is dropped with a warning.
 - An analysis is its leaf's `analysis-nodes` entry joined with its register entry, titled with the
@@ -623,7 +623,7 @@ warns — one item each, `path`, `line` and `detail` — wherever it drops data 
   loss: the anchor names the place the reader lands on. An experiment's `experiment-nodes` entry
   becomes its record, titled with its host's first heading and its `rigor` `*pending*` where it had
   none. A host with no heading titles its node with its file name, with a warning. An axiom is
-  `axioms.md`'s heading, else a legacy declaration, as the `2.0.x` load read it.
+  read from its heading in `axioms.md`, else from a legacy declaration, as the `2.0.x` load read it.
 - Every `rests-on`, `refutes`, `references` bullet, register analysis pair and leaf pair line
   becomes an edge record oriented as the `2.0.x` index row, `context` `""` where it had none. A
   bullet whose token named no node, which `2.0.x` dropped too, is dropped with a warning quoting it.
@@ -632,29 +632,29 @@ warns — one item each, `path`, `line` and `detail` — wherever it drops data 
   one record: equal bearings silently, their contexts joined with `; ` in authored order; different
   bearings keep the higher, a number above `*pending*`, with a warning naming both sites.
 - A `demoted` bullet on an entry X naming Y becomes a `demoted` record from Y into X, replacing
-  `supports`, its bearing `*pending*` — `2.0.x`'s cut kept no bearing, so none is lost — and its
+  `supports`, its bearing `*pending*` — `2.0.x` kept no bearing when it removed the edge, so none is lost — and its
   origin dropped silently.
 - Every `manually-scored` is written `false`.
 - Each node's statement marker is placed from the `2.0.x` `claims:` listings and markers. A claim
   marked in a leaf that lists it keeps that marker. A claim listed but marked nowhere it is listed
   gets a marker in the first listing leaf in path order — an equation's on the line inside its
-  display-maths fence carrying its `\label{…}`, and a claim whose leaf lists no other non-equation
+  display-maths fence holding its `\label{…}`, and a claim whose leaf lists no other non-equation
   claim and holds one labelled blockquote on that blockquote's first content line, so its label line
-  still reads as one, silently; any other on the leaf's first heading line, with a warning, the
+  still parses as one, silently; any other on the leaf's first heading line, with a warning, the
   section that heading opens being its statement. A leaf with no heading gets none of the markers
-  its heading would carry, each with a warning. Every other listing leaf becomes a mention, with a
+  its heading would hold, each with a warning. Every other listing leaf becomes a mention, with a
   warning, its `referenced-by` row lost, and every other marker of the claim is removed, with a
   warning. A claim listed nowhere keeps its first marker in path order and loses the others, each
   with a warning; one listed and marked nowhere has no host, `verify`'s `statement-marker` fault. An
-  analysis's or an experiment's marker that a `2.0.x` document already carries remains where it is —
+  analysis's or an experiment's marker that a `2.0.x` document already contains remains where it is —
   the section it sits in is the node's statement, so one the `1.0.0` migration placed beside the
   claim it argues for keeps that place — and a second marker for the same node is dropped with a
   warning naming the one that remains; a marker in a leaf other than the one declaring the node is
-  warned of, naming both paths, and its marker's leaf is the statement's home. Where none exists, one
+  warned of, naming both paths, and the statement is read from its marker's leaf. Where none exists, one
   is written on a new line directly after the host's first heading.
 - Frontmatter is removed from every document, the entry point's with it. `kb-format`, `kind`,
   `claims`, a string `no-claim` and the `subtree-*` keys are dropped silently, markers and the
-  derivation carrying their facts; `experiments`, `path-stable`, a key no `2.0.x` reader knew, an
+  values computed at load recording their facts; `experiments`, `path-stable`, a key no `2.0.x` reader knew, an
   `experiment-nodes` or `analysis-nodes` list on a document that is not `kind: leaf` — which
   declared no node to the `2.0.x` load — and a value of the wrong type are dropped with a warning
   naming file, line and key.
@@ -665,7 +665,7 @@ warns — one item each, `path`, `line` and `detail` — wherever it drops data 
 - The derived `.index/edges.yaml` is replaced by the record file, and every other file under
   `.index/` but the two record files and the stamp file — `2.0.x`'s `claims.yaml`, `cites.yaml`,
   `strengthen-by.yaml` and `subtree-aggregates.yaml` — is obsolete, reported under `removed`. The
-  stamp file is carried through, holding the version the tree is still at, until the save's last
+  stamp file is kept, holding the version the tree is still at, until the save's last
   write replaces it. The stamped `AGENTS.md` and `CONVENTIONS.md` are not read by the conversion:
   `update-format` rewrites the block each contains between its marker lines, and leaves one with no
   such pair untouched, listing it under `unfenced` ([§3](#stamped-documents)).
@@ -674,7 +674,7 @@ warns — one item each, `path`, `line` and `detail` — wherever it drops data 
 
 One converter reads a `3.0.0` KB's record files through the `3.0.0` load and writes them in the
 `4.0.0` form. A `3.0.0` KB whose record files the `3.0.0` load refuses is refused with that load's
-own items, `check: metadata`, one per fault. Every other file is carried as it is. The conversion's
+own items, `check: metadata`, one per fault. Every other file is kept as it is. The conversion's
 steps:
 
 - **Records.**
@@ -723,12 +723,12 @@ steps:
 ### The migration announces itself
 
 A command that reads a KB in an older format writes one sentence to stderr, and each warning on a
-line of its own, and carries one `migration` record — `from`, `to`, `note`, `warnings` — after
+line of its own, and includes one `migration` record — `from`, `to`, `note`, `warnings` — after
 `kb-root` (§7), on every such call until the `update-format` whose save stamps `4.0.0`. `note` is,
 for every migration, "every scored record's judged hash is now the unjudged one: no rigor or bearing
 is claimed current, and the next score run finds every one dirty". §7 names the commands. Over MCP
 the document is the channel and stderr is the server's log; `status` and `cancel` load no KB and
-never carry it.
+never include it.
 
 ### The `demoted` relation
 
@@ -749,7 +749,7 @@ cycles were removed at different relations between them.
   leaves the edge removed; `add-edge` of the replaced edge writes the edge with the add's own values
   and deletes the record ([§8](#edge-ops)).
 - `verify` lists every `demoted` record under `findings` (§7) with outcome `done`; a finding is not a
-  fault. `edges` reports it as a row of its own relation, out of its source, carrying
+  fault. `edges` reports it as a row of its own relation, out of its source, with
   `replaced_relation`; `stats` counts them as `demoted_edges`, after `edges`, which counts every row;
   the sheet draws each as a cut (§3); and its target's summary entry lists it.
 
