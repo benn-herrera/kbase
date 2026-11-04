@@ -1,4 +1,4 @@
-### 1. A chain: a work founds a claim, the claim supports another
+### 1. A founds-and-supports chain
 
 ```
   W  --founds 1.00--> C2  --supports 0.20--> C1

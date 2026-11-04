@@ -10,7 +10,7 @@ Contents:
 - [§10 The record files](the-record-files.md)
 - [§10 `canonical_path` and `canonical_anchor`](canonical-path-and-canonical-anchor.md)
 - [§10 Axioms](axioms.md)
-- [§10 The load: every fault refused](the-load-strict-on-syntax-lenient-on-integrity.md)
+- [§10 The load: every fault refused](the-load-every-fault-refused.md)
 - [§10 Five node types](five-node-types.md)
 - [§10 Three quantities](three-quantities.md)
 - [§10 Four scoring relations, one arithmetic](four-scoring-relations-one-arithmetic.md)

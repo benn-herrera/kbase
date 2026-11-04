@@ -1,4 +1,4 @@
-## Worked examples: one input set
+## Worked examples
 
 The example above is the diagram's own fragment, so its figures are the diagram's and move with it. This
 set holds the inputs still instead: the same values are authored on every node in every case, and the only
@@ -53,10 +53,10 @@ Every figure below is exact at two decimals. The record trims a trailing zero �
 
 Contents:
 
-- [§1 A chain: a work founds a claim, the claim supports another](1-a-founds-and-supports-chain.md)
+- [§1 A founds-and-supports chain](1-a-founds-and-supports-chain.md)
 - [§2 A lift over a weak base](2-a-lift-over-a-weak-base.md)
-- [§3 A refutation caps — and sometimes does not](3-refutation-lowers-the-ceiling.md)
+- [§3 Refutation lowers the ceiling](3-refutation-lowers-the-ceiling.md)
 - [§4 A claim nothing supports](4-a-claim-nothing-supports.md)
-- [§5 Only a node's own rigor makes it pending](5-only-own-rigor-makes-a-node-pending.md)
-- [§6 A claim and an analysis on the same number](6-colocated-claim-and-analysis.md)
+- [§5 Only own rigor makes a node pending](5-only-own-rigor-makes-a-node-pending.md)
+- [§6 Colocated claim and analysis](6-colocated-claim-and-analysis.md)
 - [Summary table](summary-table.md)

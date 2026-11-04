@@ -10,3 +10,7 @@ point there.
   document's `entry-point.md`.
 - Read the leaves a task needs, starting from the document's `entry-point.md`; a whole document is
   read only when the task is about the whole document.
+
+Contents:
+
+- [Section and Rule Heading Brevity](section-and-rule-heading-brevity.md)

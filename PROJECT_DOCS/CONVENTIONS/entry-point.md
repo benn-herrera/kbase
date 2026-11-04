@@ -6,7 +6,7 @@ Must-see:
 
 - No user-facing behaviors or outcomes are designed here, that belongs to SPEC
 - No project mechanisms or code structure are put forth, that belongs to ARCHITECTURE
-- Edit PROJECT_DOCS/ leaves, never the root pointer files ([Project Documents](project-documents.md))
+- Edit PROJECT_DOCS/ leaves, never the root pointer files ([Project Documents](project-documents/index.md))
 - Coding
   - When accepting dispatched-agent work, follow [CONVENTIONS, Coordinator Policy](coordinator-policy/index.md)
   - Audit the diff, not the report, before commit
@@ -46,11 +46,12 @@ Contents:
   - [Plan dispatchability](plan-execute-process/plan-dispatchability.md)
 - [Coordinator Policy](coordinator-policy/index.md)
   - [Audit the diff, not the report](coordinator-policy/audit-the-diff-not-the-report.md)
+  - [Design fixes](coordinator-policy/design-fixes.md)
 - [Testing](testing/index.md)
   - [No verification is a one-off](testing/no-verification-is-a-one-off.md)
   - [Integration tests invoke the app binary](testing/integration-tests-invoke-the-app-binary.md)
   - [Results are part of the test](testing/results-are-part-of-the-test.md)
 - [Dependency Policy](dependency-policy.md)
 - [Logging](logging.md)
-- [Project Documents](project-documents.md)
-- [Section and Rule Heading Brevity](section-and-rule-heading-brevity.md)
+- [Project Documents](project-documents/index.md)
+  - [Section and Rule Heading Brevity](project-documents/section-and-rule-heading-brevity.md)

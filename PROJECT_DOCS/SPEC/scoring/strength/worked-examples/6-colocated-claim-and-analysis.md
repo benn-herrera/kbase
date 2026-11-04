@@ -1,4 +1,4 @@
-### 6. A claim and an analysis on the same number
+### 6. Colocated claim and analysis
 
 ```
   W  --founds 1.00--> C1   claim,    rigor 1.00

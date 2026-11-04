@@ -1,4 +1,4 @@
-### `add-edge`, `edit-edge`, `remove-edge`
+### Edge ops
 
 `add-edge`, `edit-edge` and `remove-edge` are [page §3.2](../../../NEW_MCP_CLI_DESIGN/3-operations/3.2-edge-writes/index.md)'s edge writes: each op's keys,
 result and refusals, over [page §1.2](../../../NEW_MCP_CLI_DESIGN/1-model/1.2-edges-and-relations.md)'s relations and legal pairings and [page §1.3](../../../NEW_MCP_CLI_DESIGN/1-model/1.3-demoted-edges.md)'s demoted records.
