@@ -308,3 +308,6 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
   - update the links at A:29, A:443, A:471, A:475, A:541, A:1906 and A:2147 to their new SPEC
     sections
 - CONVENTIONS: update the links at C:211, C:272 and C:284.
+- Code: leaf discovery excludes names SPEC does not state (`internal/kb/kb.go` `ExcludeDirs`,
+  `ExcludeNames`: `session/`, `tools/`, `invariants.md`, `claim-quality-closure-roadmap.md`). Align
+  the code with SPEC's leaf definition.
