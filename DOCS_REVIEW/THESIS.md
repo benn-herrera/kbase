@@ -20,7 +20,7 @@ the piece resembles and is not — the direction work on it must not drift.
 
 | kbase piece | The standard pattern | It is not |
 |---|---|---|
-| Reading LaTeX | Run pandoc; walk its JSON AST in Go and transform the tree | A LaTeX parser, macro engine or renderer. pandoc parses; kbase never does |
+| Reading LaTeX | Run pandoc; walk its JSON AST in Go and transform the tree. Before pandoc, a registry of narrow pre-passes, each filling one named gap in pandoc's reading | A LaTeX parser, macro engine or renderer. pandoc parses; kbase never does |
 | The knowledge base | A directory of markdown files with YAML frontmatter and JSONL record files, loaded whole into memory, validated on load | A database engine: no indexes, no query language, no storage layer |
 | Writes | A batch of operations validated all-or-none in memory, then written file by file with atomic renames; git is the undo log and the recovery | A transaction manager or a version-control system |
 | Derived pages and sheets | Views regenerated from the source files after every write, checked for staleness | A build system or a reactive framework |
@@ -94,7 +94,7 @@ narrowest question that decides it, and combine those judgments into a picture o
 
 ## Targets
 
-A build today takes a couple of hours of local inference and still needs settling in afterwards;
+A build today takes a couple of hours of local inference and still needs manual adjustments afterwards;
 scoring a full knowledge base takes minutes on a 128 GB machine.
 
 The target is a build of an average arXiv math paper in about 30 minutes, and scoring in about
