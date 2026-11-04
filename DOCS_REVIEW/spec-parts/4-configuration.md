@@ -33,7 +33,7 @@ A relative path a subcommand takes (a volume root, `--bibliography`, `--state-di
 
 ### Provider commands
 
-`models`, `configure-providers`, `configure-models` and `auth` read and write the configuration. `show-config` is defined in [§9.6](#96-kbase-show-config) and `probe` in [§8](#probe). Each writes its result under [§7](#item). The inputs and outputs of all of them name a provider in lowercase (§9.1).
+`models`, `configure-providers`, `configure-models` and `auth` read and write the configuration. `show-config` is defined in §9.6 and `probe` in [§8](#probe). Each writes its result under [§7](#item). The inputs and outputs of all of them name a provider in lowercase (§9.1).
 
 **`kbase models [--provider NAME] [--timeout DURATION]`** lists the selected provider's model identifiers, sorted ascending, as `models`. The provider is selected as [Provider selection](#provider-selection-is-the-catalogue-verbs-alone) states. `--timeout` bounds one request (default 30 s). `models` reports each configuration fault of the configuration it read as an item of `warnings` and as a line on stderr: `path` the file or directory the fault is against, `detail` what is wrong. A fault is a `providers.toml` entry dropped from the pool, a key file that is readable beyond its owner (§9.4) or cannot be read, a stored key file that does not open, or a store directory that exists and does not list ([The files are the one source of inference](#the-files-are-the-one-source-of-inference)). `warnings` is `[]` where there are none, and is present on every outcome, refusals included. A provider that refuses the call's key is a failure with the remedy [A refused key](#a-refused-key) states.
 

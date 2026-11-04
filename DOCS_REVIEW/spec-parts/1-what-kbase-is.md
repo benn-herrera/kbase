@@ -208,7 +208,7 @@ them with the KB, and they stay after the build finishes.
 **Fresh versus resume** is derived from the `kb-build:` checkpoint commits (§6), never configured.
 `kbase build <volume-root>...` starts a fresh build where no `kb-root/` exists; `kbase build
 --resume` continues the checkpoint commits. A fresh build where `kb-root/` exists, in any state, is
-refused ([§5 Starting over](#starting-over)). The KB a build writes keeps every title unique within
+refused ([§5](#starting-over)). The KB a build writes keeps every title unique within
 its kind ([§10](#five-node-types)), and its writes go through the write ops, each followed by the
 rebuild of the derived views ([§8](#writes-leave-nothing-stale)): the derived views are current at
 every checkpoint commit from the `spine-seed` stage on. A link pandoc wraps around a
@@ -304,7 +304,7 @@ set gives the same document graph, and the same KB modulo ids.
 records every stage, and states the steps it dropped. The run is a real KB built without those
 steps, not a stopped run. A build that `--no-inference` finished is a finished build:
 `kbase build --resume` over it is `unchanged`, and its dropped steps never run on it. A build that
-wants them starts over ([§5 Starting over](#starting-over)) and is a fresh build without
+wants them starts over ([§5](#starting-over)) and is a fresh build without
 `--no-inference`. A step that makes model calls in part is not dropped: its model calls are skipped
 and the rest of the step still runs, as for `depends-attributed`.
 
@@ -574,7 +574,7 @@ A build's `state` is one of:
 A build's `stages` is a mapping: `done` and `not-done`, the stage ids each way in stage order, and
 `rewind`, the one line saying that each completed stage's commit, with the command that rewinds
 to it, is in `kbase build-trail`. The stages read are the newest build's checkpoint commits
-([§5 Starting over](#starting-over)). Where `state` is `none` because `kb-root/` is absent or was
+([§5](#starting-over)). Where `state` is `none` because `kb-root/` is absent or was
 removed, no stage is done, and `current`, `pid`, `started`, `updated`, `ended` and `resume` are
 null. `recent-refusals`, `recent-fallbacks`, `cache-entries` and `cache-bytes` still read the state
 store: they record earlier invocations, not a current build.
@@ -634,7 +634,7 @@ only (§11). It takes no lock, and reads no checkpoint commits until that final 
 
 `build-trail` lists the build's history, read-only. It runs none of the commands it lists. Its one
 argument is `state-dir`; it takes no target, since every boundary and `started-at` has its own
-command. The checkpoint commits it reads are the newest build's ([§5 Starting over](#starting-over)).
+command. The checkpoint commits it reads are the newest build's ([§5](#starting-over)).
 
 Its result has these keys after `kb-root`, in this order:
 
