@@ -261,6 +261,10 @@ dice-doc monolith out map="": _docdicer
 dice-docs manifest src work: _docdicer
     @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
 
+[doc("write a diced tree (the directory holding its entry-point.md) back out as one markdown document at monolith, which must not exist, then check it dices back to the same tree")]
+undice tree monolith: _docdicer
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer undice "{{tree}}" "{{monolith}}"
+
 [doc("check every relative link and #anchor under PROJECT_DOCS and the top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
 check-links: _docdicer
     @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS *.md
