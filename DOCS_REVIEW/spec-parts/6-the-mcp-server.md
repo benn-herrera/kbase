@@ -116,6 +116,7 @@ Items 3 and 4 are the text the stamped `AGENTS.md` also contains ([§3](#stamped
 - `stats`' help points to `find`'s strength filters.
 - `find`'s help says, in one line, that `min: 0` leaves out pending nodes.
 - `update-format`'s help says to run it after upgrading kbase.
+- The help of an op that takes a `snippet` recommends quoting a few distinctive words from the line, not the whole line.
 - A help that tells a caller to copy an edge row from a result into `add-edge` or `edit-edge` gives this advice. A row's `manually_scored`, `replaced_relation`, and `trace`'s `depth`, `strength` and `contribution`, and any op key whose value is null, are read-only facts: drop them before copying the rest. Copy `bearing` only where the row is manually scored or the relation is `founds`: a bearing given marks the edge manually scored ([§10](#provenance-and-the-judged-hash)), so copying a model-judged one would pin it. Into `remove-edge` and `restore-demoted`, copy only `source`, `target` and `relation`.
 - The help of an op that takes a `rationale` says that what would strengthen a node is a graph question, answered by `trace` with `sort: contribution` and `order: ascending`.
 - No help names a command or resource that this SPEC does not define.

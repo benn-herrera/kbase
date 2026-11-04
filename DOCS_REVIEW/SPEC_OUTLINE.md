@@ -319,3 +319,5 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
 - Code: the `trace` help carries the hint that `trace` sorted by contribution shows what would
   strengthen a node, and the edge-op help carries the bearing-copy advice (SPEC §11 Served text).
 - Code: `update-format`'s help says to run it after upgrading kbase (SPEC §11 Served text).
+- Code: the help of each op that takes a `snippet` recommends quoting a few distinctive words
+  (SPEC §11 Served text).
