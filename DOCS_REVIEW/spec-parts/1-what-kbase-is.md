@@ -1,6 +1,6 @@
 ## 1. What kbase is
 
-kbase is a Go program that builds, maintains and scores a knowledge base (KB) from LaTeX papers.
+kbase is a program that builds, maintains and scores a knowledge base (KB) from LaTeX papers.
 `kbase build` reads one or more papers, each given as its top `.tex` file, through pandoc (§2) and
 writes one KB: a directory of Markdown files that describes the papers' structure and the argument
 they make, as a graph of claims (§10). The build derives its draft from the LaTeX deterministically,
@@ -61,13 +61,13 @@ one run with a filter.
 | Byte-equal | Reader that needs it |
 |---|---|
 | Statement markers, `<!-- kbase-id: <id> -->` attached with no space ([§10](#statements-and-anchors)) | The marker reader; the add ops' and `move-node`'s locate and splice |
-| `.index/format.yaml` | `kbload`'s format-version read — the version is the bytes the file contains — and every save, which rewrites it only where its bytes change |
-| Summary pages, `kb-summary.md` ([§10](#documents-of-a-kb)) | `verify`'s freshness check (`register-freshness`: each page rendered in memory and compared with the bytes on disk) |
+| `.index/format.yaml` | The format-version read — the version is the bytes the file contains — and every save, which rewrites it only where its bytes change |
+| Summary pages, `kb-summary.md` ([§10](#documents-of-a-kb)) | `verify`'s freshness check (`register-freshness`: each page rendered in memory and compared with the bytes on disk); no person or session edits a page or takes a value from it |
 | `.index/nodes.yaml`, `.index/edges.yaml` | The write ops' idempotence: whole files rendered deterministically |
 | `kb-root/CLAUDE.md` exactly `@AGENTS.md` | The precheck of a write batch's rebuild of the derived views and of `update-format` (`check: agents-redirect`, [Stamped documents](#stamped-documents)) |
 | The `` ``` math `` fence opener | The inventory's display-maths fence reader |
-| The up-link line | `kb.UplinkMarker` and the readers that key on it |
-| The claim-graph sheets' DOT, against the DOT goldens (`internal/sheet/testdata/`) | The sheet writer's write-only-where-bytes-change rule: under the same `dot`, a re-render leaves an unchanged sheet's bytes as they are |
+| The up-link line | The readers that key on the up-link line |
+| The claim-graph sheets' DOT, against the DOT goldens | The sheet writer's write-only-where-bytes-change rule: under the same `dot`, a re-render leaves an unchanged sheet's bytes as they are |
 
 ### Stamped documents
 
@@ -81,7 +81,7 @@ subcommands. The stamped documents point a reader at kbase's tools, never at its
   and 4).
 - `CONVENTIONS.md` states that the records and the statement markers are written only by a write
   op, never by hand, and that no agent edits the block kbase maintains in a stamped document.
-- A summary page is generated as prose for people and sessions to read. kbase never reads one back,
+- A summary page is generated as prose for people and sessions to read. A person or session neither edits one nor takes a value from it, and kbase never reads one back,
   and `verify` reports a page whose bytes differ from the rendering (`register-freshness`).
 
 A **maintained block** is a generated region between marker comments: the lines from
@@ -509,7 +509,7 @@ A second run is `refused` with `check: lock`, `path` the running run's state dir
 its `detail` naming the running run's verb and pid: "a build (pid 4321) is running; its state-dir
 is …", or "a score run (pid 4321) is running; …". Where the run lock is held but names no state
 dir yet, the second run gets `retry`; where it names one whose run record is not yet written, the
-refusal says a run is starting. Every lock is advisory and exists on Unix only; on Windows `status`
+refusal says a run is starting. A run whose `--state-dir` store another repository's run holds gets `retry` (`check: lock`, `path` the store's lock file, `detail` naming the other run's verb, pid and start). `cancel`'s `retry` cases are at [§6](#kbase-cancel). Every lock is advisory and exists on Unix only; on Windows `status`
 cannot see a running run and no lock-based refusal or `retry` is given.
 
 A maintenance operation over an existing KB that runs no git command — the queries, `verify`,
@@ -618,7 +618,7 @@ run continues only when asked to, by `kbase build --resume` or `kbase score --re
 only the calls in flight, whose item is abandoned with nothing written for it: an answer already
 returned is kept — in a build's answer cache, and in a score run's ledger; a cancelled score run's
 `resume` is the call read from its result document. A store with no run is `refused`: `check:
-lock`, `path` the store's lock file, detail "no run holds the state store".
+lock`, `path` the store's lock file, detail "no run holds the state store". A run that holds the store but has not yet recorded itself, or that does not let go of it within 20 s of the signal, is `retry` (`check: lock`, `path` the store's lock file).
 
 ### `kbase wait`
 
@@ -757,7 +757,7 @@ every entry name as `allowed`.
 |---|---|
 | `build` | `state-dir`; `roles` (one record per role the build resolved, in role order — `decision`, then `text` — in the role record's shape below; absent where it resolved none, as under `--no-inference`); `through` (absent where this invocation ran no stage); `no-inference`; `resumed` (bool); `restored` (paths reset to the last boundary); `stages` (list of `stage`, `commit` — null if unrecorded — `dropped` (step ids), `report` (path to the stage's full findings in the state store); absent where this invocation ran no stage); `resume` (the call that continues the build, written as `remedy` writes a command: at the command line `kbase build` with `--resume` and the flags the invocation was given that a resume still needs, all in name order — `--no-inference` where given, `--ask-concurrency` where given, `--state-dir`, `--config-dir` and `--project-dir` where given, `--config-dir` written absolute; over MCP the `build` tool's call with `resume: true` and the same arguments but `config-dir`, which no tool takes — never the inputs or `--through`; absent where an identical retry continues nothing: `done`, `unchanged`, `bounded`, `retry`, a `failed` or `cancelled` run that ran no stage, and a `refused` run that recorded no boundary) |
 | `status` | `state-dir`; `state` (the build `state` vocabulary of [§6](#kbase-status), `interrupted` included); `pid`; `started`; `updated`; `ended`; `no-inference`; `stages` (a mapping: `done`, `not-done`, `rewind`); `current` (`stage`, `units-done`, `units-total`); `recent-refusals`, `recent-fallbacks` (items, the newest 10 of each); `cache-entries`, `cache-bytes` (integers: the answer cache's entry count and total size in bytes, §6); `resume` (null for `finished`, `running` and `bounded`; read from the run §6 names, written as `build`'s for the interface reading it; `recent-refusals` items are written so too, an item an earlier kbase recorded as written) |
-| `cancel` | `state-dir`; `pid`; `resume` (written as `build`'s; absent where the record's command does not parse as a `kbase build` invocation, §6) |
+| `cancel` | `state-dir`; `pid`; `resume` (written as `build`'s; absent where the record's command does not parse as a `kbase build` invocation, §6; for a cancelled scoring run, the `resume` its own result document holds, null where it holds none, [§6](#kbase-cancel)) |
 | `build-trail` | `state-dir`; `head`; `boundaries` (oldest first: `stage`, `commit`, `subject`, `command`); `started-at` (`commit`, `command`; null where none is recorded); `dirty` (`false`, or the changed paths, the first 20 named and the rest counted) ([§6](#kbase-build-trail)) |
 | `init` | `written` (every path this call wrote — the scaffold, the two empty record files, the stamped documents and the output of the rebuild of the derived views, merged, deduplicated, path-sorted); `removed` (as `update-format`'s; `[]` on create) |
 | `update-format` | `written` (includes every summary page, sheet and maintained-block document written); `removed` (files the KB no longer calls for — a summary page no node is rendered on, a sheet the volume-count rule drops, a file a format migration made obsolete (§10) — kb-root-relative inside `kb-root/`, repository-relative beside it; `[]` when none); `unfenced`; `sheet` (`drawn` where the sheets were rendered this call, else `not-drawn`: nothing was drawn, whether or not a sheet exists); `dot` (`"not found on PATH"`, present only when `sheet` is `not-drawn`); `commits` (as a write batch's); `uncommitted` (as a write batch's); and, where the format changed, `ids` (`from`, `to`: each work's and axiom's `3.0.0` id and the id minted in its place), `bare-ids` (`path`, `line`, `id`), `no-edge` and `strengthen-by` (`id`, `text`). `unfenced` onward are present only on `done` and `unchanged` |
@@ -832,6 +832,6 @@ per-stage detail goes to the `report` file, not stdout.
 |---|---|---|
 | `done`, `unchanged`, `bounded` | 0 | Success, including a `--through`-bounded run |
 | `refused` (including verify faults and usage errors) | 1 | Wrong input or KB state; nothing written past the last checkpoint |
-| `retry` | 2 | Another writer holds the KB write lock past the wait (`check: lock`, `path` the repository root), or a run holds the run lock but has not yet recorded its state dir (§6); retry identically later. A run that holds the run lock and has recorded its state dir is not `retry`: it is `refused` with the `lock` item (§6) |
+| `retry` | 2 | `check: lock` where another writer holds the KB write lock past the wait (`path` the repository root); a run holds the run lock but has not yet recorded its state dir; another repository's run holds a state store shared through `--state-dir`; or `cancel` finds the run not yet recorded, or the run does not let go within the wait (§6); retry identically later. A run that holds the run lock and has recorded its state dir is not `retry`: it is `refused` with the `lock` item (§6) |
 | `failed` | 3 | Defect in the tool, its input or the environment; retrying will not fix it |
 | `cancelled` | 4 | Stopped on request; resumable |

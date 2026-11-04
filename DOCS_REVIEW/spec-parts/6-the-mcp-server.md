@@ -31,7 +31,7 @@
   - *exited*: the run's own document, `isError` set by its outcome (§7).
   - *still starting at the bound*: outcome `done` with `state: starting`, `state-dir`, `pid` and `wait`. The run keeps running, and `status` follows it.
 
-  `wait` is the shell command that runs the server's own executable as `wait [--project-dir <root>] --state-dir <store> --pid <pid>`, with `--project-dir` where the call named one, shell-joined as `status` joins its `resume` (§6). It returns when the run is over and prints that store's `status` document ([§6](#kbase-wait)), so a session runs it in the background and is woken when it exits. `status` and `cancel` follow the start.
+  `wait` is the shell command that runs the server's own executable as `wait [--project-dir <root>] --state-dir <store> --pid <pid>`, with `--project-dir` where the call named one, shell-joined as `status` joins its `resume` (§6). It returns when the run is over and prints the run's document: for a build, the store's `status` document; for a scoring run, the run's own result document ([§6](#kbase-wait)), so a session runs it in the background and is woken when it exits. `status` and `cancel` follow the start.
 
   `score`'s `edge` argument is a mapping of `source`, `target` and `relation`, each a required string and no other key allowed, which the run receives as `--edge <source>,<target>,<relation>`. A value holding a comma is refused at `edge`, `check: usage`, and starts no process.
 - **`build-trail`** is a read-only tool; its result, refusals and commands are defined in [§6](#kbase-build-trail).

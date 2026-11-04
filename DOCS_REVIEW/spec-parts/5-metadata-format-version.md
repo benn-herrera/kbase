@@ -71,8 +71,7 @@ mappings, a block list of scalars as a mapping's value, plain or double-quoted s
 tags, folded or multi-line scalars; flow style only for a list of scalars (`[clm-a, clm-b]`) and an
 empty list or mapping (`[]`, `{}`); a scalar is never wrapped. A reader of the dialect, in any
 language, is conformant when it reads the record files of the `4.0.0` golden trees
-(`internal/formats/testdata/*-4.0.0/`) to the values their decoded-values goldens
-(`*-4.0.0.values.jsonl`) hold.
+to the values their decoded-values goldens hold.
 
 ### Recognising frontmatter
 
@@ -91,7 +90,7 @@ A KB lives at `kb-root/` beside the repository's `.git`. It holds kbase's record
 `kb-build-classification.yaml`, `kb-build-unmarked.yaml` and `kb-build-cull.yaml`), the sheets (§3),
 and Markdown documents of these classes:
 
-- the entry point, `entry-point.md`;
+- the entry point, `entry-point.md`, which lists every volume;
 - index documents: every other document whose body names a child on a child-list line, a bulleted
   list item whose content is one or more links to `.md` documents (conventionally `index.md`);
 - `axioms.md` (Axioms);
@@ -121,10 +120,14 @@ are never read back. `verify` renders each in memory and compares bytes; a diffe
 - Every link a page renders is computed from each node's derived page and anchor. A prose link
   `<page>#<anchor>` holds while its node stays on that page with that anchor, and `verify`'s
   `dead-link` check reports one that no longer does ([§8](#verify)).
-- What an entry shows is presentation: the node's current state — the leaves that host it, its rigor
-  (marked where manually scored), every edge into it with the source's title, strength and bearing,
-  the demoted records into it, its rationale and, for a claim or an analysis, a `### Strength`
-  section with its derived strength line and trace. An experiment's entry shows its `status`.
+- What an entry shows is presentation: the node's current state — the leaves that host it, then
+  its authored values under `### Rigor`: an experiment's `status`, the rigor (marked where manually
+  scored), the edge lists and the rationale where the node has them. Only a claim's and an analysis's
+  entry has edge lists: the `supports` and `founds` edges, the `lifts` edges, the `refutes` edges and
+  the demoted records into the node, and the `references` edges out of it, each with the other end's
+  title, its strength where the edge is a scoring edge and the other end has one, and the bearing.
+  A claim's or an analysis's entry then has a `### Strength` section with its derived strength line
+  and trace; no other kind's entry does.
 
 ### The record files
 
@@ -135,8 +138,9 @@ field its type has is present and any other field is refused; an empty value is 
 double-quoted, escaping `\`, `"`, every control character below U+0020 but tab, and the characters a
 YAML reader would take as a line break or refuse as unprintable, as `\uXXXX`; a string holds no line
 break, and a stored prose value has each whitespace run collapsed to one space, its ends trimmed —
-an op's `unchanged` test compares the collapsed value. Numbers are plain decimals, the shortest that
-parses back as the value, with at least one fractional digit (`1.0`, `0.85`); booleans `true` and
+an op's `unchanged` test compares the collapsed value. Numbers are written in the shortest form that
+parses back as the value (Python's float repr): a plain decimal with at least one fractional digit
+(`1.0`, `0.85`), except below 1e-4, where it is exponent form (`5e-05`); booleans `true` and
 `false`; keys in the type's field order. Nodes are written in `id` byte order and edges by identity —
 `relation` in the order `supports`, `founds`, `lifts`, `refutes`, `references`, `demoted`, a
 `demoted` record's `replaced-relation` in the same order, then `source`, then `target`. Every
@@ -191,10 +195,12 @@ marker, and an axiom or work id in a marker hosts nothing.
 `line` (1-based) and `snippet`. The `line` is the line the op acts on. The `snippet` is a short piece
 of text that the line, with each whitespace run collapsed to one space, must contain; it verifies the
 line, so it need not be unique in the document. A `line` past the end of the document is refused at
-`line`. A line that does not contain the snippet is refused at `snippet`, and the refusal names up
-to five lines holding it, those nearest the named line, since the document has likely changed since
-the caller read it. An op that places a marker also refuses a fenced block's opening or closing line
-(a display-maths fence included) at `line`, naming the line. Each op's own refusals are stated with
+`line`, the remedy to re-read the document and name a line in it. A line that does not contain the
+snippet is refused at `snippet`, and the refusal names up to five lines holding it, those nearest the
+named line, since the document has likely changed since the caller read it; the remedy is to re-read
+the document and name the line holding the snippet. An op that places a marker also refuses a fenced
+block's opening or closing line (a display-maths fence included) at `line`, naming the line, the
+remedy to name another line. Each op's own refusals are stated with
 the op ([§8](#add-kind), [§8](#move-node), [§8](#add-citation)).
 
 **Reading.** A heading's *section* runs from the line after the heading to the next heading as deep
@@ -757,7 +763,7 @@ cycles were removed at different relations between them.
 
 The build breaks the cycles its own edges close, within the stage that writes them, by one
 depth-first search; a cycle the records hold at load is a load error (The load). Cycle breaking
-removes the back edge the search finds, replacing it with its `demoted` record.
+removes the first `supports` edge into an analysis on the cycle where there is one, else the back edge the search finds, replacing it with its `demoted` record.
 
 - The search order is the node order of the summary pages, which no minted id decides, so a build's
   removals are reproducible modulo ids ([§5](#determinism)): hosted nodes in the reading order of

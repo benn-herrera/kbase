@@ -1,6 +1,6 @@
 ## 8. Maintenance subcommands
 
-Every subcommand below is reachable by an external agent harness as an MCP tool: a tool of its own, an operation of the `query` tool, or, for a write op, an entry of the `write` tool's batch (§11). `score` starts a detached child that makes one model call per item and returns at once with the run's identity, so the turn is not held for the run's duration (§11). The rules in this section govern each.
+Every subcommand below is reachable by an external agent harness as an MCP tool: a tool of its own, an operation of the `query` tool, or, for a write op, an entry of the `write` tool's batch (§11). `score` starts a detached child that makes one model call per item and returns once the run has started, with the run's identity, so the turn is not held for the run's duration ([§11](#tools) states the wait). The rules in this section govern each.
 
 ### Write batches
 
@@ -16,7 +16,7 @@ Every write goes through a batch, on every interface. An entry is one item of a 
 
 **Two phases.** Before anything applies, every entry's shape is checked: an unknown op, an unknown or missing key, a value's type, and a value outside a fixed set (`relation`, `status`, …). Every shape error is reported at once. Then the entries apply in order, each checked in full against the records as they are at that point, and the batch stops at the first refusal. An entry that would leave the records invalid is refused even if a later entry would repair it; the refusal's remedy names the order that works. No separate end-of-batch check exists. Each refusal item has the keys of [§7](#item), with `entry` the entry's 1-based position in the batch.
 
-**All or nothing.** A batch that is refused or fails writes nothing. The rebuild of the derived views is part of the batch, so the records are never written while their derived views are stale. A crash between the writes of two files is not atomic on disk; git recovers that case ([Git holds the recoverable record](#git-holds-the-recoverable-record)).
+**All or nothing.** A batch that is refused or fails writes nothing. The rebuild of the derived views is part of the batch, so the records are never written while their derived views are stale. Each file a batch writes is replaced atomically — written whole, then renamed into place — so a crash leaves each file either old or new. A crash between the writes of two files is not atomic across files; git recovers that case ([Git holds the recoverable record](#git-holds-the-recoverable-record)).
 
 **Refused before it applies.** A batch is refused, whatever its entries, over:
 - a KB whose load fails (`check: metadata`, [§10](#the-load-every-fault-refused));
@@ -24,7 +24,7 @@ Every write goes through a batch, on every interface. An entry is one item of a 
 - a lock ([One write lock](#one-write-lock));
 - a `kb-root/CLAUDE.md` that is not the redirect (`check: agents-redirect`, [§3](#stamped-documents)).
 
-**Dry run.** `dry-run: true` does everything but write. Its result is identical to a real run's, refusals and removed edges included, and says `dry-run: true`.
+**Dry run.** `dry-run: true` does everything but write. Its result is identical to a real run's, refusals and removed edges included, and says `dry-run: true`. A dry run never commits: with `commit` given it makes no commit, and its result's `commits` is empty.
 
 **Result.** The result's keys are the `write` row of [§7](#item). An entry's outcome is `done` or `unchanged`. The batch outcome is `unchanged` where every entry is `unchanged` and the rebuild of the derived views wrote nothing, and `done` otherwise.
 
@@ -64,7 +64,7 @@ Every write batch is followed by the rebuild of the derived views (strengths, su
 
 A write batch and `update-format` hold the KB write lock for the whole run: from loading the KB to the result, the rebuild of the derived views included. `init` holds it from before `kb-root/` exists — the lock sits on the directory that contains `kb-root/`, so it is available at creation — through the scaffold, the final rebuild and the initial commit to the result. `score` takes it around writing its results — every value the run produced, after the item loop — and around its rebuild at the start, never across the run ([§8](#writing-the-results)).
 
-A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the repository root, and the remedy. A write verb probes for a run holding the run lock ([§6](#git-holds-the-recoverable-record)) before it waits on the write lock and again after taking it: where one runs, the verb is `refused` with the `lock` item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes (`retry` if it cannot). A scoring run's own writes make no run-lock probe, writing as the run that holds it. `verify` and the queries take no lock. On Windows no advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and the operator must keep to one writer at a time.
+A writer that cannot take it within 30 s gets `retry` with `check: lock`, `path` the repository root, and the remedy. A write verb probes for a run holding the run lock ([§6](#git-holds-the-recoverable-record)) before it waits on the write lock and again after taking it: where one runs, the verb is `refused` with the `lock` item at once, taking no wait. A build waits out a write in progress, up to the same 30 s, before it writes (`retry` if it cannot); its own writes take no KB write lock. A scoring run's own writes make no run-lock probe, writing as the run that holds it. `verify` and the queries take no lock. On Windows no advisory lock exists (§6): neither the `retry` nor the run-running refusal is available there, and the operator must keep to one writer at a time.
 
 #### Write ops
 

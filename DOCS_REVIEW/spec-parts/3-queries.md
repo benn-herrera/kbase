@@ -93,7 +93,7 @@ A node's strength here is its derived strength for a claim or an analysis, and i
 kbase export-latex [--out DIR] [--volume NAME]...
 ```
 
-Writes a LaTeX project from the KB's current state into `--out` (default `latex-export/` beside `kb-root/`; a relative `--out` resolves against the project root (§9)). The KB is read under the format-version rules defined in §10; nothing under `kb-root/` is written; a KB whose load fails is refused with the load error. `--volume` is repeatable, each naming a volume ([§10](#documents-of-a-kb)); the named volumes export in entry-point order. A `--volume` that is not a volume is a usage refusal, `allowed` every volume, and so is one naming a volume the entry point's list does not name, which the export does not reach (§7). The out directory may be any directory, the author's own LaTeX project included: kbase owns only its `gen-tex/` subdirectory and writes nothing else there but a missing `preamble.tex`. **Manifest refusal.** A `gen-tex/` that exists holding files without the export manifest `gen-tex/kbase-export.yaml` is refused whole, nothing written — `check: export-dir`, remedy: empty the directory or name another `--out`.
+Writes a LaTeX project from the KB's current state into `--out` (default `latex-export/` beside `kb-root/`; a relative `--out` resolves against the project root (§9)). The KB is read under the format-version rules defined in §10; nothing under `kb-root/` is written; a KB whose load fails is refused with the load error. `--volume` is repeatable, each naming a volume ([§10](#documents-of-a-kb)); the named volumes export in entry-point order, and with no `--volume` every volume exports. A missing or out-of-range pandoc (§2) is refused `check: pandoc` before any write; any other pandoc error is `failed`. A `--volume` that is not a volume is a usage refusal, `allowed` every volume, and so is one naming a volume the entry point's list does not name, which the export does not reach (§7). The out directory may be any directory, the author's own LaTeX project included: kbase owns only its `gen-tex/` subdirectory and writes nothing else there but a missing `preamble.tex`. **Manifest refusal.** A `gen-tex/` that exists holding files without the export manifest `gen-tex/kbase-export.yaml` is refused whole, nothing written — `check: export-dir`, remedy: empty the directory or name another `--out`.
 
 #### The project
 
@@ -217,7 +217,7 @@ A KB whose load fails ([§10](#the-load-every-fault-refused)) is refused before 
 
 #### Outcomes
 
-`done` when the run finished; `cancelled` when SIGINT or SIGTERM stopped it, with no line recorded for an item whose call was in flight or not yet made, and a line for every item answered before the stop; `failed` when an item's call or write failed, or the start rebuild did; `retry` while another run holds the run lock and has not yet recorded itself (§6), or where the start rebuild could not take the KB write lock past the wait; `refused` where the run cannot go on:
+`done` when the run finished; `cancelled` when SIGINT or SIGTERM stopped it, with no line recorded for an item whose call was in flight or not yet made, and a line for every item answered before the stop; `failed` when an item's call or write failed, or the start rebuild did; `retry` (`check: lock`, [§6](#git-holds-the-recoverable-record)) while another run holds the run lock and has not yet recorded itself, while another repository's run holds a state store shared through `--state-dir`, or where the start rebuild could not take the KB write lock past the wait; `refused` where the run cannot go on:
 - no scoring role in the configuration or the arguments (`key: models.scoring`);
 - a `--pass` outside `rigor`, `bearing` and `all`; `--pass` beside `--node` or `--edge`, since a named item's pass follows from its kind; `--node` beside `--edge`; an `--edge` that is not three non-empty comma-separated parts; `--provider`; an `--ask-concurrency` under 1 — each `check: usage`;
 - `--node` naming a work or an axiom, and `--edge` naming a `founds`, `references` or `demoted` edge, since no pass scores them (`check: usage`);
@@ -226,7 +226,7 @@ A KB whose load fails ([§10](#the-load-every-fault-refused)) is refused before 
 - a `--resume` the list under [The ledger and resume](#the-ledger-and-resume) refuses;
 - a run already holding the run lock ([The run's locks](#the-runs-locks));
 - a pending conversion, and a load error ([Refresh and format](#refresh-and-format));
-- a `--state-dir` inside `kb-root/` (`check: state-dir`).
+- a `--state-dir` inside `kb-root/` (`check: usage`, [§6](#git-holds-the-recoverable-record)).
 
 #### The closing record
 
