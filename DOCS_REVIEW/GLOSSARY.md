@@ -97,12 +97,12 @@ These name novel concepts. Never replace them. Each definition is written once, 
 | Term | Definition | Written once, at |
 |---|---|---|
 | cull, "culled into" | merge; the survivor of a chain of merges is its root (union-find) | SPEC §5 Co-linearity cull |
-| `demoted` | a tombstone for an edge removed to break a cycle; `restore-demoted` undoes it | SPEC §10 Cycles |
+| `demoted` | a tombstone for an edge removed to break a cycle; `restore-demoted` undoes it | SPEC §10 The `demoted` relation |
 | "station" | which term of the formula (min, max, cap) an edge feeds | STRENGTH scheme |
 | `*pending*` | a null with its own propagation rules (`max(⊥, x) = x`, `min(⊥, c) = ⊥`) | STRENGTH scheme |
 | band ladder, rung | threshold buckets, each an inclusive lower bound | SPEC §10 The band ladder |
 | "judged hash" | the input hash a value was scored against; a changed hash marks the value stale | SPEC §10 Provenance and the judged hash |
-| "maintained block" | a generated region between marker comments | SPEC §10 Documents of a KB |
+| "maintained block" | a generated region between marker comments | SPEC §3 Stamped documents |
 | "family tool" | one MCP tool with an `operation` argument | SPEC §11 |
 | "sheet" | a rendered claim-graph diagram (SVG) | SPEC §3 `claim-graph.svg` |
 | "host" | the document holding a node's statement | SPEC §10 Statements and anchors |
