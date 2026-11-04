@@ -311,3 +311,8 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
 - Code: leaf discovery excludes names SPEC does not state (`internal/kb/kb.go` `ExcludeDirs`,
   `ExcludeNames`: `session/`, `tools/`, `invariants.md`, `claim-quality-closure-roadmap.md`). Align
   the code with SPEC's leaf definition.
+- Code: rename the decision-API setting on every interface — `providers.toml` key `decisionApi`,
+  `configure-providers` flag `--decision-api`, `show-config` field `decision-api` — with no alias for
+  the old names.
+- Code: the `trace` help carries the hint that `trace` sorted by contribution shows what would
+  strengthen a node, and the edge-op help carries the bearing-copy advice (SPEC §11 Served text).

@@ -85,7 +85,7 @@ term. Source: `SURVEY-vocabulary.md`, which holds each term's senses and example
 | "stamp" | format version (the stamp) · write if absent (template documents) · records ("stamps `ask_sha256`", AR:839) |
 | "spine", "skeleton" | keep "spine" in THESIS (the argument's backbone) · navigation tree · scaffold (`init`) |
 | "seam" | interface, named by what it injects (the `Write` interface, the model-call interface) |
-| "surface" | interface (CLI vs MCP only) · public operations (AR:523, SP:2529) · API flavour (AR:2068) · decision endpoint ("decision surface") |
+| "surface" | interface (CLI vs MCP only) · public operations (AR:523, SP:2529) · API flavour (AR:2068) · decision API ("decision surface") |
 | "spelled", "spelling", "spells" | formatted as (output form, SP:636) · write out as a literal ("Never spell a relation", CV:249) · write as (CV:387) · its formatting (CV:311) |
 | "mechanical" | deterministic, no model (THESIS keeps "mechanical draft") · rote (dispatch rating) |
 
