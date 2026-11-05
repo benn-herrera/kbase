@@ -268,7 +268,7 @@ undice tree monolith: _docdicer
 [doc("check every relative link and #anchor under PROJECT_DOCS and the top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
 check-links: _docdicer
     @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS *.md
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS NEW_MCP_CLI_DESIGN NEW_MCP_CLI_PLAN
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS
 
 [private]
 _docdicer:
