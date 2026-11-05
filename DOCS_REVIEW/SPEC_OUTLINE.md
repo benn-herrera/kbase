@@ -315,8 +315,9 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
   `configure-providers` flag `--decision-api`, `show-config` field `decision-api` — with no alias for
   the old names.
 - Code: an identical add (one that would change no byte of `kb-root/`) is `unchanged`, reporting the
-  existing item; a differing add stays refused (SPEC §8 Idempotence, `add-<kind>`, Edge ops). The
-  same change updates ARCHITECTURE invariant I6 and its detail.
+  existing item; a differing add stays refused (SPEC §8 Idempotence, `add-<kind>`, Edge ops). An
+  identical `add-citation` (the line already holds exactly the link it would write) is `unchanged`
+  too (SPEC §8 `add-citation`). The same change updates ARCHITECTURE invariant I6 and its detail.
 - Code: one retry rule for every model call. A call that did not get through (transport error, 429,
   5xx, an undecodable response body) waits 5 s, then 30 s, before its next attempt. A retry that
   changes the ask because the answer came back flawed (refused, malformed, failing its check) goes out

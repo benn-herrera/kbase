@@ -895,7 +895,7 @@ Each op's key set is closed and stated with the op below. A refusal names the ke
 
 Every op that names something existing first looks it up, and is refused where the lookup fails, with one error everywhere: `no node <id>` or `no edge <relation> <source> → <target>`. The rule covers every op naming an existing node, edge, demoted record, provider entry or stored key: the edits, `move-node`, the removals, `restore-demoted` (which looks up a demoted record), `add-citation`'s cited node, `show`, `edges`, `trace`, `citations-of`, `score`'s `node` and `edge`, `configure-providers --remove` and `auth remove` ([§8](#show), [§8](#edges), [§8](#trace), [§8](#citations-of), [§8](#score), [§9](#provider-commands)).
 - A lookup matches exactly; there is no near-miss matching.
-- A removal is a lookup that can fail. Nothing records what was removed, so a repeated removal and a removal of something that never existed cannot be told apart; both are refused.
+- A removal is a lookup that can fail. Nothing records what was removed, so a repeated removal and a removal of something that never existed cannot be told apart; both are refused. A restore is refused on repeat for the same reason: it consumes the demoted record, and the edge it leaves is indistinguishable from one added directly.
 - The remedy of a refusal points at the query that lists what exists: `find` for nodes, `edges` for edges.
 
 An add looks up first too. Where the item is not found, it is created. Where it is found:
@@ -904,7 +904,7 @@ An add looks up first too. Where the item is not found, it is created. Where it 
 
 An edit that changes nothing, because every value given is already the current one, is `unchanged`: the item exists, and the caller asked for a state the KB is already in. Each batch entry reports its own outcome, so an `unchanged` entry is never hidden in a `done` batch.
 
-So for `add-<kind>` ([§8](#add-kind)), `edit-<kind>` ([§8](#edit-kind)), the edge writes ([§8](#edge-ops)), `restore-demoted` ([§8](#restore-demoted)), `remove-node` ([§8](#remove-node)), `move-node` ([§8](#move-node)) and `add-citation` ([§8](#add-citation)): a repeated removal, restore or citation is refused, and a repeated add, edit or move is `unchanged`, each leaving `kb-root/` byte-identical. There are two exceptions. `init` creates once: a repeat where a `kb-root/` exists is `refused`, never `unchanged`. `update-format` requires a clean `kb-root/`, so a repeat before its output is committed — by its own `commit` or by hand — is refused `dirty-paths`; over a clean tree it already converted, it reports `unchanged`.
+So for `add-<kind>` ([§8](#add-kind)), `edit-<kind>` ([§8](#edit-kind)), the edge writes ([§8](#edge-ops)), `restore-demoted` ([§8](#restore-demoted)), `remove-node` ([§8](#remove-node)), `move-node` ([§8](#move-node)) and `add-citation` ([§8](#add-citation)): a repeated removal or restore is refused, and a repeated add, edit, move or citation is `unchanged`, each leaving `kb-root/` byte-identical. There are two exceptions. `init` creates once: a repeat where a `kb-root/` exists is `refused`, never `unchanged`. `update-format` requires a clean `kb-root/`, so a repeat before its output is committed — by its own `commit` or by hand — is refused `dirty-paths`; over a clean tree it already converted, it reports `unchanged`.
 
 #### Writes leave nothing stale
 
@@ -1117,7 +1117,7 @@ kbase citations need no rewrite, since they name the node by id and the naming f
 
 **Refusals**:
 - `document` is any document of the KB, kb-root-relative; a summary page, which kbase renders, is none and is refused at `document`;
-- a `line` past the document's end: at `line`. A `snippet` the line does not contain is refused at `snippet`; a citation already in place is no match, so a repeated entry is refused as a line that does not contain the snippet;
+- a `line` past the document's end: at `line`. A `snippet` the line does not contain is refused at `snippet`. An identical repeat — the named line already holds, in place of the snippet, exactly the link this entry would write — is `unchanged` ([§8](#idempotence)); a citation of the snippet's text in another form or to another node is no match, and is refused as a line that does not contain the snippet;
 - an `id` no node has: `check: unknown-id` at `id`, `detail` `no node <id>`, as an edit's is ([§8](#edit-kind));
 - a hosted node with no statement marker, which has no link target: `check: statement-marker` at `id`;
 - a quote or a paraphrase of a work or an axiom: at `snippet`, the remedy naming the naming form;
