@@ -29,6 +29,10 @@ Finished items are deleted, not archived.
 
 ## Claim graph
 
+- Strength that does not compound with chain depth, so the same points arranged in more or fewer
+  steps score alike (THESIS: arrangement-invariant): see
+  [PROPOSED_REVISED_STRENGTH_SCORING_SCHEME](ROADMAP_PLANS/PROPOSED_REVISED_STRENGTH_SCORING_SCHEME.md)
+  §5, "The combination".
 - A `definition` node. A definition is context today: no node, no edge, no score, and a claim's
   dependence on a definition is unrecorded.
   - Why it matters: a definition compresses a construct into a short handle that claims then use, so
