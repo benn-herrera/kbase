@@ -265,9 +265,9 @@ dice-docs manifest src work: _docdicer
 undice tree monolith: _docdicer
     @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer undice "{{tree}}" "{{monolith}}"
 
-[doc("check every relative link and #anchor under PROJECT_DOCS and the top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
+[doc("check every relative link and #anchor under PROJECT_DOCS, docs and the top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
 check-links: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS *.md
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS docs *.md
     @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS
 
 [private]
