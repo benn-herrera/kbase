@@ -192,8 +192,6 @@ These steer choices the invariants leave open.
   are regenerable and freshness-checked. Ids are minted randomly, hence "modulo ids".
 - **Pattern:** Reuse an existing parser. **No LaTeX parser is written here, partial or whole.** The
   reader is pandoc.
-- **The kbase and personant integration is the target.** A prior decision that prevents it is
-  removed, not designed around.
 - **Pattern:** Self-describing API. **The served text is the operating contract.** What an agent needs
   to drive kbase reaches it from kbase itself: a command's own facts in its help; rules spanning
   commands in the MCP instructions, kept short because every session reads them; longer guidance as
