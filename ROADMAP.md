@@ -48,6 +48,19 @@ Finished items are deleted, not archived.
     of one today and a definition is incidental prose; and how it composes with the existing faults
     that already touch definitions indirectly (`flt-equivocation`, `flt-referent`).
 
+## MCP served text
+
+- The always-loaded text is too large: every session carries `tools/list` and the instructions in
+  context before doing any work, about 18.5K characters at 16 tools (`tools/list` 16.8K, of which
+  input schemas 12.1K; instructions 1.7K). `just measure-mcp-surface` measures it.
+  - Direction: make it hierarchical, indexed or otherwise loaded on demand, so a session carries a
+    small index and reads the detail it needs (the help resources already hold the detail), rather
+    than every schema in full on every turn.
+  - Known contributors: the `project-dir` description, 169 characters repeated in all 16 tools (2.7K);
+    a fixed overhead per tool, so fewer tools cost less.
+  - Open trade-off: SPEC states every op's keys; typing each write op's entries strictly in the `write`
+    tool's schema would grow the always-loaded text, against loose typing with the detail in help.
+
 ## Reader fidelity
 
 - Display names from `\input`-ed preambles.
