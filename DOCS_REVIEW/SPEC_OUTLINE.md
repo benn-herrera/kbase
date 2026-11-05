@@ -317,6 +317,11 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
 - Code: an identical add (one that would change no byte of `kb-root/`) is `unchanged`, reporting the
   existing item; a differing add stays refused (SPEC §8 Idempotence, `add-<kind>`, Edge ops). The
   same change updates ARCHITECTURE invariant I6 and its detail.
+- Code: one retry rule for every model call. A call that did not get through (transport error, 429,
+  5xx, an undecodable response body) waits 5 s, then 30 s, before its next attempt. A retry that
+  changes the ask because the answer came back flawed (refused, malformed, failing its check) goes out
+  at once. Decision calls currently retry comms failures at once (`internal/model/decision.go`); bring
+  them in line. ARCHITECTURE §7 Retry and §12 Constants change with it.
 - ARCHITECTURE: the `claims-declared` and `claims-discovered` stages have no mechanism section — which
   environments become claims, how prose is chunked for the model, what it is asked, and how answers
   become nodes (`internal/claimgraph`).
