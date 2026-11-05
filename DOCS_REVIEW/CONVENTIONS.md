@@ -10,9 +10,9 @@ Must-see:
 - Coding
   - When accepting dispatched-agent work, follow [CONVENTIONS, Coordinator Policy](#coordinator-policy)
   - Audit the diff, not the report, before commit
-- Briefing a seat
-  - A brief adds the task's facts to the seat's definition; it never widens or replaces the seat's question
-  - Before briefing a seat whose definition you have not read this session, read it
+- Briefing an agent role
+  - A brief adds the task's facts to the agent role's definition; it never widens or replaces the role's question
+  - Before briefing an agent role whose definition you have not read this session, read it
 
 ## Project Overview
 kbase is a Go binary that builds a knowledge base (KB) from a LaTeX document set — or creates one
@@ -26,7 +26,7 @@ inference invocation. The contract is SPEC.md; how this implementation meets it 
 Run `just` (the default recipe) for the up-to-date recipe list with docstrings — that output, not
 this file, is the reference for available actions. Key habits: `just edit-gate` after every change,
 `just checkpoint` at checkpoints, and anything LIVE (provider + network) is excluded from the
-hermetic `just test-integration` omnibus and says so in its docstring.
+hermetic `just test-integration` aggregate target and says so in its docstring.
 
 kbase is distributed through the Homebrew tap `benn-herrera/kbase`, whose formula is maintained in
 the sibling clone `homebrew-kbase/` (`just tap`). The formula builds a tagged release from source
@@ -64,10 +64,10 @@ them. Working rules for packages that carry over:
 - **cmd/**: verb logic lives behind a plain options-struct function; the cobra `RunE` is a thin
   loader shell, so verbs unit-test without process/network.
 - **internal/config**: loaders take explicit paths (tests never touch a real home). Per-entry
-  provider faults never abort the pool; fault reasons carry no key material. Resolution is pure and
+  provider faults never abort the pool; fault reasons contain no key material. Resolution is pure and
   lives here alone — `Resolve`, `Select` — and reads no file, opens no client and writes no
   stderr (a refusal's remedy may name the command that fixes it, such as `kbase configure-models`). The package imports no kbase package but
-  `atomicfile`, `result` (it refuses in `result.Refusal`, each item carrying its check),
+  `atomicfile`, `result` (it refuses in `result.Refusal`, each item with its check),
   `argmark` (a refusal names an argument or a remedy's call in its marked form) and `secret` (a
   key is a `secret.Key`), never
   `model` or `log`: it returns its faults as data, so each caller decides whether one is a warning
@@ -76,24 +76,24 @@ them. Working rules for packages that carry over:
   reference back. No site splits an id or concatenates a reference by hand.
 - **internal/model**: `Endpoint{Name, BaseURL, APIKey, Protocol, Decisions, PromptCacheKey, IdleConns, Sampling}` is the
   transport-level slice of a provider — `Protocol` saying which client the registry builds
-  (the chat protocol the role's endpoint speaks, and always `openai` for the `decision` role), `Decisions` whether it speaks the Decisions shape (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run every OpenAI-surface
-  ask of it carries, and `IdleConns` the idle connections per host its client keeps (the invocation's
-  concurrency; zero leaves the defaults) — and the one mapping from configuration's vocabulary onto `Protocol`,
-  `Decisions` and `Sampling` (`chatProtocol`, `decisionsSurface`, `samplingOf`) lives in `internal/modelclient`. The chat asks — the overview and each scoring call — go through
-  a `Slot`'s `Chat`: one tool-less request, re-issued identically on an incomplete stream up to the
+  (the chat protocol the role's endpoint speaks, and always `openai` for the `decision` role), `Decisions` whether it speaks the Decisions shape (`systemone` unless the entry says `decisions`), and `PromptCacheKey` the run that every OpenAI-API model
+  call to it sends, and `IdleConns` the idle connections per host its client keeps (the invocation's
+  concurrency; zero leaves the defaults) — and the single source of the mapping from configuration's vocabulary onto `Protocol`,
+  `Decisions` and `Sampling` (`chatProtocol`, `decisionsSurface`, `samplingOf`) is `internal/modelclient`. The chat calls — the overview and each scoring call — go through
+  a `Slot`'s `Chat`: one tool-less request, retried identically on an incomplete stream up to the
   attempt count (ARCHITECTURE §12); an attempt cut off at the completion cap with no answer text is
   `ChatTruncatedEmpty` and ends the call on that attempt. An attempt's outcome is the classification of what ended it, and
   the two failures are not interchangeable: an endpoint that answered with a non-2xx status refused
   the request and is `ChatProviderRefused` (its `StatusError` matched with `errors.As`, its status and
   body in the reason), where `ChatTransportFailure` is a connection, a name, a certificate or a
   stream that failed with no answer — reading one as the other sends a diagnosis to the path to a
-  provider that is answering. The multichoice asks go through a `Slot`'s `Decision`, one `POST` to whichever
-  surface the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
-  closed-set question (`choice` or `noul`), answered by probabilities over the offered letters;
+  provider that is answering. The multichoice calls go through a `Slot`'s `Decision`, one `POST` to whichever
+  API flavour the endpoint names (ARCHITECTURE §7; SPEC §9.1): `systemone` asks `<base-url>/systemone` one
+  fixed-set question (`choice` or `noul`), answered by probabilities over the offered letters;
   `decisions` speaks the OpenAI Decisions shape at `<base-url>/decisions` — the state as `input`,
-  questions a named array with a `noul` asked as a `predicate` carrying no choices, its criteria
+  questions a named array with a `noul` asked as a `predicate` with no choices, its criteria
   folded into `instructions`, and an `answers` array where a `refusal` is unreadable and takes the
-  seam's re-ask/default path. Either surface is re-issued identically on a transport error or
+  retry-once-then-default path. Either API flavour is retried identically on a transport error or
   retry-class 5xx. API keys never appear in logs or error strings. The `[models]` keys are
   `decision`, `text` and `scoring`, and each is a `<provider>/<model>` reference.
 
@@ -122,14 +122,14 @@ single source. Working habits they impose:
   beside it. The one self-exec owner is a file, not a package: `internal/mcp/launch.go` alone may
   exec the kbase binary, and the test fails on any other file that does. Four owners are the whole
   list — pandoc, git, `dot` and that self-exec — and a process started anywhere else fails the
-  test. The policy scans share one module walk (`cmd/modulescan_test.go`), so they agree on which
+  test. The policy scans share one module traversal (`cmd/modulescan_test.go`), so they agree on which
   files are the module's source. The monopoly binds the shipped code: the scan skips test files,
   and a test may start the processes its fixtures need. A test needing a binary the environment
   does not guarantee still belongs in a runner recipe, under "Testing"'s tool-dependency rule.
-  Evidence gathered for the change at hand is not a verification but a
-  probe — a script run by hand in scratch, its log cited in the report, with no durable home. A
-  probe whose finding must keep holding becomes a verification: the check lands in a recipe. A
-  probe whose result a commit or plan cites keeps its command in the commit message, so a later
+  Evidence gathered for the change at hand is not a verification but an
+  exploratory check — a script run by hand in scratch, its log cited in the report, with no durable home. An
+  exploratory check whose finding must keep holding becomes a verification: the check is added to a recipe. An
+  exploratory check whose result a commit or plan cites keeps its command in the commit message, so a later
   reader can re-run it.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.
@@ -142,34 +142,34 @@ change lands in adjagent, and the set is reinstalled from it.
 
 JSONL for flat records, YAML for documents, TOML for flat configuration. One named departure (SPEC
 §10): the KB's two record files, `.index/nodes.yaml` and `.index/edges.yaml`, are each one YAML
-document, a block list of block mappings, so the whole metadata layer has one serialisation. The
-trap: a record spans several lines, so a line-oriented tool — `grep`, a line count, a line-wise
+document, a block list of block mappings, so the whole metadata layer has one serialisation.
+Pitfall: a record spans several lines, so a line-oriented tool — `grep`, a line count, a line-wise
 merge — sees fields, never whole records; read them through the record loader
 ([reads through `kb.Source`](#reads-through-kbsource)).
 ### Superseded format parsers
 
-A superseded format's parser lives in `internal/formats` and nowhere else (ARCHITECTURE I8;
-`cmd/importpolicy_test.go` enforces the import side). The trap: keeping a reader for the old form
+Numbered schema migrations: a superseded format's parser lives in `internal/formats` and nowhere else (ARCHITECTURE I8;
+`cmd/importpolicy_test.go` enforces the import side). Pitfall: keeping a reader for the old form
 "for compatibility" in `kb` or `index`, which is the multi-version reader the design forbids. A
 converter's test is a golden pair, old bytes in and new bytes out. A format package may change
 until a kbase release ships its version, and is frozen after. Frozen is what it accepts and what a
 conversion produces; its refusal and fault text may change.
 ### `kb-format` patch bumps
 
-A patch bump moves the stamp and every fixture that pins it. Two halves, both load-bearing.
+Schema versioning: a patch bump changes the format version and every fixture that pins it. Two halves, both load-bearing.
 
-- `kb.FormatVersion` moves, and every `.index/format.yaml` carrying the stamp — or a fixture whose
+- `kb.FormatVersion` changes, and every `.index/format.yaml` containing the format version — or a fixture whose
   bytes pin it, or a derived line the change rewrote — is rewritten in the same commit. The loader
-  reads any patch of the current minor as current, so no chain runs and no write is refused; only
-  the next `update-format` rewrites the stamp. So what moves under a fixture left behind is a leg
+  parses any patch of the current minor as current, so no chain runs and no write is refused; only
+  the next `update-format` rewrites the format version. So what breaks under a fixture left behind is a test case
   that pins bytes after an `update-format`, not one that only reads or writes records.
 - `formats.Chain` stops at the form its last converter produces, because no converter leads to a
-  patch: the chain breaks out where the major and minor already match the target. The trap on this
-  side is teaching the chain to reach the patch, which is a converter whose output differs from its
-  input only by the stamp.
+  patch: the chain breaks out where the major and minor already match the target. Pitfall on this
+  side: teaching the chain to reach the patch, which is a converter whose output differs from its
+  input only by the format version.
 ### Reads through `kb.Source`
 
-Every KB file is read through `kb.Source` from `kbload.Open`. The trap: an `os.ReadFile` of a KB
+Encapsulation: every KB file is read through `kb.Source` from `kbload.Open`. Pitfall: an `os.ReadFile` of a KB
 file in a verb or package, which sees the on-disk form of an unconverted KB.
 `cmd/readpolicy_test.go` fails on any direct KB file read outside its allowlist. The rule covers
 file reads only: a directory listing of `kb-root/` (`os.ReadDir` in `internal/index/refresh.go` and
@@ -182,8 +182,8 @@ file reads only: a directory listing of `kb-root/` (`os.ReadDir` in `internal/in
 Running it to clear a gofmt alignment finding is not
 an edit outside the tools.
 - **The edit and write tools govern text changes, not filesystem operations.** A move is `git mv`, a
-  deletion `git rm`, and staging either is part of the landing's set; the landing commits once.
-- **An MCP tool is a subcommand's binding** (I9). The trap: a tool listed by hand, a description
+  deletion `git rm`, and staging either is part of the change's commit; the change is committed once.
+- **An MCP tool is a subcommand exposed as a tool** (I9). Single source of truth: the tool table derives from the command tree. Pitfall: a tool listed by hand, a description
   copied into a tool, or a schema typed beside the command's flags. Every command reaches the tree
   in `cmd/surface.go`, one `AddCommand` per group, wrapped `readOnlyTool`, `readWriteTool`,
   `queryOperation`, `writeOperation` or `cliOnly`, which set the cobra annotation `kbase.mcp` =
@@ -193,169 +193,168 @@ an edit outside the tools.
   annotation `kbase.mcp.reason`, and the tool-table test fails an exclusion whose reason is empty;
   cobra's own `help` and `completion` are declared `cliOnly` there too. A test fails an
   `AddCommand` outside that file. A command's subcommands are added in `cmd/surface.go` too; the
-  binding is declared on the root's child alone, since the tool table reads no deeper. The table binds only `bound` commands, and the test derives its
+  exposure is declared on the root's child alone, since the tool table reads no deeper. The table exposes only `bound` commands, and the test derives its
   expectation from the annotations, never from a list — one tool per family named by a member's
   `kbase.mcp.family`, its `operation` enum those members, one per other bound command — failing a
   command that declares neither. A family operation's arguments are checked against its own derived
-  schema (`mcp.CommandSchema`, `write.OpVocabulary`); the trap is an argument list typed into the
+  schema (`mcp.CommandSchema`, `write.OpVocabulary`); Pitfall: an argument list typed into the
   family tool. What a family's operations share is never appended to a member's `Long`: the root
   help states the CLI's form and `kbase://help/<family>` the MCP form, from one text where they
-  agree; the trap is CLI input shape (stdin, `--values`, a dashed flag) in a resource only MCP reads.
+  agree; Pitfall: CLI input shape (stdin, `--values`, a dashed flag) in a resource only MCP reads.
   No tool is listed without a command behind it: the tool-table test (`cmd/mcp_test.go`) pins the
-  set to the `bound` commands alone, so a tool listed by hand fails it; the trap is reaching for a
-  hand-built tool where a subcommand bound like any other serves, as `build-trail` is. A flag annotated `kbase.mcp` = `excluded`
+  set to the `bound` commands alone, so a tool listed by hand fails it; Pitfall: reaching for a
+  hand-built tool where a subcommand exposed like any other serves, as `build-trail` is. A flag annotated `kbase.mcp` = `excluded`
   (`mcp.ExcludeFlag`) is not part of its command's tool schema: `mcp.CommandSchema` skips it.
   A command's help is four texts on its own `cobra.Command`: `Short` the summary, `Long` the shared
   body, and the annotations `kbase.help.mcp` and `kbase.help.cli` (`mcp.MCPNoteAnnotation`,
-  `mcp.CLINoteAnnotation`) the notes, each stating only what differs on its surface
-  ([page §4.2](NEW_MCP_CLI_DESIGN/4-served-text/4.2-tool-descriptions-and-help.md)). `internal/mcp` composes the three renderings from them — the tool
+  `mcp.CLINoteAnnotation`) the notes, each stating only what differs on its interface
+  (SPEC §11 Served text). `internal/mcp` composes the three renderings from them — the tool
   description, `kbase://help/<command>` (`mcp.HelpResources`) and `--help` (`mcp.CLIHelp`, the
   root's help function) — and `TestHelpRenderingsAreTheirParts` holds each to exactly its parts;
-  the trap is help text written anywhere else: into a resource, a description, the instructions,
-  or a second copy of the body for one surface. Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never
+  Pitfall: help text written anywhere else: into a resource, a description, the instructions,
+  or a duplicate of the body for one interface. Protocol tests are transcript fixtures under `test-data/fixtures/mcp/`, never
   strings asserted in code.
-- **Dev-only diagnostics are compiled out of the shipped binary.** A diagnostic for developing kbase
-  itself — today `score --replay` and `build --replay` — lives in files carrying `//go:build kbasedev`,
-  code and tests alike; the untagged build is what users receive and it carries none of that code. What
+- **Dev-only diagnostics are compiled out of the shipped binary.** Build-tag gating: a diagnostic for developing kbase
+  itself — today `score --replay` and `build --replay` — lives in files with `//go:build kbasedev`,
+  code and tests alike; the untagged build is what users receive and it contains none of that code. What
   those diagnostics read is not dev-only: every build writes its trail, ledger and captures whatever
   built it. A developer opts in with `-tags kbasedev` (`just build`). The untagged code reaches it only
-  through a hook its tagged file sets, which is nil without the tag. Its flags carry the flag-level
+  through a hook its tagged file sets, which is nil without the tag. Its flags have the flag-level
   `kbase.mcp` = `excluded` annotation, so dev and release builds serve one MCP tool table. SPEC states
-  nothing of it; ARCHITECTURE does. The trap: an untagged reference to tagged code, which now breaks
-  the default build — the one everyone runs — where under the old polarity it broke only the rare
-  dist-tagged build. That is why `edit-gate` vets both polarities, and why `test-dist-no-replay`, in
-  the hermetic omnibus, runs `TestDistBuildHasNoReplay`
+  nothing of it; ARCHITECTURE does. Pitfall: an untagged reference to tagged code, which breaks
+  the default build — the one everyone runs. That is why `edit-gate` vets both tag settings, and why `test-dist-no-replay`, in
+  the hermetic aggregate target, runs `TestDistBuildHasNoReplay`
   (`cmd/dist_test.go`, tagged `!kbasedev`) on the untagged build.
 - **A command resolves its starting directory with `invocationDir(cmd)`; no `os.Getwd` in `cmd`
-  outside that function.** The trap: `os.Getwd()` anywhere a verb's logic runs ignores the project
+  outside that function.** Single point of access: `os.Getwd()` is called in one function. Pitfall: `os.Getwd()` anywhere a verb's logic runs ignores the project
   an MCP call or `--project-dir` names. `cmd/invocationdir_test.go` enforces it.
-- **Never enumerate what you will accept in a field kbase does not fill.** pandoc fills the
+- **Never enumerate what you will accept in a field kbase does not fill.** Tolerant reader: pandoc fills the
   reference macro type and Div classes; an author fills metadata keys. Read such a field whole and
   branch only on the values you must act on, passing everything else downstream under its own name.
   A table that must stay closed counts and reports its residue. A pattern or branch that enumerates
   accepted values leaves an unanticipated one no trace: a reference whose type the pattern did not
-  list is read as no reference. An answer to one of kbase's own asks is not this case — that format
+  list is read as no reference. An answer to one of kbase's own model calls is not this case — that format
   is ours, and its parser stays strict.
 ### Never spell the node-kind list
 
-It is defined once, in `internal/formats/format400`, and named
-everywhere else through `kb`. A site that *iterates* — a census, a breakdown, a union, an
+Single source of truth: the list is defined in `internal/formats/format400`, and named
+everywhere else through `kb`. A site that *iterates* — a count report, a breakdown, a union, an
 ordering — reads the list and names no kind. A site that *branches* names kinds, and its table
 must be total over the list. A count derived from the list ("all four kinds") is the same copy in
 a shorter form. Nor a node id's prefix or a minted id's grammar: outside `internal/formats`, code
 composes and matches ids through `kb.ClaimPrefix`, `kb.AnalysisPrefix`, `kb.ExperimentPrefix`,
 `kb.WorkPrefix` and `kb.AxiomPrefix`, and the minted grammar, prefix included, through
-`kb.IDBody`. A literal id in a test fixture or in help prose is not a spelling.
+`kb.IDBody`. A literal id in a test fixture or in help prose is allowed.
 ### Never spell a relation
 
-The six relation names (`RelationSupports`, `RelationFounds`,
+Single source of truth: the six relation names (`RelationSupports`, `RelationFounds`,
 `RelationLifts`, `RelationRefutes`, `RelationReferences` and `RelationDemoted`) and `Relations`,
 the set of them, live in `internal/formats/format400`, and `ScoringRelations` in
 `internal/kb/schema.go`; every other site names them through `kb` (`kb.RelationSupports`,
 `kb.Relations`, `kb.ScoringRelations`), naming the constant. `cmd/relationpolicy_test.go` is an
-AST scan that fails on a spelling elsewhere, with a short allowlist of files where the same word
+AST scan that fails on a literal elsewhere, with a short allowlist of files where the same word
 means something else.
 - **Read a record file only through the record loader, and write one only through its encoder.**
-  `kb.LoadGraph` decodes both files strictly through `format400`; `kb.EncodeNodes` and
-  `kb.EncodeEdges` render them whole. The trap: a second record struct or a `yaml.Unmarshal` beside
-  them, which reads a missing `bearing` as the zero `kb.Bearing` — the judgement `0.0` — where the
+  Encapsulation: `kb.LoadGraph` decodes both files strictly through `format400`; `kb.EncodeNodes` and
+  `kb.EncodeEdges` render them whole. Pitfall: a second record struct or a `yaml.Unmarshal` beside
+  them, which parses a missing `bearing` as the zero `kb.Bearing` — the judgement `0.0` — where the
   strict decoder refuses the record (ARCHITECTURE §11, "The zero-value hazard").
   `cmd/recordpolicy_test.go` is an AST scan outside `internal/kb` and `internal/formats` that fails
   on a struct field tagged `bearing` or `manually-scored` and on a function that both names a record
   file's path and calls the YAML package; a path handed to a YAML call in another function is
   beyond it.
-- **Keep no prose copy of an op's key vocabulary.** The vocabulary is closed, total and per-op,
-  stated once in `internal/write`. A second statement — in a doc, a docstring or a comment — drifts;
+- **Keep no prose copy of an op's key vocabulary.** Single source of truth: the vocabulary is closed, total and per-op,
+  and is defined in `internal/write`. A second statement — in a doc, a docstring or a comment — drifts;
   point at the definition or the refusal message it produces.
 - **Who supplied a value is an options field, never a flag or a values key.**
   `write.Options.Provenance` decides the `manually-scored` flag on the rigor and bearing values a
-  write gives (the record types [page §2.9](NEW_MCP_CLI_DESIGN/2-conventions/2.9-manually-scored-and-judged-hash.md) names); its zero value,
+  write gives (the record types are listed in SPEC §10 Provenance and the judged hash); its zero value,
   `ProvenanceCaller`, marks them a person's, and only kbase's own machine writers — the build's
-  write runner, a scoring run's landing and re-price — pass `ProvenanceMachine`. The trap: a `--provenance` flag, a values key or an MCP property, through
+  write runner, and a scoring run's writing of results and recomputing of values — pass `ProvenanceMachine`. Pitfall: a `--provenance` flag, a values key or an MCP property, through
   which a session could mark its own value model-scored and have `score` overwrite it.
   `TestNoSurfaceNamesTheProvenanceOrCreate` (`cmd/mcp_test.go`) fails on a flag or a tool property
   that names it.
 ### A file kbase generates is regenerated whole
 
-The register pages and the sheets are kbase's output, each rewritten from its source whatever it
-holds. The stamped `AGENTS.md` and `CONVENTIONS.md`, and a build's `README.md`, each hold one
+The summary pages and the sheets are kbase's output, each rewritten from its source whatever it
+contains. The stamped `AGENTS.md` and `CONVENTIONS.md`, and a build's `README.md`, each contain one
 maintained block between two fence lines, which kbase rewrites whole from its template on every
 `update-format` and wherever `init` or the build writes the document
-([page §1.7](NEW_MCP_CLI_DESIGN/1-model/1.7-maintained-blocks.md)). A document without
-the pair is reported `unfenced` and left as it stands; its owner adds the fences. The trap:
-merging new text into a block that stands — a matcher for the old text, both forms of every
+(SPEC §3 Stamped documents). A document without
+the pair is reported `unfenced` and left as it is; its owner adds the fences. Pitfall:
+merging new text into an existing block — a matcher for the old text, both forms of every
 passage and a warning for each one not found, for text no user edits.
 ### No stage exits on a model's opinion
 
 Every stage exits on a comparison of artifacts or a
 return code; a new stage does not get a third kind of exit.
 - **A model call is made through a `Slot` from the invocation's queue, inside the item `Go`
-  launches; the item writes files only in its `after`, once its token is released.** The trap: a
+  launches; the item writes files only in its `after`, once its permit is released.** Pitfall: a
   goroutine pool or semaphore beside the queue, which re-introduces a second bound; a `WithTimeout`
   around `Go`, which times an item out for its wait; groups launched from per-group goroutines,
   which loses submission order; or a common file — a ledger, a record, a progress line — written
-  from an item while its ask batch is in flight (ARCHITECTURE I11).
+  from an item while its call batch is in flight (ARCHITECTURE I11).
 - **No prompt reaches a model from an in-code string.** Every prompt is an embedded template file
   under `internal/asks`, rendered with its slots filled, and its prose lives in that file alone —
-  never in a code string, a test, or a second copy elsewhere. A new or changed template gets
-  prompt-engineer review before first use, and a template change lands as an experiment with a
+  never in a code string, a test, or a duplicate elsewhere. A new or changed template gets
+  prompt-engineer review before first use, and a template change is committed as an experiment with a
   measured result. A call's system prompt is the fragment named for it, never an agent definition.
 ### No test asserts a prompt's prose
 
-A test keyed on a template's wording is a second copy of the
+Single source of truth: a test keyed on a template's wording duplicates the
 template; tests key on the offered letters, the slot set, the system fragment and the closing
 line's letters.
 - **Compatibility is judged by kbase's own readers and checks, never by a byte diff of
   presentation.** Byte equality is asserted only where SPEC "Compatibility contract" names a reader
   that needs it.
-- **A derived strength is one value; only its spelling differs.** The walk computes and publishes at
-  full precision, so a dependent multiplies its source's exact strength. A register page
-  spells it — its `- strength:` line and a premise's `(strength …)` — in the fewest decimals that
-  read back as it: four in the ordinary case, more where four would lose it, trailing zeros
-  trimmed; and the walk never reads that spelling. A surface that shows a value to a reader puts it
+- **A derived strength is one value; only its formatting differs.** Strength propagation computes and publishes at
+  full precision, so a dependent multiplies its source's exact strength. A summary page
+  formats it — its `- strength:` line and a premise's `(strength …)` — in the fewest decimals that
+  parse back as it: four in the ordinary case, more where four would lose it, trailing zeros
+  trimmed; and strength propagation never reads that formatting. An interface that shows a value to a reader puts it
   at two decimals — a query result as the number, the trace on a `- strength:` line as the
-  spelling.
+  formatted value.
 ### A scoring-model fact lives once, in `internal/kb`
 
-The thirteen fault ids, the
-word `none`, each id's weight per occurrence and each table's maximum live in `faults.go` and
+Single source of truth: the thirteen fault ids, the
+word `none`, each id's weight per occurrence and each table's maximum are defined in `faults.go` and
 nowhere else — the statement table, the method table and the bearing one, which a node's class
-selects among. No table holds the retired pending id; `Price` still reads one from an old ledger
-line. A template names only the ids its class accepts, and carries no figure or word a
-model could read as a judgement on the answer — no decimal in `[0,1]`, no percentage, no weight, no
+selects among. No table contains the retired pending id; `Price` still reads one from an old ledger
+line. A template names only the ids its class accepts, and contains no figure or word a
+model could interpret as a judgement on the answer — no decimal in `[0,1]`, no percentage, no weight, no
 maximum, no band's word — while a quantity of the subject's own, an example's rate or threshold, is
 the claim's and stays. `internal/asks` asserts both: the `flt-…` tokens it names are exactly its
-class's set, checked against `kb`, and its text holds none of those spellings. The trap: a weight in
-a template, or a second copy of the id list in the parser, which is a second home for a fact and
+class's set, checked against `kb`, and its text contains none of those strings. Pitfall: a weight in
+a template, or a duplicate of the id list in the parser, which breaks the single source of truth and
 drifts where the prompt does not.
-- **A `flt-*` id is frozen for its meaning once named.** The set may grow or lose members, but a
+- **A `flt-*` id is frozen for its meaning once named.** Stable identifiers: the set may grow or lose members, but a
   fault that has been named keeps its id for life: a ledger line records ids, and a rename would
-  silently re-point every line that carried the old one. A new fault takes a new id; a retired fault's
-  id never carries a new meaning.
-- **A citation is looked up in the closed text the call carried, never in a register page.** The parse's
+  silently change what every line that carried the old one refers to. A new fault takes a new id; a retired fault's
+  id never gets a new meaning.
+- **A citation is looked up in the item text the call contained, never in a summary page.** The parse's
   one job is where a span is, not whether it earns its id: a span is an anchor, and the criteria's
-  satisfaction is the model's judgement and a later reader's audit, never a check. The trap: a
+  satisfaction is the model's judgement and a later reader's audit, never a check. Pitfall: a
   validity test dressed as a parse, which refuses defensible answers on a question no code can
   settle.
 ### A scoring value is derived in integer hundredths
 
-Weights, maxima and sums are integers; the
-value is `maximum − Σ weights`, floored at zero and exact at two decimals. The trap: subtracting in
+Fixed-point arithmetic: weights, maxima and sums are integers; the
+value is `maximum − Σ weights`, floored at zero and exact at two decimals. Pitfall: subtracting in
 `float64`, where three weights land `0.3499999999999999` and the record's four-decimal rule breaks.
-A value is a projection of a ledger line's ids alone, which is what makes a landing checkable and
+A value is a projection of a ledger line's ids alone, which is what makes the written results checkable and
 a run re-scorable without asking a model.
-- **A scoring page's value tables are derived, not authored.** A page's maxima, its reachable-value
-  tables and its worked figures are functions of the ceiling and the weights, so they move in the
-  commit that moves either. The trap: leaving a page alone because no test pins its numbers — a value
-  table is a second copy of the arithmetic, and a stale one states a value the code cannot produce.
-  The reasoning a page gives for a superseded choice stays, marked superseded in one note; what moves
+- **A scoring page's value tables are derived, not authored.** Single source of truth: a page's maxima, its reachable-value
+  tables and its worked figures are functions of the ceiling and the weights, so they change in the
+  commit that changes either. Pitfall: leaving a page alone because no test pins its numbers — a value
+  table duplicates the arithmetic, and a stale one states a value the code cannot produce.
+  The reasoning a page gives for a superseded choice stays, marked superseded in one note; what changes
   is the numbers.
 ### Name the producer before you write the refusal
 
-Before writing code that refuses, raises, or
+No dead code: before writing code that refuses, raises, or
 reports a finding on a state, name what produces that state. If nothing on a reachable path
 produces it, the code restates a design the rest of the code already states; delete it. If it can
-fire on something else — a guard firing on a corpus that spells its token in prose — its only
+fire on something else — a guard firing on a corpus that writes its token in prose — its only
 reachable outcome is a build failing for a reason that does not exist. Making a failure survivable
 is a different act; this rule does not reach it.
 - **External corruption is not guarded against op by op.** kbase does not detect or repair damage
@@ -363,34 +362,34 @@ is a different act; this rule does not reach it.
   state that only such damage produces; the load's own checks are the only guard. This robustness is
   deferred, not unconsidered: it is taken on whole, at a cost not yet accepted, never one op at a
   time.
-- **A check earns its place by what it reads.** It reads what arrived from somewhere kbase did not
+- **A check earns its place by what it reads.** Validate at trust boundaries: a check reads what arrived from somewhere kbase did not
   compute: pandoc's output, an author's LaTeX, values on stdin,
-  a model's answer to one of our asks, a KB this version did not write. A check over a value kbase
+  a model's answer to one of our model calls, a KB this version did not write. A check over a value kbase
   computed restates the computation. That list is not closed; a new source is argued against the same test.
-  Process separation is not the test. Each check argues its own case in the report that lands it; a
+  Process separation is not the test. Each check argues its own case in the report that accompanies the commit adding it; a
   comment asserting boundary status is not that argument.
 ### Compare a label in the page's spelling
 
 pandoc escapes `&<>"'` in attribute values, and
 differently for a `Link` than for a `Span` or `Div`. A fact kbase records to be compared against
-the page carries the escaped form the page carries; never unescape one side to match the other.
+the page uses the escaped form the page uses; never unescape one side to match the other.
 A label carried out of the page into another format — the LaTeX export — is HTML-decoded once, at
-its read; the page-spelling rule governs comparisons against the page.
-- **In a pandoc Lua `topdown` walk, what a filter returns in place of its element never meets the
-  walk's filters — not its own type's, not the enclosing list's — though its children are walked.**
-  One element or a list, block or inline alike (pandoc 3.12.1). The trap: a filter that returns
+its read; this rule governs comparisons against the page.
+- **In a pandoc Lua `topdown` traversal, what a filter returns in place of its element never meets the
+  traversal's filters — not its own type's, not the enclosing list's — though its children are walked.**
+  One element or a list, block or inline alike (pandoc 3.12.1). Pitfall: a filter that returns
   anything but nil or the element it was given — a `BlockQuote` filter returning the quote's body
   expects the `Figure` filter to see a figure in it, and it does not. Such a filter walks its output
   itself, as a list (`pandoc.Blocks{…}:walk(f)`, `pandoc.Inlines{…}:walk(f)`; an element's own
   `:walk` skips that element), and returns the result with `false` as the second value, or the
   descent walks those children twice.
-- **Inside a bracket expression, spell whitespace as `PyWhitespace`, never `\s`.** `PyRE` expands
+- **Inside a bracket expression, write whitespace as `PyWhitespace`, never `\s`.** `PyRE` expands
   `\s` into a bracket expression of its own, and nested inside `[...]` that compiles, without
   error, into a different pattern. Both are `format400`'s; outside `internal/formats` use `kb`'s
   re-exports, and a superseded format package keeps its own copy, as `format200` does.
 - **A float computation that decides a ranking sums in Python's order with its compensation**
   (`shortlist.go`'s `pySum`): Go's plain summation ranks a near-tie differently, and a differently
-  ranked shortlist asks a different pair.
+  ranked shortlist poses a different pair.
 - **A `justfile` recipe whose body is a shebang script is a script under `tools/scripts/`, named for
   its recipe, and the recipe passes the script its inputs as environment variables.** The recipe line
   is `NAME="{{NAME}}" tools/scripts/<recipe>.sh`, so a command-line variable override reaches the script
@@ -400,10 +399,10 @@ its read; the page-spelling rule governs comparisons against the page.
   opens by refusing an unset one — `: "${NAME:?…}"`, with no apostrophe in the message, which the macOS
   `/bin/bash` 3.2 reads as an open quote. Scripts that need one another call each other by path, not
   through `just`. The one exception to environment inputs is a variadic list a script passes on
-  untouched (the volume roots and build flags of `test-integration-build-live-fixture`), which arrives
+  untouched (the top `.tex` files and build flags of `test-integration-build-live-fixture`), which arrives
   as positional arguments.
 - **kbase's stamped KB documents get prompt-engineer review before first use.** The templates
-  `phase-3a` stamps into `kb-root/` and the README assembly template are read by models in every KB
+  `phase-3a` writes into `kb-root/` and the README assembly template are read by models in every KB
   kbase builds.
 
 ---
@@ -413,9 +412,9 @@ its read; the page-spelling rule governs comparisons against the page.
 Text an MCP reader can receive names a tool argument through the marker (`internal/argmark`:
 `argmark.Flag`, `argmark.Positional`, and `argmark.FlagValue` for an argument with its value), and
 a kbase command line in it is a call held as an arguments mapping (`argmark.Call`); a refusal's key
-is built by the constructor. Never wrap a marker in backticks or quotes at the source: the spelling
-sets an embedded one off itself. Each surface
-spells the marked form where a document or a help text is emitted (SPEC §7 `key`, `remedy`;
+is built by the constructor. Never wrap a marker in backticks or quotes at the source: the marker's formatting
+sets an embedded one off itself. Each interface
+formats the marked form where a document or a help text is emitted (SPEC §7 `key`, `remedy`;
 ARCHITECTURE §11).
 - **Never write `--name`, `<name>` or `kbase <command>` literally for an argument or a command a tool
   takes.** A literal stays literal over MCP. It stays where no MCP rendering reads the text — a CLI
@@ -435,10 +434,10 @@ file is one power-cycle from gone.
 
 - **`ACTIVE_PLAN.md`** at the repo root is the one plan under way: decisions confirmed at kickoff,
   work-package boundaries, sequencing and status. Dispatched agents execute out of it; status
-  updates as work packages land. It carries outcomes, their consequences and the principles still
-  steering open choices — not decision history, which lives in commits. When the work lands, its
+  updates as work packages are committed. It contains outcomes, their consequences and the principles still
+  steering open choices — not decision history, which lives in commits. When the work is committed, its
   outcomes move into the contract documents and the file is replaced by the next plan.
-- **`ROADMAP_PLANS/`** holds partly-planned work that is not under way: a plan with enough design
+- **`ROADMAP_PLANS/`** contains partly-planned work that is not under way: a plan with enough design
   done that someone could pick it up, usually behind a ROADMAP.md item. A plan leaves when it
   becomes the active plan, is finished, or is abandoned. A plan there cites only tracked paths.
 - **A plan may name a normative page outside the contract documents, and that page outranks the
@@ -446,8 +445,8 @@ file is one power-cycle from gone.
   may make a page of its own subject normative — `RIGOR_AND_BEARING_SCORING_SCHEME.md` is such a
   page, stating the scoring rubric the contract cites — and on
   that subject the page is the requirement while the plan is the route. Where a plan row and the
-  page disagree, the work implements the page and the plan's line is reported as moved, in the
-  commit that lands it; the page is not edited by the landing, and the contract documents cite it
+  page disagree, the work implements the page and the plan's line is reported as changed, in the
+  commit that makes the change; the page is not edited by that commit, and the contract documents cite it
   rather than restate it. A plan that needs such a page names it in the plan, so a reader knows which
   source settles a disagreement.
 - Working drafts and half-formed notes are scratch (`.claude-temp/`), not plans.
@@ -487,18 +486,18 @@ design; no post-sprint review covers it.
   - Rate what the dispatch must decide, not how much it types
     - mechanical: a package whose work is settled by the plan's own text — a rename, a transcription, a test that mirrors a stated rule
     - expert: one that must choose between defensible options, diagnose behaviour, or write model-facing prose
-- Mechanical tasks are dispatched to a stepped-down model as specified in the global AGENTS.md or CLAUDE.md
+- Rote tasks are dispatched to a stepped-down model as specified in the global AGENTS.md or CLAUDE.md
 
 ### Plan dispatchability
 A work package is dispatchable only when the following conditions have been met
 
 - It names its scope in files, packages or symbols — never a span of design sections
-- Carries the command and its answer, or the quoted line, for each fact it acts on
+- Contains the command and its answer, or the quoted line, for each fact it acts on
 - A package that changes a type, a signature or a test double names in its scope every file
-  that references it — `git grep -l '<Name>' -- '*.go'`, test files included — and carries
+  that references it — `git grep -l '<Name>' -- '*.go'`, test files included — and contains
   that command and its answer
 - States its done-line in runner targets
-- A done-line that names a before/after measurement recipe carries, from planning, that recipe's passing run at the base commit
+- A done-line that names a before/after measurement recipe contains, from planning, that recipe's passing run at the base commit
 - Has received a usability review by the prompt engineer (its definition contains the criteria)
 - Has been revised by the architect based on the findings of the prompt engineer
 
@@ -516,15 +515,15 @@ accepting — the report is an index, the diff is the evidence. Check the diff a
 violation classes:
 
 - integration tests invoke the app binary; no dev-only entry points, verbs, or test scaffolds around
-  the real surface — save a diagnostic the shipped binary does not contain (see "Dev-only
+  the real interface — save a diagnostic the shipped binary does not contain (see "Dev-only
   diagnostics")
-- verifications are repeatable invocations; evidence lands in inspectable artifacts, never only in
+- verifications are repeatable invocations; evidence is written to inspectable artifacts, never only in
   the report
 - no special-case file lifecycles: every path kbase writes belongs to a location SPEC or
   ARCHITECTURE names
-- no gate, pin, or assertion loosened to make something pass — expected-truth updates must state the
+- no check, pin, or assertion loosened to make something pass — expected-truth updates must state the
   new truth they track
-- no second home for a value, string, or mechanism that has one
+- no duplicate of a value, string, or mechanism that has a single source of truth
 - nothing beyond the dispatched scope, even improvements
 
 Violations block acceptance: fix (redispatch or direct) before commit. A report that flags a
@@ -556,7 +555,7 @@ runner recipe — never an ad-hoc command sequence that lives only in a conversa
 
 ### Integration tests invoke the app binary
 
-An integration test runs `./bin/kbase` directly — the
+Black-box testing: an integration test runs `./bin/kbase` directly — the
 system end-to-end as delivered. Behavior switches (`--state-dir`, `--config-dir`) are flags in the
 recipe's invocation. In-process calls to verb functions are unit tests of verb logic, never
 integration tests.
@@ -570,32 +569,32 @@ not cross between `package p` and `package p_test`, and a test-support package t
 be imported by `p`'s in-package tests — the cycle is refused. Where the two need the same fixture,
 each package keeps one copy and the pair states why.
 
-**Where a directory holds both an in-package test file and an external `p_test` one for the same
+**Where a directory contains both an in-package test file and an external `p_test` one for the same
 production file, the external file is `<file>_external_test.go`.** The two cannot share a file name,
 and the in-package file keeps the name that matches the production file —
-`internal/model/modeltest/` holds `mockllm_test.go` and `mockllm_external_test.go` for `mockllm.go`.
+`internal/model/modeltest/` contains `mockllm_test.go` and `mockllm_external_test.go` for `mockllm.go`.
 
 **A test harness selects its inputs by content the KB contract fixes, never by presentation.** A
-choice keyed on line wrapping or bullet style holds on one KB's output and silently finds nothing on
+choice keyed on line wrapping or bullet style stays valid on one KB's output and silently finds nothing on
 another's.
 
-**A fixture whose answer shape a change invalidates moves in the same commit, and the commit body
-names it.** When a change moves what an answer must look like — the parse now reads charge lines, so
-a stub answering `0.5` is no answer — the fixture that answers in the old form moves with it, not in
-a later package: a stub left behind makes every leg over it red at the boundary, and reads as a
+**A fixture whose answer shape a change invalidates changes in the same commit, and the commit body
+names it.** When a change alters what an answer must look like — the parse now reads charge lines, so
+a stub answering `0.5` is no answer — the fixture that answers in the old form changes with it, not in
+a later package: a stub left behind makes every test case over it red at the boundary, and reads as a
 failure of the change that came after. The commit body names the fixture and what it now answers, the
-way it names any other truth it moved, so a reader can see which change made it answer differently.
+way it names any other truth it changed, so a reader can see which change made it answer differently.
 
-- MCP protocol tests are transcript fixtures, `test-data/fixtures/mcp/*.jsonl`: each request line is
+- Golden-file tests: MCP protocol tests are transcript fixtures, `test-data/fixtures/mcp/*.jsonl`: each request line is
   followed by the expected response line, or `null` where none is sent. Placeholders: `${KB_ROOT}`,
   `${VERSION}`, `${ID1}` and `${ID2}` (the seeded claims, in id order), `${TITLE1}` and `${TITLE2}`
   (the seeded claims' titles, in id order), `${ID3}` (the staged analysis), `${WORK1}` (the staged
   work's id), `${REPO}` (the repository root) and `${STATE_DIR}`, applied to requests as well as
   responses. The two seeded claims are hosted alike and differ in title, so a transcript names a
   seeded claim's title through `${TITLE1}` or `${TITLE2}` alone, and the staged work's id through
-  `${WORK1}`. A transcript named `gui-*.jsonl` runs the not-located mode: the recipe serves it
+  `${WORK1}`. A transcript named `gui-*.jsonl` runs the without-a-default-project mode: the recipe serves it
   with `kbase mcp --project-dir-required` from outside the staged repository, and
-  `TestMCPTranscripts` with a server that locates no project, so a call reaches the fixture only by naming
+  `TestMCPTranscripts` with a server that has no default project, so a call reaches the fixture only by naming
   it, `"project-dir":"${REPO}"`. The detached-build test needs a kbase binary to re-execute:
   `TestMain` runs the test binary as kbase when `KBASE_TEST_RUN_AS_KBASE` is set. The runner stages
   the results fixture, appends `values/statements.md` to the copy's `a.md`, adds `seed.yaml`'s
@@ -603,30 +602,30 @@ way it names any other truth it moved, so a reader can see which change made it 
   each relation a public op writes through `add-edge`, each batch naming only ids an earlier
   batch's result gave, from the results fixture's `values/` files with their placeholders
   substituted, and requires exactly the expected lines on stdout.
-- A transcript response a change moves is replaced by the `got:` line the failing
-  `TestMCPTranscripts` run prints, with each placeholder restored as the replaced line spells it.
+- A transcript response a change alters is replaced by the `got:` line the failing
+  `TestMCPTranscripts` run prints, with each placeholder restored as the replaced line writes it.
 - Integration recipes: `test-integration-<process>-<corpus>`; shared corpus fetch
   `prep-test-integration-<corpus>`; anything needing network or a live provider is excluded from the
-  hermetic omnibus `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
-  dependency — pandoc, python3, the adjagent clone — leaves the omnibus the same way, what needs no
+  hermetic aggregate target `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
+  dependency — pandoc, python3, the adjagent clone — leaves the aggregate target the same way, what needs no
   tool staying in it as a recipe of its own.
 - A script is checked where it stands: after changing one, `bash -n tools/scripts/<name>.sh`, and
-  `just edit-gate` runs `bash -n` over every `tools/scripts/*.sh`, so a syntax error fails the gate
+  `just edit-gate` runs `bash -n` over every `tools/scripts/*.sh`, so a syntax error fails the check
   whether or not the script's recipe is run. That is a syntax check only and does not replace running
   the recipe; a recipe that is LIVE or needs an absent tool is checked by `bash -n` on its script and
   `just --dry-run <recipe> <args>`, whose rendered line must set every variable the script requires.
-  `shellcheck` is not a project prerequisite and the gate does not call it.
-- The results fixture ships no claims: `test-data/fixtures/results/kb-root` holds its papers and nothing
-  else, so a leg needing a claim to score cannot run against it as it stands — it looks ready and is
-  not, for that purpose. Copy the fixture's repo to a scratch directory and add what the leg needs
+  `shellcheck` is not a project prerequisite and `edit-gate` does not call it.
+- The results fixture ships no claims: `test-data/fixtures/results/kb-root` contains its papers and nothing
+  else, so a test case needing a claim to score cannot run against it as it is — it looks ready and is
+  not, for that purpose. Copy the fixture's repo to a scratch directory and add what the test case needs
   through the add ops: `add-claim` places each claim on a leaf's line by `document`, `line` and
   `snippet`, as the transcript staging above does on `values/statements.md`'s lines. A claim given
   a `rigor` is manually scored, and a scoring run skips it.
-- A Go test that must drive `kbase mcp` over pipes the recipe holds starts no process: the recipe
+- A Go test that must drive `kbase mcp` over pipes the recipe provides starts no process: the recipe
   starts the server on two named FIFOs and passes their paths with `-args`, and the test opens the
   write end first, so neither side waits on the other's open.
 - Every integration test preserves its full log, its stats, and its run artifacts under
-  `test-data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. A leg
+  `test-data/transient/<test-name>/` — nothing is written to an ephemeral location and tossed. A test case
   that must run outside any repository runs in a system temporary directory and copies its whole
   run tree under `test-data/transient/<test-name>/` before removing it. Every
   integration test passes `--state-dir` under that directory to each command that uses the state
@@ -640,19 +639,19 @@ way it names any other truth it moved, so a reader can see which change made it 
   `configure-providers`, `configure-models`, `models`, `auth`) and sets `XDG_STATE_HOME` by neither `export` nor `env`, unless its recipe's
   `[doc]` begins `LIVE`. `edit-gate` also runs `tools/scripts/check-just-docs.sh`, which fails a
   public `justfile` recipe with no `[doc]`, a doc over 200 characters, `LIVE` anywhere but a doc's
-  first word, a doc's first word that is a marker (`LIVE`, `NEEDS`, `DESTRUCTIVE`, `hermetic`) spelled in another case, a doc holding a non-ASCII byte, "(excluded
-  from test-integration)" on a recipe that is not `test-*`, and an omnibus recipe whose doc does
+  first word, a doc's first word that is a marker (`LIVE`, `NEEDS`, `DESTRUCTIVE`, `hermetic`) written in another case, a doc containing a non-ASCII byte, "(excluded
+  from test-integration)" on a recipe that is not `test-*`, and an aggregate-target recipe whose doc does
   not open `hermetic`. `build` refuses an unknown `--through`,
   `--resume` given inputs, no inputs without `--resume`, a `--state-dir` inside `kb-root/` and a
-  `--ask-concurrency` under 1 before it resolves and creates its state store, and those refusals carry no `state-dir`; its later refusals follow the store. Every
+  `--ask-concurrency` under 1 before it resolves and creates its state store, and those refusals contain no `state-dir`; its later refusals follow the store. Every
   recipe invocation of `build` takes `--state-dir`, refused outcomes included.
 - A scratch copy of a fixture repository under this repository needs its own `.git` (an empty
   directory serves) before kbase runs over it. An empty `.git` serves queries only; a command that
   runs git over the KB — a committing batch, `update-format`, `init`, `build`, `status`, `cancel`,
-  `wait` — is refused `worktree` there, so such a copy needs a `.git` git reads. The trap: kbase resolves the repository root at the
+  `wait` — is refused `worktree` there, so such a copy needs a `.git` git reads. Pitfall: kbase resolves the repository root at the
   nearest `.git` upward, so a copy without one answers from this repository's own `kb-root/`,
-  silently. A copy that `update-format` converts — every committed fixture KB stamped below the
-  current format, before any write over it — needs more: a `.git` git reads (`HEAD`, `objects/`,
+  silently. A copy that `update-format` converts — every committed fixture KB whose format version is below the
+  current one, before any write over it — needs more: a `.git` git reads (`HEAD`, `objects/`,
   `refs/heads/`) with the copy's `kb-root/` committed, since `update-format` refuses uncommitted
   changes there (`check: dirty-paths`). A recipe commits with `git -C <repo> -c user.name=… -c
   user.email=…` under `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null`; a `cmd` test calls
@@ -660,7 +659,7 @@ way it names any other truth it moved, so a reader can see which change made it 
   `index.UpdateFormat`, the save the verb runs, which takes no clean check. A tree holding a build
   record at the repository root converts only through `cmd`'s verb, whose `git mv` is the one
   mover: a test outside `cmd` passes `index.UpdateFormat` no moves and no mover of its own.
-- Unit tests pass hermetically (no network, no corpus) beside their packages; their `go test` log is
+- Hermetic tests: unit tests pass hermetically (no network, no corpus) beside their packages; their `go test` log is
   preserved under `test-data/transient/unit_tests/`. Corpus-driven property tests skip when the
   corpus is absent and are wired into an integration recipe where it is guaranteed present.
 - `just test-pkg` takes `GOFLAGS=-run=<regexp>` to run one test; red-first evidence uses it.
@@ -671,7 +670,7 @@ way it names any other truth it moved, so a reader can see which change made it 
 
 ## Dependency Policy
 
-Stdlib-first; a new module requires a ruling. Sanctioned:
+Minimal dependencies: stdlib-first; a new module requires a ruling. Sanctioned:
 
 - `github.com/spf13/cobra` and `github.com/spf13/pflag` — the CLI.
 - `github.com/BurntSushi/toml` — configuration files.
@@ -687,11 +686,11 @@ drops a dependency nothing imports.
 
 Project-specific bindings only (the general logging doctrine lives in the coder agent definitions):
 
-- `internal/log` is the **only** logging seam (four-method `Logger`: `Debug`/`Info`/`Warn`/`Error`,
+- `internal/log` is the **only** logging interface (four-method `Logger`: `Debug`/`Info`/`Warn`/`Error`,
   alternating key/value pairs). Built **once**, in the composition root (`cmd/main.go`), from the
   persistent `--log-level` (default warn) and `--log-file` flags. `--log-file` tees; it never
   redirects.
-- **Threaded, not global**: a component that logs takes a `log.Logger` parameter, so its logging is
+- **Threaded, not global**: dependency injection — a component that logs takes a `log.Logger` parameter, so its logging is
   visible in its constructor signature. No package-level logger, no setter; `log.Discard()` covers a
   caller with nothing to hand it.
 - Never call `slog` directly, and never use `fmt.Fprintf(os.Stderr, ...)` for a diagnostic. Verb
@@ -703,7 +702,7 @@ THESIS, SPEC, ARCHITECTURE and CONVENTIONS are trees of small files under `PROJE
 section one file. The root `THESIS.md`, `SPEC.md`, `ARCHITECTURE.md` and `CONVENTIONS.md` only
 point there.
 
-- Edit the leaf that holds the section. Never edit a root pointer file, and never regenerate the
+- Edit the leaf that contains the section. Never edit a root pointer file, and never regenerate the
   trees from the root files: the leaves are the source.
 - A new section is a new leaf, added to the `Contents:` list of its parent `index.md` and of the
   document's `entry-point.md`.
