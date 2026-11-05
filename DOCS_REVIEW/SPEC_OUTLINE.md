@@ -318,6 +318,8 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
   existing item; a differing add stays refused (SPEC §8 Idempotence, `add-<kind>`, Edge ops). An
   identical `add-citation` (the line already holds exactly the link it would write) is `unchanged`
   too (SPEC §8 `add-citation`). The same change updates ARCHITECTURE invariant I6 and its detail.
+- Code: a refused `restore-demoted` whose ends now hold a scoring edge says so in its remedy and names
+  `edges` (SPEC §8 `restore-demoted`).
 - Code: one retry rule for every model call. A call that did not get through (transport error, 429,
   5xx, an undecodable response body) waits 5 s, then 30 s, before its next attempt. A retry that
   changes the ask because the answer came back flawed (refused, malformed, failing its check) goes out
