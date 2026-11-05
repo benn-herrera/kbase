@@ -130,13 +130,19 @@ start the processes its fixtures need.
 
 **I2 detail.** The inventory's page-defined readings (§5.5) come from the leaf through
 the page readers. Otherwise leaf lines are read only by:
-- stage-A conformance: the link relation, through `kb`;
+- stage-A conformance: the link relation, through `kb`. It checks the leaf markup itself, so the
+  markup is what it must read;
 - the prose and statement-marker machinery: the marker reader `kb.MarkerLines` and the hosts the load
-  derives from it, the write ops' placing and moving of a marker, and a scoring text's statement;
-- the sheet: a claim's kind, at its marker.
+  derives from it, the write ops' placing and moving of a marker, and a scoring text's statement. A
+  marker and the text it marks are leaf content; no record holds them;
+- the sheet: a claim's kind, at its marker. The sheet draws a claim as its text appears — a block, a
+  displayed equation or prose — which is a fact of the leaf's layout, not of the claim; a record would
+  restate the leaf and go stale on the next edit. Where no leaf carries the claim's marker, the title
+  decides, as a best guess for the drawing only.
 
-Maintenance ops read the node and edge records, the statement markers and the format version. The
-exceptions are enumerated here; the invariant does not state why each reads leaf lines.
+Each exception reads what records cannot hold without restating the leaf (§3,
+Metadata first). Maintenance ops read the node and edge records, the statement markers and the format
+version.
 
 **I6 detail.** An add of what exists and a removal of what is absent are `refused`; an edit to the
 value already held is `unchanged`. Unlike PUT, an add of an existing item is refused, not a no-op.
@@ -193,6 +199,9 @@ These steer choices the invariants leave open.
   are regenerable and freshness-checked. Ids are minted randomly, hence "modulo ids".
 - **Pattern:** Reuse an existing parser. **No LaTeX parser is written here, partial or whole.** The
   reader is pandoc.
+- **Pattern:** Single source of truth. **Metadata first.** A need the `.index/` records can meet reads
+  the records. A leaf is read only for what records cannot hold without restating the leaf: the text
+  itself, where a statement marker sits, and how the text is laid out.
 - **Pattern:** Self-describing API. **The served text is the operating contract.** What an agent needs
   to drive kbase reaches it from kbase itself: a command's own facts in its help; rules spanning
   commands in the MCP instructions, kept short because every session reads them; longer guidance as
