@@ -1894,8 +1894,11 @@ itself, an unreadable capture file or a store write.
 and the call queue, and `internal/modelclient` is the only constructor of a `model.Client`. Three roles
 route calls: `decision` for the multichoice questions, `text` for the overview call and `scoring` for
 `kbase score`'s calls (SPEC §9 The files are the one source of inference). Each role names its own
-provider and model in `[models]` as a `<provider>/<model>` reference. No role falls back to another;
-no reason is recorded for that.
+provider and model in `[models]` as a `<provider>/<model>` reference. No role takes another role's
+endpoint, model or provider, and no call fails over to another provider when its own fails. Failover
+is a pattern for services that must stay up; kbase is a user's tool, and a failover would change which
+model judges or refines the KB without the user deciding that it may. The role is the user's
+declaration of which model does the work, so a call that cannot reach it fails and says so.
 
 Every model call is made through a `model.Slot`. `model.Queue` has N permits; `Queue.Go` waits for a free
 permit and starts the item with a `Slot` on it (§2, I12). `Slot.Chat` makes the overview call and
