@@ -7,6 +7,9 @@ Finished items are deleted, not archived.
 
 ## Maintenance
 
+- The follow-ups from the project-document rewrite: SPEC rules the code does not yet meet, decided
+  code changes, missing tests and code defects — see
+  [DOCS_REVIEW_FOLLOWUPS](ROADMAP_PLANS/DOCS_REVIEW_FOLLOWUPS.md).
 - review of `PROJECT_DOCS/CONVENTIONS/house-rules/`
   - some have rotted
   - some were never fresh in the first place 
