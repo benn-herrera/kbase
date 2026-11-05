@@ -40,9 +40,9 @@ Finished items are deleted, not archived.
     representation); it is not circular; and the term is used afterwards as defined.
   - A candidate shape: a node kind with its own narrow rigor judgment, which claims rest on through an
     edge, so a poorly posed definition caps what is built on it as a weak premise does.
-  - Open: the node kind and its relations, how the build finds definitions (the `definition`
-    environment today reads as context), and how it composes with the existing faults that already
-    touch definitions indirectly (`flt-equivocation`, `flt-referent`).
+  - Open: the node kind and its relations; finding definitions at all, since the build has no notion
+    of one today and a definition is incidental prose; and how it composes with the existing faults
+    that already touch definitions indirectly (`flt-equivocation`, `flt-referent`).
 
 ## Reader fidelity
 
