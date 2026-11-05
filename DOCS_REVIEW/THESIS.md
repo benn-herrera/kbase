@@ -27,7 +27,7 @@ the piece resembles and is not — the direction work on it must not drift.
 | Queries | Scans and lookups over the loaded set | A query planner or a search engine |
 | The claim graph | A DAG: cycle detection, reachability, a topological walk that folds values from sources to sinks | A general graph library or graph database |
 | Format versions | Numbered schema migrations, each a pure N→N+1 conversion, applied on read and saved by an explicit command | A migration framework |
-| Builds and scoring runs | A detached child process with a lockfile, a status file, an append-only log, cancel and resume | A job scheduler or workflow engine |
+| Builds and scoring runs | A child process with a lockfile, a status file, an append-only log, cancel and resume | A job scheduler or workflow engine |
 | Model calls | Chat and decision-API clients, one fixed endpoint per role, behind a bounded call queue, with retry and backoff, and an answer cache keyed on the request | A general purpose agent harness or inference service |
 | Asking a model | A prompt template that asks a closed question and reads the answer as a choice from a fixed set or a reply parsed against a fixed grammar | Free-form generation; the model never freehands the metadata |
 | Configuration and credentials | Layered TOML files (explicit, repository, global) and a local credentials file | A secrets manager |
@@ -50,10 +50,9 @@ Three things, and only these:
 3. **How the judgments combine.** A formula that carries those local values along the graph's
    edges into a strength for every node.
 
-The machinery that computes all three is standard, and listed above. What each of the three is, is
-not, and SPEC's scoring schemes own it.
+The machinery that computes all three is standard, and listed above. SPEC defines them.
 
-### Building: the draft is mechanical, inference only refines it
+## Building: the draft is mechanical, inference only refines it
 
 A LaTeX document already encodes most of its own structure. The author built a hierarchy and the
 format serialized it; reading it back is deserialization, not interpretation.
@@ -78,7 +77,7 @@ mechanical result to fall back on.
 In the finished graph, base claims sit at the bottom — asserted outright, or resting on a cited
 work outside the document set — and every other edge connects claims within it.
 
-### Scoring: small judgments, combined
+## Scoring: small judgments, combined
 
 An argument is a graph of claims and relations. Judge each node and each edge locally, with the
 narrowest question that decides it, and combine those judgments into a picture of the whole.
