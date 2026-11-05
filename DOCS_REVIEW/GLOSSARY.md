@@ -47,7 +47,7 @@ term. Source: `SURVEY-vocabulary.md`, which holds each term's senses and example
 | "census" | count report | |
 | "re-ask-then-default" | retry once, then use the deterministic default | |
 | "closes on", "the closing record" (prose) | ends with; the final record | the heading "The closing record" stays (rule 2) |
-| queue "token(s)" | slot | "token" kept for LLM tokens |
+| queue "token(s)" | permit (a semaphore permit) | "token" kept for LLM tokens; `Slot` names the type that holds a permit |
 | "closed text" / "the guard" | the item text / the input guard | |
 | "closed set", "closed vocabulary" | fixed set | |
 | "the prompt shelf" | the prompt templates | |

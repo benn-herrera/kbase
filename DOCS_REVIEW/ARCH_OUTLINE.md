@@ -146,7 +146,7 @@ Each entry gives the pattern string to use verbatim (rule 2), then what changes.
 
 ### §6 KB model and maintenance (A:427-654) — slice 3
 - **`### The kb package`**: "Domain model and schema package". Absorbs the A:431 row.
-- **Write API**: "Transactional unit of work with dry run". The A:432 cell becomes prose.
+- **Write API**: "All-or-none validated batch with dry run and per-file atomic writes". The A:432 cell becomes prose.
   - Per-file atomic rename, and the cross-file limit, stated once.
   - Cite `SPEC §8 Write batches` at A:443 and A:471, and `SPEC §8 Writes leave nothing stale` at
     A:475.
