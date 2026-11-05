@@ -314,6 +314,9 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
 - Code: rename the decision-API setting on every interface — `providers.toml` key `decisionApi`,
   `configure-providers` flag `--decision-api`, `show-config` field `decision-api` — with no alias for
   the old names.
+- ARCHITECTURE: the `claims-declared` and `claims-discovered` stages have no mechanism section — which
+  environments become claims, how prose is chunked for the model, what it is asked, and how answers
+  become nodes (`internal/claimgraph`).
 - SPEC: §7's long table cells (the `remedy` rule; the `write`, `show` and `stats` result rows) need
   restructuring into lists or sub-tables.
 - Code: the `trace` help carries the hint that `trace` sorted by contribution shows what would
