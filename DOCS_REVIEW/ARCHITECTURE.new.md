@@ -167,8 +167,11 @@ source tree. A scoring run leaves it through its `captures.jsonl` ([§6](#the-ca
 
 **I11 detail.** A concurrent call batch is a build stage's model calls (each cull pass and the
 overview its own), a scoring run's item loop or a replay's item loop. The state-store files written
-in flight are a build's answer and capture per call and a scoring run's result per item. No reason is
-recorded for the rule.
+in flight are a build's answer and capture per call and a scoring run's result per item. The rule
+takes the answer cache (one file per call) as its model, for three reasons: a killed run forfeits
+only the calls in flight; every shared file is written in an order the stage or set already defines,
+so the concurrency setting changes wall time and nothing else (SPEC §5 Determinism); and a stage
+stopped mid-batch has written no shared file, so its resume restores to the boundary.
 
 **I12 detail.** A `Slot` is an item's right to make calls on one of the queue's permits. An item holds
 its permit across all of its calls and releases it before it writes a file. Within one consumer,
@@ -245,8 +248,11 @@ leaf, unasked. Each source claim gets its own shortlist of proximity slots follo
 
 No pool holds a marked pair or an adjacency link. A pair both ends pick is asked both ways, and a
 proximity slot its paper cannot fill stays empty. One multichoice call per planned pair; a yes in
-either direction is one undirected link for the cull. The stage writes nothing under `kb-root/`. The
-slot counts have no recorded reason.
+either direction is one undirected link for the cull. The stage writes nothing under `kb-root/`.
+Proximity slots exist because a claim's nearby paragraphs, in reading order, are far more likely to be
+in its chain than distant ones, though never a hard filter; wildcard slots exist because a target in
+another paper is outside every proximity tier. The fixed slot count keeps the model calls linear in
+claims. The particular counts, 3 and 2, have no recorded reason.
 
 **`claims-culled`.** `Culled` (`internal/claimgraph/cull.go`) asks one `Colinear` call per link with a
 prose end (marked pairs, unmarked yeses and adjacency links, unordered, computed over the tree
@@ -254,8 +260,12 @@ prose end (marked pairs, unmarked yeses and adjacency links, unordered, computed
 call per culled claim whose root is not its target, grouped by root (`p2-<root>`). The survivor rule
 and the update of references are the pure `cullTargets`, `cullRoots`, `finalCulls` and `PlanCull`;
 culls are applied through `IssueCulls` with no bridge and no claim-to-claim edge; the cull record is
-written once, after the culls are applied. The survivor is the earliest partner in reading order
-(SPEC §5 Co-linearity cull (`claims-culled`)); no reason is recorded for choosing it.
+written once, after the culls are applied. Each answer names the claim that adds nothing, and that
+claim is culled into its partner (SPEC §5 Co-linearity cull (`claims-culled`)). Reading order only
+breaks ties: a claim several answers cull targets the earliest of their partners, ties by id, and a
+cycle among targets is broken at its earliest claim. The tie-break is fixed so that the same answers
+in any order give byte-identical cull records; why the earliest rather than another fixed choice is
+not recorded.
 
 **`depends-attributed`.** One multichoice call per candidate. Every answer's edge is written in one
 `add-build-edges` batch, cycles included; then `index.BreakCycles` walks the records in the tree's
@@ -540,7 +550,9 @@ deterministic product against another:
 
 Findings land in the stage's report in the state store
 (§8, `reports/`). A `FAIL` finding makes the outcome
-`failed`; a `FACT` finding describes state and never fails the stage. kbase runs no fix loop.
+`failed`; a `FACT` finding describes state and never fails the stage. kbase runs no fix loop: every
+check compares one mechanical product against another, so a failure is a defect in the stage or its
+input, and neither is repaired by asking a model.
 
 ### 5.7 LaTeX export
 
@@ -1233,7 +1245,10 @@ Cycles: cut as the walk finds them defines the rule; the mechanism is:
   order, of the cycle's `supports` edges into an analysis, else the closing edge.
 - After each removal the search starts over, so the removals depend on the edge set and the node
   order alone.
-- The removal set is not a minimum feedback arc set.
+- One edge is removed at a time, never the whole cycle, and each removal is kept as a `demoted`
+  record, so `restore-demoted` puts the edge back exactly and repairing a cycle is at most two edits.
+- Why a `supports` edge into an analysis is preferred, and why the removal set is not a minimum
+  feedback arc set, is not recorded.
 
 Three callers use it:
 
@@ -1402,8 +1417,9 @@ A text the input guard refuses, a reply the parse refuses, and a failed call or 
 the class cannot be derived or the input guard refuses the text. `attempt` returns the entry and whether
 the loop's stop interrupted the call. Nothing shared is written until the pool has drained (invariant
 I11, §2); the ledger's `flush` then writes the cells' values, appends their captures,
-then appends their lines, in the set's order. No reason for writing at the loop's end rather than per
-item is written beyond that invariant. `Counts` comes from the ledger's last status per item, not from this
+then appends their lines, in the set's order. Writing at the loop's end rather than per item follows
+from I11: with calls in flight concurrently, per-item writes would land in completion order, while
+writing in the set's order makes the concurrency setting change wall time only. `Counts` comes from the ledger's last status per item, not from this
 invocation's attempts, so a resumed run reports the whole run. A cancelled context stops the loop and
 records nothing for an item without an answer; an interruption outranks a failure in the run's outcome.
 
@@ -1979,7 +1995,11 @@ protocol; each protocol's wire rules live only in its body encoder (`encodeReque
 sends. The fields each protocol sends are SPEC §9.1 The chat protocol. The Messages encoder sets the
 required `max_tokens` to the thinking budget (`thinkingBudgetLow`, `thinkingBudgetMedium`,
 `thinkingBudgetHigh`) plus an answer allowance: the larger of `maxTokensFloor` and a quarter of the
-request's characters, rounded up. The quarter has no recorded reason (§12).
+request's characters, rounded up (§12). The Messages protocol requires `max_tokens` and kbase has no
+figure of its own, so the cap is estimated from the request; four characters per token is the usual
+English-prose estimate, and the floor keeps a one-word request from being cut off. The estimate
+assumes no dense notation reaches a call, which a statement holding TeX maths does not meet; and why
+the request's size, not the expected answer's, sets the allowance is not recorded.
 
 **Pattern:** Provider prompt-cache affinity.
 
@@ -1996,8 +2016,10 @@ sends none.
 `chat` repeats a request identically while it does not complete, up to `model.ChatAttempts`. The
 caller's `ChatRequest.Backoff` gives the pause before each repeat, its last entry repeating. The overview
 call (`overviewBackoff`) and `kbase score`'s calls (`scoreBackoff`) pass a backoff; the build's
-multichoice questions and `probe` pass none and repeat at once. The build's multichoice questions have
-no pause and no reason is recorded for that. A pause the call's deadline cannot cover ends the call at
+multichoice questions and `probe` pass none and repeat at once. The only recorded reason for the
+multichoice questions' immediate repeat was parity with the tool kbase was ported from, which no longer
+applies; `scoreBackoff`'s reason — a 429 or 5xx repeated at once is three attempts inside one outage —
+applies to them equally. A pause the call's deadline cannot cover ends the call at
 once, and its reason names the attempts it made (`gaveUp`). Values are in §12.
 
 `retryableStatus`, a 429 or a 5xx, is the only non-2xx status repeated; any other ends the call on the
@@ -2196,8 +2218,12 @@ release unable to read the last one's store, and disguising a shipped constant h
 sealing is obfuscation, not a boundary: any process of the same user recovers the key, and separation
 between users is the file's mode. `auth.FileMode` applies on creation and on every replace
 (`atomicfile.WriteMode`), and `auth.DirMode` on every `Add`. The provider's name is not bound into the
-file, so a file renamed by hand opens under its new name. kbase uses no OS keychain, and no reason is
-recorded for that.
+file, so a file renamed by hand opens under its new name. The threat the store answers is an agent
+being helpful — reading a key file and putting the key in a transcript — not an attacker: an agent
+reading the file gets ciphertext. kbase uses no OS keychain, which would take three resolvers with
+three failure modes (no session bus, no gpg-agent, no PowerShell module) for the same ceiling, nor
+gpg, which would make gpg a dependency and a passphrase a runtime condition; and a stored key serves
+builds that run in CI, where no one is logged in.
 
 **Secret type.** `secret.Key` is the type every key travels in. fmt's verbs, a text, JSON or YAML
 encoding and a log value all render `<redacted>`, and `Reveal` alone returns the text.
@@ -2377,7 +2403,8 @@ Only a build or a scoring run prunes; `status` and `cancel` remove nothing. Coun
 §12.
 
 - **Captured builds.** After the run event, a build keeps the newest `keptBuilds`+1 captured builds
-  under `reports/` and removes the rest (`pruneBuildCaptures`, `buildstore.PruneCaptures`). A capture is
+  under `reports/` — the current build's capture, which exists before the child starts, and
+  `keptBuilds` beside it, matching the build directories kept — and removes the rest (`pruneBuildCaptures`, `buildstore.PruneCaptures`). A capture is
   the `.stdout.yaml` and `.stderr.log` pair sharing a stem, ordered by name. It reads no progress record
   to do so.
 - **Build directories.** Once its launch checks pass and before its first stage, a build prunes
@@ -2424,8 +2451,10 @@ recoverable record; SPEC §8 The run's locks):
 The liveness test is the lock, not the pid: `filelock.Held` takes and drops a shared lock, which an
 exclusive holder refuses. `build.Hold` takes both files in the order above, and its release function
 removes `<state-dir>/lock` first (`ReleaseRemoving`), so a clean exit, `cancel` included, leaves neither
-file and a standing file is not by itself evidence of a live holder. Each wait is `buildstore.LockWait`
-(§12). The record is written after the lock is taken, so a state directory named by the
+file and a standing file is not by itself evidence of a live holder. Because the release removes the
+file, a waiter can lock a file already unlinked; `filelock` checks after each acquisition that the
+path still names the file it locked (`stillAt`) and retries where it does not, so two holders never
+coexist. Each wait is `buildstore.LockWait` (§12). The record is written after the lock is taken, so a state directory named by the
 first file whose record is not yet written is reported "a run is starting". `takeOperationLock` and
 `runningRefusal` give the refusals (`check: lock`, `path` the state directory), naming the verb and pid
 read from the store the first file names. A second run on the same store through a different repository,
