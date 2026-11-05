@@ -65,7 +65,7 @@ format serialized it; reading it back is deserialization, not interpretation.
 - **The argument's edge candidates** arrive as `\ref`-family references to those identifiers. A
   reference does not decide an edge: it may be a mention, supported by, or in support of.
 
-Authors under-mark their arguments, so a model closes exactly three gaps, and nothing else:
+Authors under-mark their arguments, so a model closes three gaps:
 
 1. claims argued in prose with no environment (new nodes);
 2. references made in prose without `\ref` (new edge candidates);
