@@ -53,9 +53,11 @@ Finished items are deleted, not archived.
 - The always-loaded text is too large: every session carries `tools/list` and the instructions in
   context before doing any work, about 18.5K characters at 16 tools (`tools/list` 16.8K, of which
   input schemas 12.1K; instructions 1.7K). `just measure-mcp-surface` measures it.
-  - Direction: make it hierarchical, indexed or otherwise loaded on demand, so a session carries a
-    small index and reads the detail it needs (the help resources already hold the detail), rather
-    than every schema in full on every turn.
+  - Direction: dice the served text as `PROJECT_DOCS/` is diced. The always-loaded part is an index —
+    each tool a one-line summary and a minimal schema, and an entry point naming where each detail
+    lives — and the detail is read on demand down a path from that index, as a reader opens a leaf
+    only when a question needs it. The help resources (`kbase://help/<command>`) already hold the
+    detail and are the natural leaves.
   - Known contributors: the `project-dir` description, 169 characters repeated in all 16 tools (2.7K);
     a fixed overhead per tool, so fewer tools cost less.
   - Open trade-off: SPEC states every op's keys; typing each write op's entries strictly in the `write`
