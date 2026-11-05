@@ -29,7 +29,7 @@ the piece resembles and is not — the direction work on it must not drift.
 | Format versions | Numbered schema migrations, each a pure N→N+1 conversion, applied on read and saved by an explicit command | A migration framework |
 | Builds and scoring runs | A detached child process with a lockfile, a status file, an append-only log, cancel and resume | A job scheduler or workflow engine |
 | Model calls | Chat and decision-API clients, one fixed endpoint per role, behind a bounded call queue, with retry and backoff, and an answer cache keyed on the request | A general purpose agent harness or inference service |
-| Asking a model | A prompt template that asks a closed question and parses the answer against a fixed grammar | Free-form generation; the model never writes the knowledge base |
+| Asking a model | A prompt template that asks a closed question and reads the answer as a choice from a fixed set or a reply parsed against a fixed grammar | Free-form generation; the model never freehands the metadata |
 | Configuration and credentials | Layered TOML files (explicit, repository, global) and a local credentials file | A secrets manager |
 | The CLI and MCP server | A cobra command tree; the MCP tools are generated from it over JSON-RPC on stdio | A plugin system or a general-purpose tool server |
 | Checks | Unit tests, golden fixtures, and tests that enforce the package dependency rules | — |
