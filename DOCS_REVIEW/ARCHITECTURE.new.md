@@ -3127,8 +3127,9 @@ interfaces: the resource families and the detached launches. It names no project
   optional variadic one that the `Use` line writes `[<name>...]`, plus each flag declared with
   `mcp.RequireFlag`, which is `trace`'s `direction` alone. `direction` has no default because `in`
   (what bears on the node) and `out` (what the node reaches) are opposite questions, equally likely,
-  with nothing to break the tie, and a transitive walk over both answers neither; `edges`, one hop,
-  can list both with each row naming its end. `wait`'s `--pid`, the one flag a verb
+  with nothing to break the tie. A transitive walk over both answers both, but doubles the output on a
+  guess at what was asked; requiring the caller to name the question is the plain interface. `edges`,
+  one hop, can list both with each row naming its end. `wait`'s `--pid`, the one flag a verb
   requires without that declaration, is outside the derivation: `wait` declares `excluded`. No other
   bound command refuses for want of a flag, `score`'s `--pass` among them, a run walking both passes
   unless it is told otherwise.
