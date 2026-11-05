@@ -1,13 +1,8 @@
 ## 9. Configuration
 
-Two TOML files — `providers.toml` ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md), the endpoint pool) and `config.toml` ([§9.2](9.2-config-toml-the-choices/index.md), the choices) —
-are read under the strict-load contract ([§9.3](9.3-strict-load-contract.md)), in one or two layers.
-`<repository>/.kbase/` is read over `~/.config/kbase`; a directory `--config-dir` names, else
-`$KBASE_CONFIG_DIR`, is instead the one directory read, so an explicit choice isolates a run from a
-repository's own `.kbase/`. An invocation outside a worktree has no repository layer:
-`show-config`, `models`, `configure-providers` and `configure-models` run in any directory;
-`configure-providers` and `configure-models` write where [page §3.7](../../../NEW_MCP_CLI_DESIGN/3-operations/3.7-setup-and-configuration/index.md) and "The configure commands'
-write location" below state.
+Two TOML files, `providers.toml` ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md), the endpoint pool) and `config.toml` ([§9.2](9.2-config-toml-the-choices/index.md), the choices), are read under the strict-load contract ([§9.3](9.3-strict-load-contract.md)) from one or two layers. `<repository>/.kbase/` is read over `~/.config/kbase`. A directory `--config-dir` names, else `$KBASE_CONFIG_DIR`, is instead the one directory read, so an explicit choice isolates a run from a repository's own `.kbase/`. An invocation outside a worktree has no repository layer. `show-config`, `models`, `configure-providers` and `configure-models` run in any directory. `configure-providers` and `configure-models` write where [The configure commands' write location](the-configure-commands-write-location.md) states.
+
+API keys are in neither file. The credentials store (`kbase auth add`) contains a key under a provider's name, and an entry may name a key file instead ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)).
 
 Contents:
 

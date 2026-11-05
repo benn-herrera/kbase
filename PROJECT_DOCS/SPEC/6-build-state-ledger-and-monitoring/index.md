@@ -7,3 +7,4 @@ Contents:
 - [§6 `kbase status`](kbase-status/index.md)
 - [§6 `kbase cancel`](kbase-cancel.md)
 - [§6 `kbase wait`](kbase-wait.md)
+- [§6 `kbase build-trail`](kbase-build-trail.md)

@@ -8,6 +8,8 @@ Each value is a number in `[0,1]` or `*pending*`.
 | `bearing` | one scoring edge's relevance (relevance of the source node to the target node) |
 | `strength` | computed from rigor and effects of incoming edges – what the sheet draws and bands use |
 
+**`*pending*`** is a null: a value not yet judged, which is not a low one. It propagates by its own rules, written with `⊥` in [The walk](the-walk.md): `max(⊥, x) = x` and `min(⊥, c) = ⊥`. [Pending inputs do not participate](pending-inputs-do-not-participate.md) states what a pending value does to the nodes and edges around it.
+
 Rigor and bearing are orthogonal values. A source may be exquisite, but have no bearing on the node
 it is supposed to support. It may also be shoddy, but exactly on point.
 

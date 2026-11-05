@@ -9,11 +9,11 @@ cost.
 Bearing is how much of the source's own argument does work for the target: the parts that supply what
 the edge's context says the target takes, and the parts that would change what one should think of
 some part of the target's assertion, in either direction. A part that does neither is what the table
-charges. **How much of the target's surface the source reaches is not this measure.** `flt-partial`
+charges. **How much of the target's content the source reaches is not this measure.** `flt-partial`
 priced one part of a compound assertion left unengaged, and it is retired with the coverage question
 it was answering: a link that reaches one clause of a five-part theorem and nothing else is priced on
 what the source's own argument does with that clause. Target coverage is a known weakness of the
-scheme, with its own R&D pending, and no charge prices it until that lands.
+scheme, with its own R&D pending, and no charge prices it until that is delivered.
 
 | fault id | the fault | one occurrence is | weight per occurrence |
 |---|---|---|---|
@@ -23,15 +23,15 @@ scheme, with its own R&D pending, and no charge prices it until that lands.
 | `flt-conditional` | The source applies only under a condition it does not state: its content is stated under conditions, and its bearing on the target depends on a condition the source does not give — a regime, a temperature, an assumption — that the target's assertion needs. | One unstated condition the bearing depends on: as many conditions. | `0.10` |
 | `flt-inapplicable` | One part of the source's argument does no work for the target: nothing that part states is what the edge's context says the target takes, and nothing else it states would change what one should think of any part of the target's assertion, in either direction; a shared vocabulary is not work done. | One part of the source that reaches nothing: as many parts. | `0.10` |
 
-**The ask lists them specificity first.** A part that satisfies two of these tests is charged as the
+**The prompt lists them specificity first.** A part that satisfies two of these tests is charged as the
 earlier one — a term used two ways, a scope narrower than the assertion, an unstated bridge, an
 unstated condition — and `flt-inapplicable` comes last so it takes only a part that fits none of them.
-The table follows the ask's order.
+The table follows the prompt's order.
 
 **A part's weight is absolute, and the bias that follows is known.** Fifty parts that do work and two
 that do not price as two and two do: `0.80` either way. Pricing the fraction the dings are of the whole
-would take a second ask that quantifies the argument's total volume, and asking a model what fraction
-of an argument one statement is answers unreliably; the scheme carries the bias until a reliable form
+would take a second model call that quantifies the argument's total volume, and asking a model what fraction
+of an argument one statement is answers unreliably; the scheme has the bias until a reliable form
 exists. The `0.10` is the same for every charge, tuned against a guessed average chunk size, and is
 provisional.
 

@@ -1,26 +1,29 @@
 ### `verify`
 
-[Page §3.6 `verify`](../../../NEW_MCP_CLI_DESIGN/3-operations/3.6-checks-and-output/verify.md) is the contract: its
-faults and their check names, their remedies, the `demoted` findings and the result. What this
-release adds to the page and holds:
+`verify` checks the KB and writes nothing. It takes no arguments and no lock. Its result is `findings`, then `refusals` where the outcome is `refused` ([§7](../7-tool-result-contract-and-exit-codes/item.md)).
 
-- The dead-link gate resolves each link target against the repository; a target leaving the
-  repository is no fault. Which fragments are live is the page's rule; a bare `#fragment` reaches
-  its own document, an element's `id` counts outside code only, a summary page's entry anchors are
-  those derived for it, never the page as it stands, and an empty fragment names the document's
-  top. A fragment into a file outside `kb-root/`, or into one that is not Markdown, is not checked.
-- A summary page's `register-freshness` remedy is the page's empty write batch, except over a KB in an
-  older format, where that batch is refused until the conversion is saved, it is
-  `kbase update-format`, which re-derives every page too.
-- `unknown-id`'s prose ids are read outside code, of any kind.
-- `bare-id` reads every document but the register pages, outside code, statement markers and link
-  titles and destinations. Its remedy is a write batch of one `add-citation` entry: the `id`, the
-  `document`, the `line` and the id as `snippet`.
-- `frontmatter`'s remedy is to remove the block; the entry point is checked as every document is.
-- `statement-marker` covers a claim, an analysis or an experiment. An `axiom-heading` marked heading
-  is one at any depth whose line carries an axiom's marker.
-- A KB whose load fails is refused with the load error ([page §2.4](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.4-load-errors.md)).
-- `findings` is present on `done` and on `refused`.
-- The build's gate stage runs this same check.
+**Faults.** Each fault is an item under `refusals`, with the check that names it:
+- `dead-link`: a link under `kb-root/`, anchors and citations included, whose target names no file, or whose fragment names no anchor of the document it reaches.
+  - A target resolves against the repository, taken as written; a target leaving the repository is no fault. A URL, a `~` path and a `.tex` target are not file links, and a link inside code is no link.
+  - A fragment is live where it names a heading's anchor, or an HTML element's `id` outside code, in the document it reaches. A bare `#fragment` reaches its own document, and an empty fragment names the document's top. A summary page's live anchors are the entries derived for it, never the page as it is now. A fragment into a file outside `kb-root/`, or into one that is not Markdown, is not checked.
+- `unknown-id`: an id in a citation's link title, or a node id in prose, that names no node. Prose ids are read outside code, of any kind. A placeholder id — a kind's prefix over `xxxxxx`, such as `clm-xxxxxx` — is never unknown.
+- `bare-id`: a node id in prose, of any kind a record has, in every document but the summary pages, outside code, statement markers and link titles and destinations ([§10](../10-metadata-format-version/citations.md)).
+- `frontmatter`: a frontmatter block on any document, the entry point included.
+- `index-freshness`: a KB in an older format.
+- `statement-marker`: a claim, an analysis or an experiment with no statement marker or more than one ([§10](../10-metadata-format-version/statements-and-anchors.md)).
+- `axiom-heading`: an axiom whose record and `axioms.md` disagree by one of the three checks of [§10](../10-metadata-format-version/axioms.md). A marked heading is one, at any depth, whose line contains an axiom's marker.
+- `register-freshness`: a summary page that does not match what the rebuild of the derived views renders ([§10](../10-metadata-format-version/documents-of-a-kb.md)).
+
+**Remedies.**
+- `index-freshness`: `kbase update-format`.
+- `register-freshness`: the empty write batch ([§8](write-batches/index.md)), which rebuilds every page; over a KB in an older format, where that batch is refused until the conversion is saved, `kbase update-format`, which rebuilds every page too.
+- `bare-id`: a write batch of one `add-citation` entry: the `id`, the `document`, the `line` and the id as `snippet`.
+- `frontmatter`: remove the block.
+- Any other fault: the user's git work or prose edit, guided by the fault's detail.
+
+**Findings** are not faults: every `demoted` record is one (`check: demoted`, [§10](../10-metadata-format-version/the-demoted-relation.md)). `findings` is present on `done` and on a `refused` outcome that lists faults. A KB whose load fails is refused with the load error and has none.
+
+The build's gate stage runs this same check.
 
 Result keys: [§7](../7-tool-result-contract-and-exit-codes/index.md).
+

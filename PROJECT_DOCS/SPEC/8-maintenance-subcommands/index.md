@@ -1,19 +1,11 @@
 ## 8. Maintenance subcommands
 
-Every subcommand below is reachable by an external agent harness as a builtin tool — its own, as
-an operation of the `query` tool, or, a write op, as an entry of the `write` tool's batch ([§11](../11-the-mcp-server.md)) — `probe` excepted — a
-tool would let an agent poll a model, which no KB operation asks for ([§11](../11-the-mcp-server.md)); `score` starts a detached
-child that asks one model call per item and returns at once with the run's identity, so the turn is
-not held for the walk's duration ([§11](../11-the-mcp-server.md)). The rules in this section govern each.
+Every subcommand below is reachable by an external agent harness as an MCP tool: a tool of its own, an operation of the `query` tool, or, for a write op, an entry of the `write` tool's batch ([§11](../11-the-mcp-server/index.md)). `score` starts a detached child that makes one model call per item and returns once the run has started, with the run's identity, so the turn is not held for the run's duration ([§11](../11-the-mcp-server/tools.md) states the wait). The rules in this section govern each.
 
 Contents:
 
-- [§8 Values input](values-input.md)
-- [§8 Idempotence](idempotence.md)
-- [§8 Writes leave nothing stale](writes-leave-nothing-stale.md)
-- [§8 One write lock](one-write-lock.md)
+- [§8 Write batches](write-batches/index.md)
 - [§8 `init`](init.md)
-- [§8 Write ops](write-ops.md)
 - [§8 `restore-demoted`](restore-demoted.md)
 - [§8 `add-<kind>`](add-kind.md)
 - [§8 `edit-<kind>`](edit-kind.md)
@@ -33,4 +25,3 @@ Contents:
 - [§8 `probe`](probe.md)
 - [§8 `update-format`](update-format.md)
 - [§8 `verify`](verify.md)
-- [§8 `status`, `cancel`](status-cancel.md)

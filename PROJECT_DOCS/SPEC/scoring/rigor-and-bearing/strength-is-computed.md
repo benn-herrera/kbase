@@ -1,6 +1,6 @@
 ## Strength is computed
 
-[STRENGTH_SCORING_SCHEME.md](../strength/entry-point.md) owns the walk — the sets, the `⊥` table, the
+[STRENGTH_SCORING_SCHEME.md](../strength/entry-point.md) owns strength propagation — the sets, the `⊥` table, the
 empty-`P(n)` rule and its consequences — and this page changes none of it. One consequence bears on a
 reader of a `rigor` value: an empty `P(n)` means no premise carries the node, so a claim's strength is
 `0` however good its statement.

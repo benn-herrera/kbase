@@ -6,14 +6,14 @@
   beside it. The one self-exec owner is a file, not a package: `internal/mcp/launch.go` alone may
   exec the kbase binary, and the test fails on any other file that does. Four owners are the whole
   list — pandoc, git, `dot` and that self-exec — and a process started anywhere else fails the
-  test. The policy scans share one module walk (`cmd/modulescan_test.go`), so they agree on which
+  test. The policy scans share one module traversal (`cmd/modulescan_test.go`), so they agree on which
   files are the module's source. The monopoly binds the shipped code: the scan skips test files,
   and a test may start the processes its fixtures need. A test needing a binary the environment
   does not guarantee still belongs in a runner recipe, under "Testing"'s tool-dependency rule.
-  Evidence gathered for the change at hand is not a verification but a
-  probe — a script run by hand in scratch, its log cited in the report, with no durable home. A
-  probe whose finding must keep holding becomes a verification: the check lands in a recipe. A
-  probe whose result a commit or plan cites keeps its command in the commit message, so a later
+  Evidence gathered for the change at hand is not a verification but an
+  exploratory check — a script run by hand in scratch, its log cited in the report, with no durable home. An
+  exploratory check whose finding must keep holding becomes a verification: the check is added to a recipe. An
+  exploratory check whose result a commit or plan cites keeps its command in the commit message, so a later
   reader can re-run it.
 - **A pre-pass beyond I3's two is an ARCHITECTURE change, never a patch.** Nothing outside the
   registry massages source.

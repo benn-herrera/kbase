@@ -1,7 +1,7 @@
 ## Worked examples
 
-The example above is the diagram's own fragment, so its figures are the diagram's and move with it. This
-set holds the inputs still instead: the same values are authored on every node in every case, and the only
+The example above is the diagram's own fragment, so its figures are the diagram's and change with it. This
+set keeps the inputs fixed instead: the same values are authored on every node in every case, and the only
 thing that varies is which edges exist. Nothing requires a KB to author the same values everywhere — the repetition
 is the exercise's, not the format's — and it is what lets each relation be read against the same operands.
 
@@ -21,9 +21,9 @@ reaches eight — every fifteen hundredths — and `0.70` is one of them, and th
 reaches eleven — every tenth
 ([RIGOR_AND_BEARING_SCORING_SCHEME.md](../../rigor-and-bearing/the-band-outcomes/the-method-table.md), "The method table", "The
 bearing values"). Three of the four bearings are `1.00`, a link with no bearing charge, and those
-contributions are their sources' own values: the sources are what this set holds still. The exception is
+contributions are their sources' own values: the sources are what this set keeps fixed. The exception is
 the supporting edge's `0.20` — eight bearing charges, a claim
-speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly moves a
+speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly changes a
 number.
 
 The four products, one per relation, are therefore:

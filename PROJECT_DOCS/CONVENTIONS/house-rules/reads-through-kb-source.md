@@ -1,6 +1,6 @@
 ### Reads through `kb.Source`
 
-Every KB file is read through `kb.Source` from `kbload.Open`. The trap: an `os.ReadFile` of a KB
+Encapsulation: every KB file is read through `kb.Source` from `kbload.Open`. Pitfall: an `os.ReadFile` of a KB
 file in a verb or package, which sees the on-disk form of an unconverted KB.
 `cmd/readpolicy_test.go` fails on any direct KB file read outside its allowlist. The rule covers
 file reads only: a directory listing of `kb-root/` (`os.ReadDir` in `internal/index/refresh.go` and

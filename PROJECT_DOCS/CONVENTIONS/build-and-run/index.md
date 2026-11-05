@@ -3,7 +3,7 @@
 Run `just` (the default recipe) for the up-to-date recipe list with docstrings — that output, not
 this file, is the reference for available actions. Key habits: `just edit-gate` after every change,
 `just checkpoint` at checkpoints, and anything LIVE (provider + network) is excluded from the
-hermetic `just test-integration` omnibus and says so in its docstring.
+hermetic `just test-integration` aggregate target and says so in its docstring.
 
 kbase is distributed through the Homebrew tap `benn-herrera/kbase`, whose formula is maintained in
 the sibling clone `homebrew-kbase/` (`just tap`). The formula builds a tagged release from source

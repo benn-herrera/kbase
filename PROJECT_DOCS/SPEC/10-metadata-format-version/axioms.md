@@ -1,8 +1,11 @@
 ### Axioms
 
-An axiom is declared by its node record, which `add-axiom` writes ([§8](../8-maintenance-subcommands/index.md));
-`axioms.md` is prose stating it, one `### Axiom <label>: <title><!-- kbase-id: <id> -->` heading
-each, the marker pairing heading and record ([page §1.1](../../../NEW_MCP_CLI_DESIGN/1-model/1.1-nodes.md)), and is not read for declarations. `verify`'s
-`axiom-heading` check holds the two together by the three checks page §1.1 lists, a fault the
-author's prose edit clears ([page §3.6](../../../NEW_MCP_CLI_DESIGN/3-operations/3.6-checks-and-output/verify.md)).
+An axiom is declared by its node record, which `add-axiom` writes ([§8](../8-maintenance-subcommands/index.md)). `axioms.md` is prose stating
+it, one heading each, `### Axiom <label>: <title><!-- kbase-id: <id> -->`; the marker pairs the
+heading with its record, and `axioms.md` is not read for declarations. That marker is not a
+statement marker, and the axiom stays unhosted. `verify`'s `axiom-heading` check holds the heading
+and the record together by three checks: each axiom record has exactly one heading ending in its
+marker; that heading's text is `Axiom ` followed by the record's label, `: ` and its title; and each
+marked heading names an axiom record. A fault of these checks is one the author's prose edit clears
+([§8](../8-maintenance-subcommands/verify.md)).
 

@@ -5,15 +5,15 @@ accepting — the report is an index, the diff is the evidence. Check the diff a
 violation classes:
 
 - integration tests invoke the app binary; no dev-only entry points, verbs, or test scaffolds around
-  the real surface — save a diagnostic the shipped binary does not contain (see "Dev-only
+  the real interface — save a diagnostic the shipped binary does not contain (see "Dev-only
   diagnostics")
-- verifications are repeatable invocations; evidence lands in inspectable artifacts, never only in
+- verifications are repeatable invocations; evidence is written to inspectable artifacts, never only in
   the report
 - no special-case file lifecycles: every path kbase writes belongs to a location SPEC or
   ARCHITECTURE names
-- no gate, pin, or assertion loosened to make something pass — expected-truth updates must state the
+- no check, pin, or assertion loosened to make something pass — expected-truth updates must state the
   new truth they track
-- no second home for a value, string, or mechanism that has one
+- no duplicate of a value, string, or mechanism that has a single source of truth
 - nothing beyond the dispatched scope, even improvements
 
 Violations block acceptance: fix (redispatch or direct) before commit. A report that flags a

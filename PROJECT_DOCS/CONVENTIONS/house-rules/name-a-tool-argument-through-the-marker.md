@@ -3,9 +3,9 @@
 Text an MCP reader can receive names a tool argument through the marker (`internal/argmark`:
 `argmark.Flag`, `argmark.Positional`, and `argmark.FlagValue` for an argument with its value), and
 a kbase command line in it is a call held as an arguments mapping (`argmark.Call`); a refusal's key
-is built by the constructor. Never wrap a marker in backticks or quotes at the source: the spelling
-sets an embedded one off itself. Each surface
-spells the marked form where a document or a help text is emitted (SPEC §7 `key`, `remedy`;
+is built by the constructor. Never wrap a marker in backticks or quotes at the source: the marker's formatting
+sets an embedded one off itself. Each interface
+formats the marked form where a document or a help text is emitted (SPEC §7 `key`, `remedy`;
 ARCHITECTURE §11).
 - **Never write `--name`, `<name>` or `kbase <command>` literally for an argument or a command a tool
   takes.** A literal stays literal over MCP. It stays where no MCP rendering reads the text — a CLI

@@ -1,6 +1,6 @@
 #### Tables
 
-`kbase-xref.json` is generated from the walk, each document's first heading and the
+`kbase-xref.json` is generated from the traversal, each document's first heading and the
 bibliography sources, and named to the filter by the metadata key `kbase-xref`. The field-level
 schema is the head comment of `kbase-export.lua`; the keys:
 
@@ -10,11 +10,11 @@ schema is the head comment of `kbase-export.lua`; the keys:
 - `theorems`: every display name `kb.LabelLine` reads off a label line of the front matter or an
   exported document, so the label-name grammar stays in Go;
 - `bibliography`: citation key → entry body as gfm text. Each exported volume's `references.md`
-  entries (`kb.BibliographyEntries`) and, where any exported volume has none, every work record
-  (a work's title), the first entry of a key standing;
+  entries (`kb.BibliographyEntries`) and, where any exported volume has none, every work record (a
+  work's title); the first entry of a key is kept;
 - `report`: the path the filter writes its findings to;
 - `assets`: kb-root-relative path of a copied file → its path under the out directory; the
-  claim-graph sheets (SPEC §3) are not copied, being drawings of the metadata;
+  claim-graph sheets (SPEC §3 `claim-graph.svg`) are not copied, being drawings of the metadata;
 - `entry_point`: the entry point's path, the front matter's source;
 - `streams`: the stream file names in reading order.
 

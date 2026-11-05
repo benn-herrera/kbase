@@ -1,26 +1,16 @@
 ### `remove-node`
 
-`remove-node` is [page §3.1](../../../NEW_MCP_CLI_DESIGN/3-operations/3.1-node-writes/remove-node.md)'s node removal: its key, its result's `id` and `removed-edges`,
-and its refusals, checked at the point the entry applies ([page §2.2](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.2-write-batches.md)). An `id` no node carries
-is refused "no node" ([page §2.10](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.10-existence.md)), so a re-issued removal is refused. What this release adds to
-the page and holds:
+`remove-node` removes a node of any kind and every record naming it: the node record, its statement marker (or an axiom's heading in `axioms.md`), every edge naming it at either end, and every demoted record naming it. kbase keeps no undo: git restores what a removal took, and a dry run previews it.
 
-- The "no node" item is as an edit's ([§8](edit-kind.md)): `check: unknown-id` at `id`, `detail`
-  `no node <id>`.
-- An axiom's removal takes every `### Axiom` heading carrying its marker out of `axioms.md`, and
-  nothing else of that file.
-- A removal that shifts another summary entry's or `axioms.md` heading's repeat suffix — a later
-  heading of the same slug taking a lower one — re-points every link into the shifted anchor in the
-  same write, as an edit does ([§8](edit-kind.md)). A link into the removed node's own entry or
-  heading has no new destination and stands: it is not refused unless it is a citation.
-- Each `removed-edges` row is the row `edges` answers for that record ([page §3.4](../../../NEW_MCP_CLI_DESIGN/3-operations/3.4-queries/edges.md)), ordered
-  by source, target and context, demoted records included.
-- A mention refusal is one item per citing line and per mentioning field, each at `id`. A citation is read outside code, in every
-  document but the summary pages, which the derivation renders; it is named by `path` and `line`. A
-  prose field mentions the node where it cites it or holds its id bare, and is named by its record
-  file as `path` and by record and field in `detail`; its remedy names the `edit-<kind>` of the
-  record's kind or `edit-edge`, and for a demoted record's `context` a `restore-demoted` then
-  `edit-edge`, or a `remove-edge` with `relation: demoted`.
-- A work's span refusal reads each citation span's `data-cites` outside code, in every document
-  but the summary pages, one item per span line at `id`, named by `path` and `line`; a
-  reference-list entry of the label's key in any such document lets the removal through.
+- **Keys**: `id`, required.
+- **Result**: `id`, and `removed-edges`: every edge record removed, each as the full row `edges` answers ([§8](edges.md)) — `bearing` and `context` included, so an edge can be added back onto a replacement node without reading `edges` before the removal — ordered by source, target and context, demoted records included.
+- An axiom's removal takes every `### Axiom` heading that ends in its marker out of `axioms.md`, and nothing else of that file.
+- A removal that shifts another summary entry's or `axioms.md` heading's repeat suffix — a later heading of the same slug taking a lower one — updates every link into the shifted anchor in the same write, as an edit does ([§8](edit-kind.md)). A link into the removed node's own entry or heading has no new destination and stays; it is not refused unless it is a citation.
+
+**Refusals**, checked at the point the entry applies:
+- an `id` no node has is refused "no node": `check: unknown-id` at `id`, `detail` `no node <id>`; so a repeated removal is refused;
+- the id is still mentioned. One item per citing line and per mentioning field, each at `id`:
+  - a citation of the node, read outside code in every document but the summary pages, which the rebuild renders, named by `path` and `line`. The remedy is to edit that prose;
+  - for a work, a citation span whose `data-cites` names its label where no reference-list entry in any such document has that key, one item per span line, named by `path` and `line`. The work record is that span's only bibliography entry, so without it the export prints the span as plain text. The remedy is to edit that prose;
+  - a prose field of a record that survives the removal (`title`, `rationale`, an edge's `context`) that cites the node or contains its id bare, named by its record file as `path` and by record and field in `detail`. The remedy names the `edit-<kind>` of the record's kind or `edit-edge`, an entry earlier in the same batch; for a demoted record's `context`, a `restore-demoted` then `edit-edge`, or a `remove-edge` with `relation: demoted`.
+

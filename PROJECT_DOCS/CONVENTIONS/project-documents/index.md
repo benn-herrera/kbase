@@ -4,7 +4,7 @@ THESIS, SPEC, ARCHITECTURE and CONVENTIONS are trees of small files under `PROJE
 section one file. The root `THESIS.md`, `SPEC.md`, `ARCHITECTURE.md` and `CONVENTIONS.md` only
 point there.
 
-- Edit the leaf that holds the section. Never edit a root pointer file, and never regenerate the
+- Edit the leaf that contains the section. Never edit a root pointer file, and never regenerate the
   trees from the root files: the leaves are the source.
 - A new section is a new leaf, added to the `Contents:` list of its parent `index.md` and of the
   document's `entry-point.md`.
@@ -13,4 +13,4 @@ point there.
 
 Contents:
 
-- [Section and Rule Heading Brevity](section-and-rule-heading-brevity.md)
+- [Section and rule heading brevity](section-and-rule-heading-brevity.md)

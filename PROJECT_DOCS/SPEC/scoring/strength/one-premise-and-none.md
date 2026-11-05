@@ -6,7 +6,7 @@ the lift. Either way the product is a contribution through an edge, and an empty
 not suppress it. A claim whose only incoming edge is a refutation takes `min(0, C) = 0`: a cap is a
 ceiling and never a floor, so an attack with nothing under it establishes nothing. An analysis takes
 `min(r, C)` there — its method's number where the cap sits above it. A claim with no incoming
-scoring edge at all has an empty `L` and an empty `C`, and lands `0`; an analysis with none lands
+scoring edge at all has an empty `L` and an empty `C`, and reads `0`; an analysis with none reads
 its `r`.
 
 One premise proves the weaker of the two things in play — the claim's own statement and the premise's

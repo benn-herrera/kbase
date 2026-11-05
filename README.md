@@ -137,7 +137,7 @@ kbase build --resume
 
 Stages, in order: `start`, `document-graph`, `spine-seed`, `claims-declared`, `claims-discovered`,
 `equations-minted`, `references-found`, `claims-culled`, `depends-attributed`, `analyses-split`,
-`phase-3a`, `overview-drafted`. What each does is in [ARCHITECTURE §4](PROJECT_DOCS/ARCHITECTURE/4-stage-table.md).
+`phase-3a`, `overview-drafted`. What each does is in [ARCHITECTURE §4](PROJECT_DOCS/ARCHITECTURE/4-stage-table/index.md).
 
 `claims-culled` asks, for each pair of linked claims with a prose end, whether one adds nothing to
 the other; a prose claim that adds nothing is removed, and its links pass to the claim it was culled

@@ -2,7 +2,7 @@
 
 The claim graph: five node types, three quantities, four scoring relations, and the
 arithmetic that turns them into a number. This page is the scoring model's statement; [SPEC.md](../../entry-point.md)
-§10 carries the format, and [ARCHITECTURE.md](../../../ARCHITECTURE/entry-point.md) the implementation.
+§10 contains the format, and [ARCHITECTURE.md](../../../ARCHITECTURE/entry-point.md) the implementation.
 
 Contents:
 

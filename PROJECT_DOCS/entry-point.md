@@ -1,109 +1,107 @@
 # THESIS - kbase
 
-Why the KB system has the shape it has
+What this project is and why
 
-## The building thesis
+## kbase in plain terms
 
-**A well-structured argument inscribed in LaTeX is not raw text to be mined. It is a tree that has
-already been flattened, and distillation is deserialization.**
+kbase reads a set of LaTeX papers and produces a knowledge base: a directory of markdown files
+describing the papers' structure and the argument they make, as a graph of claims. It then keeps
+that knowledge base correct as people and agents edit it, and scores how well the argument holds
+up.
 
-Dump a program's tree data as JSON and you get a flat file; parse it back and you get the tree. A
-LaTeX document set is that flat file. The author built a hierarchy and the format serialized it, so
-the hierarchy is present in the bytes rather than latent in the prose.
+Almost all of that is assembled from well-known building blocks, used at small scale. A few
+pieces are new, and they are the reason the project exists. This page names both, so that work on
+a standard piece gets the standard answer and attention goes to the new ones.
 
-Two hierarchies are encoded this way, and they are independent.
+## The building blocks
 
-### The navigation hierarchy
+Each row is a standard pattern at the size kbase needs. The last column names the larger system
+the piece resembles and is not — the direction work on it must not drift.
 
-Titles, parts, chapters, sections, subsections. These are hierarchy encodings and nothing else: each
-one names a node and its position, and the nesting is the edge set. Breaking them into documents
-with children linked under their parents is a transcription, not a judgment.
+| kbase piece | The standard pattern | It is not |
+|---|---|---|
+| Reading LaTeX | Run pandoc; walk its JSON AST in Go and transform the tree. Before pandoc, a registry of narrow pre-passes, each filling one named gap in pandoc's reading | A LaTeX parser, macro engine or renderer. pandoc parses; kbase never does |
+| The knowledge base | A directory of markdown files with YAML frontmatter and JSONL record files, loaded whole into memory, validated on load | A database engine: no indexes, no query language, no storage layer |
+| Writes | A batch of operations validated all-or-none in memory, then written file by file with atomic renames; git is the undo log and the recovery | A transaction manager or a version-control system |
+| Derived pages and sheets | Views regenerated from the source files after every write, checked for staleness | A build system or a reactive framework |
+| Queries | Scans and lookups over the loaded set | A query planner or a search engine |
+| The claim graph | A DAG: cycle detection, reachability, a topological walk that folds values from sources to sinks | A general graph library or graph database |
+| Format versions | Numbered schema migrations, each a pure N→N+1 conversion, applied on read and saved by an explicit command | A migration framework |
+| Builds and scoring runs | A child process with a lockfile, a status file, an append-only log, cancel and resume | A job scheduler or workflow engine |
+| Model calls | Chat and decision-API clients, one fixed endpoint per role, behind a bounded call queue, with retry and backoff, and an answer cache keyed on the request | A general purpose agent harness or inference service |
+| Asking a model | A prompt template that asks a closed question and reads the answer as a choice from a fixed set or a reply parsed against a fixed grammar | Free-form generation; the model never freehands the metadata |
+| Configuration and credentials | Layered TOML files (explicit, repository, global) and a local credentials file | A secrets manager |
+| The CLI and MCP server | A cobra command tree; the MCP tools are generated from it over JSON-RPC on stdio | A plugin system or a general-purpose tool server |
+| Checks | Unit tests, golden fixtures, and tests that enforce the package dependency rules | — |
 
-Mechanical in the testable sense: a second implementation produces the same tree.
+Where a piece is in this table, its conventional answer is the default. A design that departs
+from the standard pattern states why, in ARCHITECTURE. A design that grows a piece toward its
+"is not" column is out of scope, however natural the next step looks.
 
-### The argument hierarchy
+## What is new
 
-The spine is also mechanically encoded, by two different constructs.
+Three things, and only these:
 
-**Nodes** LaTeX environments for theorems, lemmas, definitions, propositions and displayed equations
-carry auto-assigned identifiers. A claim that got an environment got an identity, and that identity
-is in the file.
+1. **What a claim graph is made of.** Five kinds of node and four scoring relations between them,
+   and the rule that a claim is a bare statement: any argument for it is a separate node.
+2. **The local judgments.** Each node and each edge gets a narrow, checklist-style judgment —
+   rigor for a node, bearing for an edge — from a closed list of faults, each fault costing a
+   fixed amount.
+3. **How the judgments combine.** A formula that carries those local values along the graph's
+   edges into a strength for every node.
 
-**Edges** A reference to one of those identifiers is written in `\ref`-family syntax, which names
-the reference target explicitly. A ref can not fully determine an edge mechanically as it may be a
-mention, supported by, or in support of the citation. It does indicate an edge candidate, however.
+The machinery that computes all three is standard, and listed above. SPEC defines them.
 
-**For an ideally transcribed paper, that captures all nodes and edge candidates.**
+## Building: the draft is mechanical, inference only refines it
 
-### Why the ideal does not hold
+A LaTeX document already encodes most of its own structure. The author built a hierarchy and the
+format serialized it; reading it back is deserialization, not interpretation.
 
-We don't get to choose our inputs, and authors frequently do not transcribe arguments into LaTeX
-exhaustively. Under-marking is the issue refinement via inference resolves.
+- **The navigation tree** — title, parts, chapters, sections — is a transcription of the sectioning
+  commands. A second implementation produces the same tree.
+- **The argument's nodes** — theorems, lemmas, propositions, displayed equations —
+  arrive as LaTeX environments with identifiers.
+- **The argument's edge candidates** arrive as `\ref`-family references to those identifiers. A
+  reference does not decide an edge.
 
-### What inference is for
+Authors under-mark their arguments, so a model closes three gaps:
 
-**Inference refines a mechanical draft. It never produces one.** Both hierarchies come out of the
-mechanical pass first.
+1. claims argued in prose with no environment (new nodes);
+2. references made in prose without `\ref` (new edge candidates);
+3. for each candidate, whether it is an edge and which way it points: mention, supported by, or in
+   support of.
 
-**Claim-graph refinement is the half that needs bounding**, and it closes exactly three gaps, all
-nameable:
+**Inference refines a mechanical draft; it never produces one.** Every model-refined step has the
+mechanical result to fall back on.
 
-1. A claim constructed in prose without a formal delimiter — real, argued, and carrying no
-   environment. (nodes)
-2. A reference made in prose without `\ref` syntax — inside either a prose-defined claim or a
-   properly delimited one. (additional edge candidates)
-3. Edge existence and direction - mention, supported by, in support of (exactly 3 options)
+In the finished graph, base claims sit at the bottom — asserted outright, or resting on a cited
+work outside the document set — and every other edge connects claims within it.
 
-In the final claim graph construction, base claims sit at the bottom, asserted de novo, or resting
-on a citation to a work outside this document set. The rest of the edges connect internally,
-resulting in a directed graph whose nodes and edges were drafted mechanically and refined by
-inference.
+## Scoring: small judgments, combined
 
-### Where we came from and where we are going
+An argument is a graph of claims and relations. Judge each node and each edge locally, with the
+narrowest question that decides it, and combine those judgments into a picture of the whole.
 
-The first prototypes of KB building took a full day of combined human/frontier AI model work and resulted
-in something that had a considerable settling-in period. Scoring the claim graph was on the order of hours.
+- **Intelligence-neutral.** The scheme gives usefully consistent results whoever applies it, human
+  or model. Narrow questions are what make that possible: the less arguable a question, the more
+  consistent its answers.
+- **Arrangement-invariant.** Two arguments made of the same points, arranged differently — one
+  linear in three medium steps, one built bottom-up from two foundations in five small steps —
+  must score essentially the same. Edge count, step size and direction of construction must not
+  be ways to game the score. This is a requirement the combining formula is measured against;
+  the current formula does not yet meet it and this is a topic of active development.
 
-The mechanical process to get the spine now takes seconds, and the current state of R&D has the inference
-portion of a KB build down to a couple hours of local inference with a result that still
-requires settling in, but is more structurally sound than the prototype. Scoring a full KB on high-end local
-inference (a 128 GB machine) takes minutes (again, WIP).
+## Targets
 
-The goal is to get to a ~30 minute KB build time for an average arXiv math paper using models that can be
-hosted on a 36GB M3 Max MacBook Pro. Scoring via local inference on the same machine should only take 
-five minutes. This would make kbase's utility available on a standard middleweight notebook commonly found
-in university labs and on researchers' desks.
+A build today takes a couple of hours of local inference and still needs manual adjustments afterwards;
+scoring a full knowledge base takes minutes on a 128 GB machine.
 
-If we could make it work even moderately well on a 16GB M3 MacBook Air, we've made it available to students.
-
-## The scoring thesis
-
-An argument can be broken down into a graph of nodes (claims, analyses, etc) and relationships (supports, refutes, etc).
-If we apply small, targeted, local judgments about the local rigor of each node and applicability of the relationships
-we can cascade those local judgments into a useful picture of the strength of the whole.
-
-### Intelligence-neutral
-
-If we design this system well it will produce usefully consistent results across a range of executors of the scoring scheme
-be they human or machine.
-
-### Simplicity of the individual judgments is the key
-
-When evaluating the nodes and edges, the narrower and less potentially arguable each question is, the more consistent the results will be.
-
-### The behavior of the scoring system must make sense as well as be consistent
-
-Two arguments constructed of the same points but arranged differently must score essentially the same.
-Example: 
-- Argument 1 is fairly linear, takes medium steps, and builds top down with about three layers of argument.
-- Argument 2 is two foundational points and builds bottom-up with small steps to make five layers of argument.
-
-If these arguments are essentially textual transformations of each other then they must score very closely. There should be no meta-gaming possible by modifying edge count, step size, construction direction, etc.
-
----
+The target is a build of an average arXiv math paper in about 30 minutes, and scoring in about
+five, on models a 36 GB M3 Max MacBook Pro can host — the machine common in university labs and on
+researchers' desks.
 
 Volumes:
 
-- [SPEC](SPEC/entry-point.md): The contract: what any compliant implementation of kbase must do.
-- [ARCHITECTURE](ARCHITECTURE/entry-point.md): How this implementation meets SPEC.md.
-- [CONVENTIONS](CONVENTIONS/entry-point.md): Guidance for agents (automated or human) working on this codebase.
+- [SPEC](SPEC/entry-point.md): Consumer-facing behaviors and outcomes
+- [ARCHITECTURE](ARCHITECTURE/entry-point.md): How this project's implementation meets requirements designated by SPEC
+- [CONVENTIONS](CONVENTIONS/entry-point.md): Project-specific process and house rules

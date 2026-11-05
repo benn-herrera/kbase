@@ -10,9 +10,9 @@ Must-see:
 - Coding
   - When accepting dispatched-agent work, follow [CONVENTIONS, Coordinator Policy](coordinator-policy/index.md)
   - Audit the diff, not the report, before commit
-- Briefing a seat
-  - A brief adds the task's facts to the seat's definition; it never widens or replaces the seat's question
-  - Before briefing a seat whose definition you have not read this session, read it
+- Briefing an agent role
+  - A brief adds the task's facts to the agent role's definition; it never widens or replaces the role's question
+  - Before briefing an agent role whose definition you have not read this session, read it
 
 Contents:
 
@@ -54,4 +54,4 @@ Contents:
 - [Dependency Policy](dependency-policy.md)
 - [Logging](logging.md)
 - [Project Documents](project-documents/index.md)
-  - [Section and Rule Heading Brevity](project-documents/section-and-rule-heading-brevity.md)
+  - [Section and rule heading brevity](project-documents/section-and-rule-heading-brevity.md)

@@ -1,19 +1,30 @@
 #### The runner
 
-`score.Runner` owns the loop and no I/O of its own. It takes the enumerated items, a
-`Launch` seam, which hands each item the `Ask` its one call goes through, a `Write` seam, the ledger, the model name the lines record and a
-logger — and, because the text is composed in that package, the `kb.Source` and `query.Index` the
-renderers read, and the `graph` they read built once from them (`graphOf`), which `Invoke` hands
-over where it built it for the scope. The pass is read once before the walk into its `class`es; per item one derivation of
-the item's class yields the instruction its one call carries and the table its charges are priced
-under, and the composer, the parse's closed set and the price all read that one fact. Per item it
-composes the closed text, asks, parses the reply as the charges it records against that text, prices
-them into the item's result cell and writes its result file; when the walk ends the run lands the result cells' values and appends their captures and lines; a text the guard refuses, a reply the parse refuses, or a call or
-write that fails appends `failed` with nothing written, and the loop continues. `prepare` returns,
-beside the entry, the `call` the item will make — class, closed text and prompt, nil where the class cannot be derived or the guard refuses the text — and `attempt` returns the entry and whether the walk's stop interrupted the call;
-the walk's end writes every capture before every line (below). Every item's prompt
-is composed in the walk's launch loop, which launches the items in the set's order through the run's
-`Launch` seam, at most N at once; each answer is held in its item's result cell and written in the
-set's order when the walk ends. `Counts` is computed from the ledger's last status
-per item, not this invocation's attempts, so a resumed run reports the whole run. A cancelled context
-stops the walk and records nothing for an item without an answer.
+**Pattern:** Bounded worker pool over a job list, results written in one batch at the end.
+
+`score.Runner` owns the item loop and no I/O of its own. It takes the enumerated items; the `Launch`
+interface, which hands each item the `Ask` its one model call goes through; the `Write` interface; the
+ledger; the model name the ledger lines record; and a logger. Because the item text is composed in this
+package, it also takes the `kb.Source` and `query.Index` the renderers read, and the `graph` they
+read, built once from them (`graphOf`); `Invoke` passes in the `graph` it built for the scope.
+
+The pass is read once, before the loop, into its classes. Per item, one lookup of the item's class
+yields both the instruction its call sends and the table its value is computed under, so the
+composer, the parse's fixed set and the value computation all read that one fact. The launch loop
+composes each item's prompt and launches the items in the set's order, at most as many at once as the
+invocation's `model.Queue` has permits. Each launched item makes its call, parses the reply as the charges
+it records against that item text, computes the value, keeps it in its own result cell and writes its
+result file.
+A text the input guard refuses, a reply the parse refuses, and a failed call or write each append
+`failed` with nothing written, and the loop continues.
+
+`prepare` returns the entry and the `call` the item will make: class, item text and prompt, or nil where
+the class cannot be derived or the input guard refuses the text. `attempt` returns the entry and whether
+the loop's stop interrupted the call. Nothing shared is written until the pool has drained (invariant
+I11, [§2](../../2-invariants.md)); the ledger's `flush` then writes the cells' values, appends their captures,
+then appends their lines, in the set's order. Writing at the loop's end rather than per item follows
+from I11: with calls in flight concurrently, per-item writes would land in completion order, while
+writing in the set's order makes the concurrency setting change wall time only. `Counts` comes from the ledger's last status per item, not from this
+invocation's attempts, so a resumed run reports the whole run. A cancelled context stops the loop and
+records nothing for an item without an answer; an interruption outranks a failure in the run's outcome.
+

@@ -9,9 +9,9 @@
 | pending refute | no cap; an unfinished attack establishes nothing, and a cap alone publishes no number where the derivation is `⊥` |
 
 **An edge that does not contribute is no supporter.** A pending bearing, a pending source strength,
-an edge from a non-`run` experiment and a premise the walk no longer holds all add no operand, so
+an edge from a non-`run` experiment and a premise that no longer participates all add no operand, so
 where such an edge is a claim's only one `P(n)` is empty and the claim reads `0`: an unjudged bearing
-is not support yet, and a claim behind one reads `unsubstantiated` until that bearing lands, never
+is not support yet, and a claim behind one reads `unsubstantiated` until that bearing is written, never
 `*pending*`. An analysis behind one is a method with no premise it can cite, and reads its own
 rigor. `bearing 0.0` reaches the same `0` for a claim by the other road — it participates, and the
 min takes the zero — and the two stay different states in the record whatever the strength reads.

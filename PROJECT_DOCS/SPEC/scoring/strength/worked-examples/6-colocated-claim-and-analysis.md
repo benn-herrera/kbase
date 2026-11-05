@@ -19,6 +19,6 @@ min is a different judgement: on C1 it is the statement vocabulary charged nothi
 is fixed, consistent and single-sensed, and says nothing about an argument, which a claim does not display;
 on A1 it is the method vocabulary charged nothing — the derivation engages what it sets out to establish
 and states its steps. A claim has no method and an analysis no statement quality, so one number stands for
-two different absences of fault; the node's class decides which criteria priced it, and the walk reads only
+two different absences of fault; the node's class decides which criteria priced it, and strength propagation reads only
 the number.
 
