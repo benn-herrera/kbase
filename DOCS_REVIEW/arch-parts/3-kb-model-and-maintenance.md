@@ -33,7 +33,7 @@ checks the structure of a returned passage.
 - **`Source`.** The read path for every KB file: the disk at the current format version, or the bytes a
   migration produced for an older one, with obsolete paths reading as absent. `Put` and `Removed`
   record a writer's change so later reads in the same command see it. `internal/kbload` builds it
-  ([§2](#2-invariants), I8; [§11](#loading)).
+  (§2, I8; [§11](#loading)).
 - **Records.** The schema types, `LoadGraph` (the two record files read through `Source`, decoded by
   `format400`, a rigor above `RigorMaximum` refused) and `EncodeNodes` and `EncodeEdges`.
 - **Schema.** The node kinds, relation names, id prefixes, `BearingLegal`, `MintID`, the band ladder
@@ -274,7 +274,7 @@ retarget a `demoted` record. `restore-demoted` is public, and `remove-edge` remo
 `add-build-edges` and `demote-claim-edge` run over records holding a cycle among the scoring edges
 (`index.DeriveOverCycles`). The build's edge batch closes such a cycle and cycle breaking
 ([§6](#cycle-breaking)) removes it within the same stage: its removals reach the records through
-`demote-claim-edge`, at the tail of `depends-attributed` ([§4](#4-stage-table)). `split-claim` is
+`demote-claim-edge`, at the tail of `depends-attributed` (§4). `split-claim` is
 applied by `analyses-split`. A batch of `add-build-edges` or `demote-claim-edge` that leaves records
 the rebuild refuses for a cycle among the scoring edges alone (`holdsOnlyCycles` in `ops.go`) is
 written without its rebuild of the derived views, because the rebuild cannot read such records; the
@@ -486,7 +486,7 @@ below the build ([§11](#dependency-rules)).
 
 It produces the full sheet always, and the overview diagram and one sheet per volume where two or more
 volumes contain nodes (SPEC §3 `claim-graph.svg`). It renders through a pool of `dot` processes bounded by
-`sheet.renderConcurrency` ([§12](#12-constants)), keeping output order. `dot`'s spline router can fail
+`sheet.renderConcurrency` (§12), keeping output order. `dot`'s spline router can fail
 on a dense sheet, and straight lines bypass it, so the emitter then composes the same DOT with
 straight-line splines and renders it once more; where both fail, the first error is reported. Without
 `dot` it renders nothing, leaves existing sheets as they are, and yields the placeholder only for a root
@@ -507,7 +507,7 @@ owns none of its own:
 
 - the format stamp through `kb.EncodeFormatStamp`, the plain entry point, and the two empty record
   files through `kb.EncodeNodes` and `kb.EncodeEdges`, every file through `atomicfile.Write`;
-- the loader's `Open` ([§2](#2-invariants), I8);
+- the loader's `Open` (§2, I8);
 - the readiness documents through `kbdocs.Stamp` with `kbdocs.AuthoredKBPin` in its scope-pin slot, its
   `written` list being the paths `Stamp` returns;
 - the derived views through `index.RefreshReporting`;

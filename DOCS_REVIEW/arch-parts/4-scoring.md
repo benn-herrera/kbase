@@ -40,7 +40,7 @@ A text the input guard refuses, a reply the parse refuses, and a failed call or 
 `prepare` returns the entry and the `call` the item will make: class, item text and prompt, or nil where
 the class cannot be derived or the input guard refuses the text. `attempt` returns the entry and whether
 the loop's stop interrupted the call. Nothing shared is written until the pool has drained (invariant
-I11, [§2](#2-invariants)); the ledger's `flush` then writes the cells' values, appends their captures,
+I11, §2); the ledger's `flush` then writes the cells' values, appends their captures,
 then appends their lines, in the set's order. No reason for writing at the loop's end rather than per
 item is written beyond that invariant. `Counts` comes from the ledger's last status per item, not from this
 invocation's attempts, so a resumed run reports the whole run. A cancelled context stops the loop and
@@ -64,8 +64,8 @@ the scoring role's endpoint with an empty system prompt, applies `--timeout` fro
 registry opens the client at the first call, so a run refused at its scope or holding no item connects
 to nothing. A provider's refusal of the call's key is a `modelclient.KeyRefusedError`; `scoringLaunch`
 turns it into a `score.RemedyError`, which the failed attempt's ledger line records. Retry and backoff
-are the chat client's ([§7](#7-inference-seams)); `scoringLaunch` supplies the pauses (`scoreBackoff`),
-and the attempt count and pauses are in [§12](#12-constants). The development replay takes its `Launch`
+are the chat client's (§7); `scoringLaunch` supplies the pauses (`scoreBackoff`),
+and the attempt count and pauses are in §12. The development replay takes its `Launch`
 from the same function, so a replayed call carries the run's endpoint, timeout and truncation rule.
 
 Each score template splices the `score-system` fragment into its own text, so the instruction is carried
@@ -118,7 +118,7 @@ first line). A node no leaf hosts (a work, an axiom, a node with no marker) rend
 `context` from the row `Index.Edge(ScoringEdge)` answers. Each end's label opens a line of its own, as
 does the context's, so no numbered line begins with template-wrapper text.
 
-`assemble` wraps every section of the item text at word boundaries to `wrapWidth` ([§12](#12-constants)),
+`assemble` wraps every section of the item text at word boundaries to `wrapWidth` (§12),
 keeping the section's own line breaks and rewriting nothing, and numbers the lines lying in a section
 that a charge may cite, from 1 over the whole text. `closedText.numbered` writes `N| ` before a numbered
 line; the gutter is the template wrapper's, not part of the text the call sends. A label line, a blank
@@ -256,7 +256,7 @@ dry run writes beside `run.yaml`. The files, the line's keys and the optional `r
 
 The state directory is `internal/statedir.Dir`'s: the override, else `$XDG_STATE_HOME/kbase/<key>`, and
 never inside `kb-root/`. It is shared with the build so a run and a build agree on the state directory
-for a KB; the build store's own format record is `internal/buildstore`'s ([§8](#8-ledger-state-store-and-monitoring)).
+for a KB; the build store's own format record is `internal/buildstore`'s (§8).
 The run takes the run lock through `build.Hold` ([§8](#locks)); the lock's record names `kind: score` and
 the run id.
 
@@ -294,7 +294,7 @@ byte for byte. `TestCapturesReRenderToTheirDigest` asserts it over captures the 
 
 **Pattern:** Keep-last-N retention.
 
-`KeptRuns` ([§12](#12-constants)) runs of each kind remain under `score/`. A real run's id is minted
+`KeptRuns` (§12) runs of each kind remain under `score/`. A real run's id is minted
 `run-<id>` and a dry run's `dry-<id>` (`kb.MintID`'s prefix, `RunKindReal` and `RunKindDry`). A
 directory's kind is its name's prefix (`runKind`), so the two kinds are counted apart.
 `score.PruneRuns(dir, run)` keeps the run the invocation names, created or resumed, and the newest
@@ -320,7 +320,7 @@ whatever the prefix.
 **Pattern:** Optimistic concurrency with partial-batch retry.
 
 `internal/score`'s `landValues` writes a run's answered values in one write batch, under one hold of the
-KB write lock taken through `write.LockKB` ([§8](#locks); wait: `write.LockWait`, [§12](#12-constants)).
+KB write lock taken through `write.LockKB` ([§8](#locks); wait: `write.LockWait`, §12).
 It is the single path to the KB: the loop's end, a resume's merge of stopped results and a resume's
 recomputation all reach it through the `Write` interface (SPEC §8 Writing the results).
 
@@ -448,7 +448,7 @@ Registration is `readWriteTool(scoreCmd)` in `cmd/surface.go`: the command is ex
 and the server starts it as a detached child (`mcp.ScoreLaunch`), as it starts `build`, returning the
 run's identity and a `wait` command instead of holding the turn for the loop's duration. The tool
 table and the detached child are [§12](#mcp-server-spec-11); the start wait is `launchStarting`
-([§12](#12-constants)). `--edge` is declared a mapping flag (`mcp.MappingFlag`): over MCP an object of
+(§12). `--edge` is declared a mapping flag (`mcp.MappingFlag`): over MCP an object of
 `source`, `target` and `relation`, joined into the `--edge` the child takes.
 
 #### The development replay
@@ -470,7 +470,7 @@ as `just build`, `just test` and `just test-race` do. What the replay reads is n
 ledger and captures are written by the untagged `internal/score/ledger.go`, so a replay in a dev build
 reads the records a released kbase wrote. `edit-gate` vets both build tags, and `test-dist-no-replay`
 runs `TestDistBuildHasNoReplay` (`cmd/dist_test.go`) on the untagged build, which asserts the three flags
-absent and the hook nil, and the same of the build's development replay ([§8](#8-ledger-state-store-and-monitoring)).
+absent and the hook nil, and the same of the build's development replay (§8).
 
 `scoreReplayRun` takes `--pass`, `--failed`, `--limit`, `--scoring-model`, `--state-dir`, `--timeout` and
 `--ask-concurrency` beside `--replay`, and the global `--config-dir`. Any other score flag with it is a
@@ -498,11 +498,11 @@ reads the reply with `call.attempt`, the runner's own parse against the captured
 class's table, then computes the value. It writes no result to the KB, and a per-item failure is counted,
 not the replay's outcome. While it runs it logs its progress through the verb's logger, at info level,
 as the message `replay progress` with the keys `done`, `failed`, `remaining` and `total`: at most once
-per `ReplayProgressInterval` ([§12](#12-constants)) and once more when the loop ends. The counter and the
+per `ReplayProgressInterval` (§12) and once more when the loop ends. The counter and the
 one goroutine that logs it are `buildstore.ReplayProgress`, which both development replays use. An item
 only increments the counter as its call returns (an item whose status is `done` counts done, any other
 answered item failed, an interrupted one neither), and no item and no progress line writes a file
-(I11, [§2](#2-invariants)).
+(I11, §2).
 
 The replay writes only under `score/<run>/replays/<replay-id>/`, each of its three files appended once,
 when the loop ends, the id minted `replay-<id>` as a run's is:

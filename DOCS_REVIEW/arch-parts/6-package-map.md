@@ -10,12 +10,12 @@ to the section that owns how it works.
 |---|---|---|---|
 | `cmd` | cobra root; one file per subcommand; `surface.go` is the single registration file | Generated API surface from a command registry | [§12](#mcp-server-spec-11) |
 | `internal/argmark` | The marker by which text names a tool argument (`Flag`, `Positional`, `FlagValue`) or contains a kbase call (`Call`, `Recorded`), and `Spelling.Spell`, each interface's formatting of it. Imports no kbase package | Per-surface presentation layer | [§9](#per-interface-rendering) |
-| `internal/result` | The result document and its emitter; the outcome-to-exit table; `Spelled`, `Verbatim` and `Reemit` | Single structured-output writer | [§9](#9-result-emitter) |
-| `internal/latex/pandoc` | Reader, writer and defaults-run interface to pandoc (I1) | Wrapped external tool with a version gate | [§5](#51-pandoc-seam) |
-| `internal/latex/prepass` | The two source scans (I3) | Preprocessor registry with instrumentation | [§5](#52-pre-pass-registry) |
-| `internal/docgraph` | JSON transforms, whole-volume render and cut, outline, records, partition checks, `validate_build` | Pandoc AST filter | [§5](#53-json-transforms) |
-| `internal/records` | The record schema `docgraph` writes and `claimgraph` reads | Sidecar metadata stream | [§5](#55-records) |
-| `internal/export` | The LaTeX export: `export.Run`, one sequence over unexported steps (the traversal, the inputs of `gen-tex/`, the embedded filter and template, the starter `preamble.tex`, the report) | Pandoc multi-file conversion with a Lua filter, a custom template and a manifest-tracked output directory | [§5](#57-latex-export) |
+| `internal/result` | The result document and its emitter; the outcome-to-exit table; `Spelled`, `Verbatim` and `Reemit` | Single structured-output writer | §9, [§9](#per-interface-rendering) |
+| `internal/latex/pandoc` | Reader, writer and defaults-run interface to pandoc (I1) | Wrapped external tool with a version gate | §5 |
+| `internal/latex/prepass` | The two source scans (I3) | Preprocessor registry with instrumentation | §5 |
+| `internal/docgraph` | JSON transforms, whole-volume render and cut, outline, records, partition checks, `validate_build` | Pandoc AST filter | §5 |
+| `internal/records` | The record schema `docgraph` writes and `claimgraph` reads | Sidecar metadata stream | §5 |
+| `internal/export` | The LaTeX export: `export.Run`, one sequence over unexported steps (the traversal, the inputs of `gen-tex/`, the embedded filter and template, the starter `preamble.tex`, the report) | Pandoc multi-file conversion with a Lua filter, a custom template and a manifest-tracked output directory | §5 |
 | `internal/kb` | The kb-root model: names, exclusions, links, the format stamp, the record loader `LoadGraph`, the scoring weights, `Source` (the read path), and re-exports of the live format `format400` | Domain model and schema package | [§6](#the-kb-package) |
 | `internal/kbload` | `Open(kbRoot)`: reads the stamp, builds the `kb.Source`. Imports `buildrecords` for the root paths an older KB keeps its build records at | Schema validation at load, fail-closed | [§11](#loading) |
 | `internal/formats` | A tree of packages, one per format and one per converter; no file I/O | Chained schema migrations (upcasters) with golden tests | [§12](#format-migration-spec-10) |
@@ -24,26 +24,26 @@ to the section that owns how it works.
 | `internal/atomicfile` | The atomic file writer; `WriteMode` sets a file's permission exactly, umask and a replaced file's mode aside | Write to a temporary file, then rename | [§6](#write-api) |
 | `internal/query` | The queries over `Derive`'s rows: `find`, `show`, `stats`, `edges`, `trace` | Read model | [§6](#the-query-layer) |
 | `internal/sheet` | DOT emitter and `dot` invocation: rows, leaves and headings in, SVGs out | Graphviz rendering with a bounded process pool; a materialized view | [§6](#sheet) |
-| `internal/buildrecords` | Readers for the four build records and their paths under `kb-root/.build/` (`Dir`, `RecordFiles`) and at the repository root (`RootRecordFile`), where a KB before `4.0.0` keeps them | Sidecar metadata stream | [§4](#4-stage-table) |
+| `internal/buildrecords` | Readers for the four build records and their paths under `kb-root/.build/` (`Dir`, `RecordFiles`) and at the repository root (`RootRecordFile`), where a KB before `4.0.0` keeps them | Sidecar metadata stream | §4 |
 | `internal/kbdocs` | Readiness stamps, the maintained blocks' fences and rewrite (`Maintain`), README assembly, `SessionRule` and `IndexRule` | Scaffold command | [§6](#scratch-creation) |
-| `internal/claimgraph` | The claim-graph stages: conform, inventory, identify, attribute, shortlist, unmarked, order, cull, split, classify, equations, endcap, assemble, write, check, the four build records | Candidate generation then pairwise classification; `Novel:` for the claim-graph rows | [§4](#4-stage-table) |
+| `internal/claimgraph` | The claim-graph stages: conform, inventory, identify, attribute, shortlist, unmarked, order, cull, split, classify, equations, endcap, assemble, write, check, the four build records | Candidate generation then pairwise classification; `Novel:` for the claim-graph rows | §4 |
 | `internal/asks` | Embedded templates and fragments, composer, the multichoice-ask interface; `JudgedHash`, which `score`'s stale check and `write`'s value sets both call | Prompt templates with a lint test | [§6](#the-prompt-shelf) |
-| `internal/asks/call` | The caller: multichoice model calls through a `Slot`'s `Decision`, the overview call through its `Chat`; captures; answer cache | Content-addressed memoization cache | [§8](#8-ledger-state-store-and-monitoring) |
-| `internal/gitledger` | Git checkpoint commits, by exec (I1) | One adapter per external process | [§8](#8-ledger-state-store-and-monitoring) |
+| `internal/asks/call` | The caller: multichoice model calls through a `Slot`'s `Decision`, the overview call through its `Chat`; captures; answer cache | Content-addressed memoization cache | §8 |
+| `internal/gitledger` | Git checkpoint commits, by exec (I1) | One adapter per external process | §8 |
 | `internal/filelock` | The advisory file lock behind the KB write lock, the run lock and the state store's holder lock | Advisory file lock with timeout | [§8](#locks) |
-| `internal/build` | The stage walk and each stage's behaviour, the state store's writers, resume, `--no-inference`, `--through`, progress and cancel, the development replay (`kbasedev`) | Checkpoint/restart pipeline | [§4](#4-stage-table) |
-| `internal/buildstore` | The build's state, read: store layout, holder and progress records, stage vocabulary, `status`, `WaitState`, the checkpoint-commit reading (`CurrentTrail`, `BuildTrail`), `KBRootExists`, `OpenRepo`. Reaches no `model` and no `asks/call` | Versioned on-disk schema with sequential migrations | [§8](#8-ledger-state-store-and-monitoring) |
+| `internal/build` | The stage walk and each stage's behaviour, the state store's writers, resume, `--no-inference`, `--through`, progress and cancel, the development replay (`kbasedev`) | Checkpoint/restart pipeline | §4, [§8](#locks) |
+| `internal/buildstore` | The build's state, read: store layout, holder and progress records, stage vocabulary, `status`, `WaitState`, the checkpoint-commit reading (`CurrentTrail`, `BuildTrail`), `KBRootExists`, `OpenRepo`. Reaches no `model` and no `asks/call` | Versioned on-disk schema with sequential migrations | §8 |
 | `internal/score` | The score passes: item text and its input guard, a run's scope and stale check, the parse, the runner, the run's entry (`Invoke`), its ledger, captures, recomputing values and run retention, the development replay. Imports not `model`; imported by `cmd` and `internal/mcp` only | Bounded worker pool over a job list, results written in one batch at the end | [§6](#the-runner) |
-| `internal/statedir` | The state base `Base` (`$XDG_STATE_HOME/kbase`, `$XDG_STATE_HOME` defaulting to `~/.local/state` where unset or not an absolute path) and one KB's state directory: the override, else `<key>` under the base, never inside `kb-root/` | XDG state directory keyed by a path hash | [§8](#8-ledger-state-store-and-monitoring) |
+| `internal/statedir` | The state base `Base` (`$XDG_STATE_HOME/kbase`, `$XDG_STATE_HOME` defaulting to `~/.local/state` where unset or not an absolute path) and one KB's state directory: the override, else `<key>` under the base, never inside `kb-root/` | XDG state directory keyed by a path hash | §8 |
 | `internal/auth` | The credentials store | Local secrets file with a redacting secret type | [§7](#credentials) |
 | `internal/secret` | `Key`, the type every key travels in; imports no kbase package | Local secrets file with a redacting secret type | [§7](#credentials) |
-| `internal/config` | The configuration grammar, the three roles, `Resolve`, `Select`, the loaded files and templates, the configure commands' rules | Layered configuration | [§7](#7-inference-seams) |
-| `internal/model` | `Queue` and its `Slot`, the only exported entry to inference; the two wire clients | Counting semaphore with a capability token | [§7](#7-inference-seams) |
-| `internal/modelclient` | The client registry (`Registry`, one `model.Client` per endpoint, protocol and sampling) and the mapping of configuration's `api`, decision API and sampling onto `model`'s types (`chatProtocol`, `decisionsSurface`, `samplingOf`) | Factory registry with lazy, shared clients | [§7](#7-inference-seams) |
+| `internal/config` | The configuration grammar, the three roles, `Resolve`, `Select`, the loaded files and templates, the configure commands' rules | Layered configuration | §7 |
+| `internal/model` | `Queue` and its `Slot`, the only exported entry to inference; the two wire clients | Counting semaphore with a capability token | §7 |
+| `internal/modelclient` | The client registry (`Registry`, one `model.Client` per endpoint, protocol and sampling) and the mapping of configuration's `api`, decision API and sampling onto `model`'s types (`chatProtocol`, `decisionsSurface`, `samplingOf`) | Factory registry with lazy, shared clients | §7 |
 | `internal/mcp` | The MCP exposure of the command tree: tool table, help renderings, resources, instructions, the detached build and score launches. Imported by `cmd` alone | MCP server generated from the command tree | [§12](#mcp-server-spec-11) |
 | `internal/mcp/protocol` | JSON-RPC framing, dispatch, the `Tool`, `Schema` and `Property` types, the frame checks. Declares no subscribe capability | MCP server generated from the command tree | [§12](#mcp-server-spec-11) |
 | `internal/log` | The logging interface; formats each marked argument for the command line | Per-surface presentation layer | [§9](#per-interface-rendering) |
-| `internal/version` | `Current`, the version string | Named constants registry | [§12](#12-constants) |
+| `internal/version` | `Current`, the version string | Named constants registry | §12 |
 
 ### Loading
 
@@ -256,24 +256,29 @@ constant and link to this one. Exit codes and the placeholder's hash form are de
 | Constant | Value | Defined in |
 |---|---|---|
 | State-store key | First 16 hex digits of the SHA-256 of the absolute, symlink-resolved `kb-root/` path (SPEC §6 Git holds the recoverable record) | `statedir.KeyHexDigits` |
-| State-store format | 1, the integer in `<state-dir>/format` (SPEC §6 The state store is versioned; [§8](#8-ledger-state-store-and-monitoring)) | `StoreFormat`, `internal/buildstore` |
+| State-store format | 1, the integer in `<state-dir>/format` (SPEC §6 The state store is versioned; §8) | `StoreFormat`, `internal/buildstore` |
 | Run lock path | `<git dir>/kbase-operation.lock` (SPEC §6 Git holds the recoverable record; [§8](#locks)) | `buildstore.OperationLockFile` |
 | KB write-lock wait | 30 s: how long a writer, and the build's wait-out, try to take the KB write lock before `retry` (SPEC §8 One write lock) | `write.LockWait` |
 | Monitor lock wait | 2 s: the wait for the run lock and the holder lock, so a monitor probing one does not turn a starting run away | `buildstore.LockWait` |
 | Lock poll interval | 5 ms between attempts while waiting for a holder | `poll`, `internal/filelock` |
-| Builds kept | 5: the build trails, beside the current one, whose directories (answers, group records, call captures, the development replays) survive pruning; the captured builds under `reports/`, beside the newest, are kept to the same count ([§8](#8-ledger-state-store-and-monitoring)) | `keptBuilds`, `internal/build` |
-| Progress rotation | 500 lines a fresh build's `progress.jsonl` holds before it is rotated, about five builds; 15 rotated files kept ([§8](#8-ledger-state-store-and-monitoring)) | `progressRotateLines`, `keptProgressFiles`, `internal/build` |
-| Runs kept | 16: the scoring runs of each kind (`run-`, `dry-`), the replays of a run's `replays/`, the development replays of a build trail's `replays/`, and the captured score runs under `reports/` that survive pruning ([§6](#run-retention); [§8](#8-ledger-state-store-and-monitoring)) | `KeptRuns`, `internal/buildstore` |
+| Cancel wait | 20 s: how long `cancel` waits, after signalling the holder, for it to let the lock go before it reports the holder still running | `cancelWait`, `internal/build/monitor.go` |
+| Builds kept | 5: the build trails, beside the current one, whose directories (answers, group records, call captures, the development replays) survive pruning; the captured builds under `reports/`, beside the newest, are kept to the same count (§8) | `keptBuilds`, `internal/build` |
+| Progress rotation | 500 lines a fresh build's `progress.jsonl` holds before it is rotated, about five builds; 15 rotated files kept (§8) | `progressRotateLines`, `keptProgressFiles`, `internal/build` |
+| Runs kept | 16: the scoring runs of each kind (`run-`, `dry-`), the replays of a run's `replays/`, the development replays of a build trail's `replays/`, and the captured score runs under `reports/` that survive pruning ([§6](#run-retention); §8) | `KeptRuns`, `internal/buildstore` |
 | Replay progress interval | 10 s: the most often a development replay's walk logs its `replay progress` line ([§6](#the-development-replay)) | `ReplayProgressInterval`, `internal/buildstore` (`kbasedev`) |
 | Item-text wrap width | 100 columns: the width each section of the item text is wrapped to before its lines are numbered ([§6](#the-closed-text-and-its-guard)) | `wrapWidth`, `internal/score/text.go` |
 | Sheet render concurrency | 4: the most `dot` processes at once; output order is kept ([§6](#sheet)) | `sheet.renderConcurrency` |
-| Unmarked shortlist, proximity slots | 3: the nearest targets in its own paper that `references-found` makes model calls about per source ([§4](#4-stage-table)) | `shortlistProximityK`, `internal/claimgraph` |
-| Unmarked shortlist, wildcard slots | 2: the best-ranked targets by cosine asked about per source besides the proximity picks ([§4](#4-stage-table)) | `shortlistWildcardK`, `internal/claimgraph` |
+| Unmarked shortlist, proximity slots | 3: the nearest targets in its own paper that `references-found` makes model calls about per source (§4) | `shortlistProximityK`, `internal/claimgraph` |
+| Unmarked shortlist, wildcard slots | 2: the best-ranked targets by cosine asked about per source besides the proximity picks (§4) | `shortlistWildcardK`, `internal/claimgraph` |
 | `stats` leverage bar | 0.65, the strength bar of `highest_leverage`. It is its own constant, not derived from the band ladder, so a change to a band's lower bound does not move `stats` | `query.DefaultMaxStrength` |
 | `stats` dependents floor | 1, the dependents floor of `highest_leverage` | `query.DefaultMinDependents` |
 | Ask concurrency | Default 4: the model calls one invocation has in flight, and the idle connections per host its clients keep; `probe` runs a queue of one. Set by `[asks] concurrency` in `config.toml` (SPEC §9.2 `config.toml` — the choices) or `--ask-concurrency` on `build` and `score` | `config.DefaultAskConcurrency` |
-| Transport attempts | 3 per model call, chat and decision alike ([§7](#7-inference-seams) classifies what is retried) | `model.ChatAttempts` |
+| Probe ask concurrency | 1: the `probe` queue's one token, for its one call | `probeAskConcurrency`, `cmd/probe.go` |
+| Transport attempts | 3 per model call, chat and decision alike (§7 classifies what is retried) | `model.ChatAttempts` |
 | Transport pauses | 5 s, then 30 s, between attempts: the build's overview call and each of `kbase score`'s model calls. The build's multichoice calls repeat at once. A pause the call's deadline cannot cover is not waited out: the call ends at once, naming the attempts it made | `overviewBackoff`, `internal/asks/call`; `scoreBackoff`, `cmd/score.go` |
+| Response-header timeout | 2 min: the handshake alone, from the request written to the response headers read; a stream's body is bounded by the stream idle timeout | `responseHeaderTimeout`, `internal/model/transport.go` |
+| Stream idle timeout | 2 min: the longest gap between reads on an open stream before it surfaces as idle | `streamIdleTimeout`, `internal/model/sse.go` |
+| Error-body limit | 8 KiB (8192 bytes) of a non-2xx response body echoed into the error | `errorBodyLimit`, `internal/model/transport.go` |
 | Messages completion allowance | `max_tokens` is the thinking budget plus `max(256, ceil(characters / 4))` over the request's messages and system text; 256 is the floor | `maxTokensFloor`, `maxTokensFor`, `internal/model/anthropic_client.go` |
 | Thinking budgets (Messages) | `low` 1,024, `medium` 4,096, `high` 16,384 tokens (SPEC §9.1 The chat protocol) | `thinkingBudgetLow`, `thinkingBudgetMedium`, `thinkingBudgetHigh` |
 | Sampling | `[sampling.text]` and `[sampling.scoring]` in `config.toml`, each `temperature` and `thinking`; unset is temperature 0 and thinking off; `thinking` takes the values of `config.ThinkingLevels`; the temperature ranges are `openai` [0, 2] and `anthropic` [0, 1] | `config.ThinkingLevels` |
@@ -579,7 +584,7 @@ score …` by the same detachment:
 - Its stdout and stderr are files in the state store's `reports/`, `build-<UTC timestamp>-<random>`
   or `score-<UTC timestamp>-<random>` with `.stdout.yaml` and `.stderr.log`. Pruning keeps the
   newest `keptBuilds`+1 build captures (`build`'s prune) and the newest `KeptRuns` score captures
-  (`score.PruneRuns`) ([§12](#12-constants)).
+  (`score.PruneRuns`) (§12).
 - Before starting, the tool runs `status`'s preconditions: no worktree, or a `--state-dir` inside
   `kb-root/`, returns the refusal `status` gives and starts no process.
 - The `edge` flag of `score` is declared a mapping (`mcp.MappingFlag`), so its schema property is an
@@ -589,7 +594,7 @@ score …` by the same detachment:
   (`commaInMapping`) and starts nothing.
 
 The tool polls the state store every `launchPoll` and returns when the run has started or the child
-has exited, bounded by `launchStarting` ([§12](#12-constants)). The child takes the run lock and the
+has exited, bounded by `launchStarting` (§12). The child takes the run lock and the
 holder lock and emits its first progress event before it waits out a write ([§8](#locks)). What
 "started" means differs by tool:
 
@@ -630,9 +635,9 @@ for the same paper, with kbase's own readers. The hypotheses and their verdicts:
 | Hypothesis | Confirmed by | Refuted by | Verdict |
 |---|---|---|---|
 | No filter layer is needed | The conformance and inventory checks pass on kbase's tree; per-leaf word streams match; every citation state the reference trees exhibit appears in kbase's | A load-bearing form or word no JSON transform can produce | **Confirmed** on the six Slice-1 and Slice-2 papers; 49 of 50 corpus papers build |
-| Records suffice for the inventory | Every reader and placement fact of the inventory ([§5.5](#55-records)) is carried by kbase's records, item by item in scan order; every record joins exactly one document | A reader or placement fact that exists only in rendered bytes | **Confirmed**, with the visibility rule of [§5.5](#55-records): a block record exists only where the page has a label line the reader reads |
-| The preceding text run suffices | Withdrawn: the word before a reference is defined over the written page, so it is a page-defined reading ([§5.5](#55-records)), not a record | — | Withdrawn |
-| pandoc's writer suffices | Every Slice-1 check passes under it | A load-bearing form it cannot emit | **Confirmed**; the writer route is pandoc's gfm writer with `--wrap=none` ([§5.4](#54-writer-route)) |
+| Records suffice for the inventory | Every reader and placement fact of the inventory (§5.5) is carried by kbase's records, item by item in scan order; every record joins exactly one document | A reader or placement fact that exists only in rendered bytes | **Confirmed**, with the visibility rule of §5.5: a block record exists only where the page has a label line the reader reads |
+| The preceding text run suffices | Withdrawn: the word before a reference is defined over the written page, so it is a page-defined reading (§5.5), not a record | — | Withdrawn |
+| pandoc's writer suffices | Every Slice-1 check passes under it | A load-bearing form it cannot emit | **Confirmed**; the writer route is pandoc's gfm writer with `--wrap=none` (§5.4) |
 
 ### Slice-1 checks
 

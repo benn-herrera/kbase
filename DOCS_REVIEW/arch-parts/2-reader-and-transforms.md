@@ -5,13 +5,13 @@
 pandoc parses and kbase never does. `docgraph.Build` converts each top `.tex` file (one volume) in
 this order, then writes the trees:
 
-1. `prepass.Apply` scans the source text ([§5.2](#52-pre-pass-registry)).
-2. `pandoc.ReadLaTeX` parses it to the JSON AST ([§5.1](#51-pandoc-seam)).
-3. `readVolume` walks the AST once and derives the outline and the records ([§5.5](#55-records)).
-4. `transform` rewrites the AST ([§5.3](#53-json-transforms)).
-5. `pandoc.WriteGFM` renders it ([§5.4](#54-writer-route)).
+1. `prepass.Apply` scans the source text (§5.2).
+2. `pandoc.ReadLaTeX` parses it to the JSON AST (§5.1).
+3. `readVolume` walks the AST once and derives the outline and the records (§5.5).
+4. `transform` rewrites the AST (§5.3).
+5. `pandoc.WriteGFM` renders it (§5.4).
 6. `buildTree` splits the rendering into documents and `place` places the records in them.
-7. Five checks compare the products ([§5.6](#56-tree-derivation-partition-checks-and-validate_build)).
+7. Five checks compare the products (§5.6).
 
 After the last volume, `writeTrees` writes the tree and the entry point, `validateBuild` and the
 dead-link check read it back, and `internal/build` rewrites each link wrapped around a
@@ -35,7 +35,7 @@ cross-reference to its text (`unwrapTree`). Every step is deterministic and runs
   abstract arrive as the rendering's YAML metadata block.
 - **Export.** `RunDefaults`, `pandoc -d <defaults file>`, is the export's one call, under the same
   version gate. The `export-latex` verb supplies it as a function value, and `internal/export` never
-  reaches pandoc ([§5.7](#57-latex-export)).
+  reaches pandoc (§5.7).
 
 ### 5.2 Pre-pass registry
 
@@ -53,7 +53,7 @@ reads.
 **Pattern:** Pandoc AST filter.
 
 `internal/docgraph` transforms the pandoc JSON in Go, not in a Lua filter: the forward transform
-emits records ([§5.5](#55-records)), which a filter cannot. The transforms are:
+emits records (§5.5), which a filter cannot. The transforms are:
 
 - Cite span wrapping. With no usable bibliography the span contains the citation's keys as text
   (`keysOnly`), since citeproc did not run.
@@ -72,7 +72,7 @@ Whole-volume rendering, the split into documents and deriving the outline also l
 **Pattern:** Off-the-shelf writer.
 
 The route is pandoc's gfm writer over the transformed JSON with `--wrap=none`. The first slice
-check settled it ([§13](#13-slice-verdicts)): every load-bearing form the slice checked is produced
+check settled it (§13): every load-bearing form the slice checked is produced
 under it.
 
 ### 5.5 Records
@@ -80,7 +80,7 @@ under it.
 **Pattern:** Sidecar metadata stream.
 
 Alongside the Markdown leaves, Go emits records (JSONL) into the build state store
-([§8](#8-ledger-state-store-and-monitoring)), never into `kb-root/`: `records/docgraph.jsonl`, and
+(§8), never into `kb-root/`: `records/docgraph.jsonl`, and
 `records/prepass.jsonl` for the pre-pass count reports. `records.Write` replaces each file whole by
 atomic rename. The claim graph takes the tree as its sole input; the records are kbase's channel
 for the reader and placement facts, so nothing is recovered from leaf markup (I2). They contain:
@@ -132,7 +132,7 @@ deterministic product against another:
 | `verify-md-links` | the dead-link check over `kb-root/`, shared with `verify` (`kb.DeadLinks`, [§6](#the-kb-package)) |
 
 Findings land in the stage's report in the state store
-([§8](#8-ledger-state-store-and-monitoring), `reports/`). A `FAIL` finding makes the outcome
+(§8, `reports/`). A `FAIL` finding makes the outcome
 `failed`; a `FACT` finding describes state and never fails the stage. kbase runs no fix loop.
 
 ### 5.7 LaTeX export
@@ -142,7 +142,7 @@ output directory.
 
 The mechanism of `export-latex` (SPEC §8 `export-latex`), which defines the files of `gen-tex/`, the
 content rules, simplification and idempotence. The export emits no records, so pandoc's own filter
-mechanism suffices where [§5.3](#53-json-transforms) uses Go, and the author can re-run the
+mechanism suffices where §5.3 uses Go, and the author can re-run the
 conversion with plain pandoc.
 
 #### One run, three owners

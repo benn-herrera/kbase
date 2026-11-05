@@ -6,7 +6,7 @@ Must-see:
 - No user-facing behaviors or outcomes are designed here, that belongs to SPEC
 - No project-specific process is dictated, that belongs to CONVENTIONS
 - Every mechanism stated here is decided and landed
-  - [§13](#13-slice-verdicts) records the verdicts of the slice that settled the reader's design
+  - §13 records the verdicts of the slice that settled the reader's design
 
 ## 1. Purpose
 
@@ -21,7 +21,7 @@ are novel, the three of THESIS's "What is new":
 
 1. **What a claim graph is made of**: five node kinds and four scoring relations (SPEC §10 Five node
    types; SPEC §10 Four scoring relations, one arithmetic). Realized in the `claims-declared`,
-   `claims-discovered` and `analyses-split` stages ([§4](#4-stage-table)) and in
+   `claims-discovered` and `analyses-split` stages (§4) and in
    [§6](#the-node-vocabulary).
 2. **The local judgments**: the fault criteria in the scoring prompt templates, and the bearing
    predicates that decide which edges are judged ([§6](#the-prompt-shelf),
@@ -38,20 +38,20 @@ opening line and has no row here.
 
 | Section | Link | Pattern | THESIS building block |
 |---|---|---|---|
-| 1. Purpose | [§1](#1-purpose) | — | — |
+| 1. Purpose | §1 | — | — |
 | Pattern map | [§1](#pattern-map) | — | — |
-| 2. Invariants | [§2](#2-invariants) | Per invariant, in the Pattern column | — |
-| 3. Principles | [§3](#3-principles) | Per principle, named at its opening | — |
-| 4. Stage table | [§4](#4-stage-table) | Checkpoint/restart pipeline | Builds and scoring runs |
-| 5. Reader and transforms | [§5](#5-reader-and-transforms) | Pandoc as the parser; Go transforms over its JSON AST | Reading LaTeX |
-| 5.1 pandoc seam | [§5.1](#51-pandoc-seam) | Wrapped external tool with a version gate | Reading LaTeX |
-| 5.2 Pre-pass registry | [§5.2](#52-pre-pass-registry) | Preprocessor registry with instrumentation | Reading LaTeX |
-| 5.3 JSON transforms | [§5.3](#53-json-transforms) | Pandoc AST filter | Reading LaTeX |
-| 5.4 Writer route | [§5.4](#54-writer-route) | Off-the-shelf writer | Reading LaTeX |
-| 5.5 Records | [§5.5](#55-records) | Sidecar metadata stream | The knowledge base |
-| 5.6 Tree derivation, partition checks and `validate_build` | [§5.6](#56-tree-derivation-partition-checks-and-validate_build) | Round-trip conformance checks and a link checker | Checks |
-| 5.7 LaTeX export | [§5.7](#57-latex-export) | Pandoc multi-file conversion with a Lua filter, a custom template and a manifest-tracked output directory | — |
-| 6. KB model and maintenance | [§6](#6-kb-model-and-maintenance) | Per subsection, named at its opening | The knowledge base |
+| 2. Invariants | §2 | — | — |
+| 3. Principles | §3 | — | — |
+| 4. Stage table | §4 | Checkpoint/restart pipeline | Builds and scoring runs |
+| 5. Reader and transforms | §5 | Pandoc as the parser; Go transforms over its JSON AST | Reading LaTeX |
+| 5.1 pandoc seam | §5.1 | Wrapped external tool with a version gate | Reading LaTeX |
+| 5.2 Pre-pass registry | §5.2 | Preprocessor registry with instrumentation | Reading LaTeX |
+| 5.3 JSON transforms | §5.3 | Pandoc AST filter | Reading LaTeX |
+| 5.4 Writer route | §5.4 | Off-the-shelf writer | Reading LaTeX |
+| 5.5 Records | §5.5 | Sidecar metadata stream | The knowledge base |
+| 5.6 Tree derivation, partition checks and `validate_build` | §5.6 | Round-trip conformance checks and a link checker | Checks |
+| 5.7 LaTeX export | §5.7 | Pandoc multi-file conversion with a Lua filter, a custom template and a manifest-tracked output directory | — |
+| 6. KB model and maintenance | §6 | — | The knowledge base |
 | The `kb` package | [§6](#the-kb-package) | Domain model and schema package | The knowledge base |
 | Write API | [§6](#write-api) | Transactional unit of work with dry run | Writes |
 | Provenance | [§6](#provenance) | Manual-override flag | — |
@@ -64,28 +64,44 @@ opening line and has no row here.
 | Sheet | [§6](#sheet) | Graphviz rendering with a bounded process pool; a materialized view | Derived pages and sheets |
 | Scratch creation | [§6](#scratch-creation) | Scaffold command | — |
 | Scoring | [§6](#scoring) | Job runner with an append-only event log, resume from the last status per item, optimistic-concurrency commit, projection rebuild | Builds and scoring runs; Model calls; Asking a model |
-| 7. Inference seams | [§7](#7-inference-seams) | Role-based model routing behind provider adapters | Model calls; Configuration and credentials |
+| 7. Inference seams | §7 | Role-based model routing behind provider adapters | Model calls; Configuration and credentials |
+| Probe | [§7](#probe) | Health-check / smoke call | Model calls |
+| Wire clients | [§7](#wire-clients) | Provider adapters behind one interface; connection pooling | Model calls |
+| Retry and attempt outcomes | [§7](#retry-and-attempt-outcomes) | Retry with backoff on retryable status | Model calls |
+| Refused keys | [§7](#refused-keys) | Typed error classification at the boundary | Configuration and credentials |
+| Layered configuration | [§7](#layered-configuration) | Layered configuration | Configuration and credentials |
+| Resolution and the client registry | [§7](#resolution-and-the-client-registry) | Factory registry with lazy, shared clients | Model calls; Configuration and credentials |
+| The decision API | [§7](#the-decision-api) | Constrained classification endpoint | Asking a model |
+| The multichoice-ask interface | [§7](#the-multichoice-ask-interface) | Dependency injection with an architecture fitness test | Asking a model |
 | Credentials | [§7](#credentials) | Local secrets file with a redacting secret type | Configuration and credentials |
-| 8. Ledger, state store and monitoring | [§8](#8-ledger-state-store-and-monitoring) | Checkpoint commits, a content-addressed answer cache, and a background job with a status file | Builds and scoring runs |
+| 8. Ledger, state store and monitoring | §8 | Checkpoint commits, a content-addressed answer cache, and a background job with a status file | Builds and scoring runs |
+| Checkpoint commits and resume | [§8](#checkpoint-commits-and-resume) | Checkpoint/restart pipeline; stage = idempotent unit | Builds and scoring runs |
+| Preconditions | [§8](#preconditions) | Precondition checks | Builds and scoring runs |
+| Regenerating missing records | [§8](#regenerating-missing-records) | Reproducible-build verification | Checks |
+| The answer cache | [§8](#the-answer-cache) | Content-addressed memoization cache | Builds and scoring runs; Asking a model |
+| State store layout and format | [§8](#state-store-layout-and-format) | Versioned on-disk schema with sequential migrations | Builds and scoring runs |
+| State store retention | [§8](#state-store-retention) | Keep-last-N retention | Builds and scoring runs |
 | Locks | [§8](#locks) | Repo-scoped mutex lockfile plus a pidfile-style holder record | Builds and scoring runs |
-| 9. Result emitter | [§9](#9-result-emitter) | Single structured-output writer | The CLI and MCP server |
+| Status, progress, cancel and wait | [§8](#status-progress-cancel-and-wait) | Background job with a status file, signal cancel and a polling wait | Builds and scoring runs |
+| The build's development replay | [§8](#the-builds-development-replay) | Offline eval / record-replay regression harness | Builds and scoring runs; Checks |
+| 9. Result emitter | §9 | Single structured-output writer | The CLI and MCP server |
 | Per-interface rendering | [§9](#per-interface-rendering) | Per-surface presentation layer | The CLI and MCP server |
-| 10. Compatibility harness | [§10](#10-compatibility-harness) | Black-box integration tests with golden fixtures | Checks |
-| 11. Package map | [§11](#11-package-map) | Package responsibility listing | — |
+| 10. Compatibility harness | §10 | Black-box integration tests with golden fixtures | Checks |
+| 11. Package map | §11 | Package responsibility listing | — |
 | Loading | [§11](#loading) | Schema validation at load, fail-closed | The knowledge base |
 | The loader's file set and its other refusals | [§11](#the-loaders-file-set-and-its-other-refusals) | Schema validation at load, fail-closed | The knowledge base |
 | The zero-value hazard | [§11](#the-zero-value-hazard) | Go zero-value pitfall; required-field decoding | — |
 | Dependency rules | [§11](#dependency-rules) | Architecture fitness functions | Checks |
-| 12. Constants | [§12](#12-constants) | Named constants registry | — |
+| 12. Constants | §12 | Named constants registry | — |
 | Format migration (SPEC §10) | [§12](#format-migration-spec-10) | Chained schema migrations (upcasters) with golden tests | Format versions |
 | MCP server (SPEC §11) | [§12](#mcp-server-spec-11) | MCP server generated from the command tree; JSON-RPC over stdio; detached child plus status polling | The CLI and MCP server |
-| 13. Slice verdicts | [§13](#13-slice-verdicts) | Spike/prototype decision record | — |
-| Slice-1 checks | [§13](#slice-1-checks) | Spike/prototype decision record | — |
-| 14. Limits | [§14](#14-limits) | Known-limitations section | — |
-| A conversion records no history | [§14](#a-conversion-records-no-history) | Known-limitations section | — |
-| Merged metadata is refused, not merged | [§14](#merged-metadata-is-refused-not-merged) | Known-limitations section | — |
-| No format sits between two majors | [§14](#no-format-sits-between-two-majors) | Known-limitations section | — |
-| No refresh moves a judgement | [§14](#no-refresh-moves-a-judgement) | Known-limitations section | — |
+| 13. Slice verdicts | §13 | Spike/prototype decision record | — |
+| Slice-1 checks | [§13](#slice-1-checks) | — | — |
+| 14. Limits | §14 | Known-limitations section | — |
+| A conversion records no history | [§14](#a-conversion-records-no-history) | — | — |
+| Merged metadata is refused, not merged | [§14](#merged-metadata-is-refused-not-merged) | — | — |
+| No format sits between two majors | [§14](#no-format-sits-between-two-majors) | — | — |
+| No refresh moves a judgement | [§14](#no-refresh-moves-a-judgement) | — | — |
 
 ## 2. Invariants
 
@@ -95,9 +111,9 @@ Violating any is a blocking defect. Where a cell ends "Detail below", the detail
 |---|---|---|
 | I1 | Exactly one package execs each external process: pandoc, git, Graphviz `dot` and kbase itself. The exec-policy test names each owner and scans the shipped code. Detail below. | One adapter per external process, enforced by a fitness test |
 | I2 | Records, not leaf markup, are the source of the claim-graph inventory's reader and placement facts. Only the readers named below read leaf lines; maintenance ops read only the metadata layer. Detail below. | Single source of truth per fact; reads go through a repository |
-| I3 | There are two pre-passes, in one registry ([§5.2](#52-pre-pass-registry)), each naming the reader-level hole it fills and emitting a count report. | Preprocessor registry with instrumentation |
+| I3 | There are two pre-passes, in one registry (§5.2), each naming the reader-level hole it fills and emitting a count report. | Preprocessor registry with instrumentation |
 | I4 | System compatibility per SPEC §3 Compatibility contract; byte equality only where a named reader needs it; presentation is untested. | Semantic or contract testing over golden fixtures |
-| I5 | One result emitter owns stdout ([§9](#9-result-emitter)). | A single structured-output writer; outcome → exit-code table |
+| I5 | One result emitter owns stdout (§9). | A single structured-output writer; outcome → exit-code table |
 | I6 | A repeated write leaves `kb-root/` unchanged (SPEC §8 Idempotence). Detail below. | Idempotent writes (create-if-absent / PUT semantics) |
 | I7 | Every prompt template and fragment is an embedded file (`go:embed`). No prompt prose originates in code. Each call's system prompt is the fragment named for it. | Prompt templates as embedded assets (`go:embed`) |
 | I8 | One metadata format version is read and written (SPEC §10 One version read and written). Every KB file is read through `kb.Source`, which `internal/kbload` alone builds for a command's read. Only `update-format` writes a conversion. Detail below. | Read-time upcasting plus an explicit migrate command; repository/loader monopoly |
@@ -111,7 +127,7 @@ with named errors), `internal/gitledger`, `internal/sheet` and `internal/mcp/lau
 server's detached build and score runs). `cmd/execpolicy_test.go` binds non-test files; a test may
 start the processes its fixtures need.
 
-**I2 detail.** The inventory's page-defined readings ([§5.5](#55-records)) come from the leaf through
+**I2 detail.** The inventory's page-defined readings (§5.5) come from the leaf through
 the page readers. Otherwise leaf lines are read only by:
 - stage-A conformance: the link relation, through `kb`;
 - the prose and statement-marker machinery: the marker reader `kb.MarkerLines` and the hosts the load
@@ -191,7 +207,7 @@ These steer choices the invariants leave open.
 **Pattern:** Checkpoint/restart pipeline.
 
 The build walks these stages in order. A stage boundary is a checkpoint commit
-([§8](#8-ledger-state-store-and-monitoring)). The resume position is read from the checkpoint commits
+(§8). The resume position is read from the checkpoint commits
 alone, never from the state store (SPEC §6 Git holds the recoverable record). "Detail below" marks a
 stage whose mechanism follows the table.
 
@@ -212,7 +228,7 @@ stage whose mechanism follows the table.
 
 **`references-found`.** Adjacency links are made by rule between consecutive non-equation claims of a
 leaf, unasked. Each source claim gets its own shortlist of proximity slots followed by wildcard slots
-(counts in [§12](#12-constants)):
+(counts in §12):
 - proximity: the nearest claims in its own paper by locality (same document, same directory, same
   paper), then by places apart in the sequence of every claim by reading position and id;
 - wildcard: the best by TF-IDF cosine (`rankShortlist`, `internal/claimgraph/shortlist.go`) less the

@@ -10,11 +10,11 @@ provider and model in `[models]` as a `<provider>/<model>` reference. No role fa
 no reason is recorded for that.
 
 Every model call is made through a `model.Slot`. `model.Queue` has N slots; `Queue.Go` waits for a free
-one and starts the item with it ([§2](#2-invariants), I12). `Slot.Chat` makes the overview call and
+one and starts the item with it (§2, I12). `Slot.Chat` makes the overview call and
 each scoring call, and `Slot.Decision` makes each multichoice question. The `Client` interface's
 inference methods are unexported, so the compiler restricts every other package to a slot, and a slot is
 spent when its item returns. `build`, `score` and both replays build the queue from `--ask-concurrency`,
-else `[asks] concurrency`, else `config.DefaultAskConcurrency` ([§12](#12-constants)). `askConcurrency`
+else `[asks] concurrency`, else `config.DefaultAskConcurrency` (§12). `askConcurrency`
 in `cmd/askconcurrency.go` is the only resolver and refuses a flag under 1. The same N is the idle
 connections kept per host: `modelclient.New` takes it and sets `model.Endpoint.IdleConns`, so parallel
 calls reuse connections. A build shares one queue across its roles; `probe` runs a queue of one.
@@ -26,7 +26,7 @@ model calls (SPEC §5 Inference preflight).
 **Pattern:** Health-check / smoke call.
 
 `cmd/probe.go` makes one call on the path a run uses and reports it (SPEC §8 `probe`). It is a
-diagnostic, the CLI command and the read-only MCP tool alike ([§2](#2-invariants), I9).
+diagnostic, the CLI command and the read-only MCP tool alike (§2, I9).
 
 - **Selection.** `config.ResolveFlag` resolves one selection. `--model` supplies a reference and names
   itself in a refusal. A role flag (`--decision`, `--text`, `--scoring`) names the role and supplies no
@@ -63,7 +63,7 @@ The body each client sends is its protocol's, never shaped by host or provider n
 
 Each client's HTTP client has no total timeout, which would cap a streamed generation. The
 bounds are the call's context deadline, `responseHeaderTimeout` for the handshake and
-`streamIdleTimeout` for the gap between reads ([§12](#12-constants)). A non-2xx answer is a
+`streamIdleTimeout` for the gap between reads (§12). A non-2xx answer is a
 `model.StatusError` from both, its body truncated at `errorBodyLimit` and scrubbed of any key the server
 echoed (`statusError`).
 
@@ -77,7 +77,7 @@ protocol; each protocol's wire rules live only in its body encoder (`encodeReque
 sends. The fields each protocol sends are SPEC §9.1 The chat protocol. The Messages encoder sets the
 required `max_tokens` to the thinking budget (`thinkingBudgetLow`, `thinkingBudgetMedium`,
 `thinkingBudgetHigh`) plus an answer allowance: the larger of `maxTokensFloor` and a quarter of the
-request's characters, rounded up. The quarter has no recorded reason ([§12](#12-constants)).
+request's characters, rounded up. The quarter has no recorded reason (§12).
 
 **Pattern:** Provider prompt-cache affinity.
 
@@ -96,7 +96,7 @@ caller's `ChatRequest.Backoff` gives the pause before each repeat, its last entr
 call (`overviewBackoff`) and `kbase score`'s calls (`scoreBackoff`) pass a backoff; the build's
 multichoice questions and `probe` pass none and repeat at once. The build's multichoice questions have
 no pause and no reason is recorded for that. A pause the call's deadline cannot cover ends the call at
-once, and its reason names the attempts it made (`gaveUp`). Values are in [§12](#12-constants).
+once, and its reason names the attempts it made (`gaveUp`). Values are in §12.
 
 `retryableStatus`, a 429 or a 5xx, is the only non-2xx status repeated; any other ends the call on the
 attempt that met it. So does an answer that reaches the completion cap before any answer text:
@@ -261,13 +261,13 @@ chain of imports, and only `build` imports `internal/asks/call` directly.
   `temperature` and `thinking`, the values `model.SamplingOf` reports. A decision capture's question
   has its `true-letter` where it has one. The overview capture's request has its `excerpts` and, on a
   retry, its `rejected-lines`, the inputs `asks.OverviewPrompt` renders. Each file is written once,
-  after the item that made the call has released its slot ([§2](#2-invariants), I10 and I11).
+  after the item that made the call has released its slot (§2, I10 and I11).
 - **Batch records.** `Batch.Wait` returns a record for each group. A batch that stops still returns
   its records: an item whose call never completed is recorded `failed`, one cancelled or never launched
   is absent, and so is a group with no item that made a call. The stage writes the records before it stops. A
   finished batch records every group it was given. A batch made by `asks.NewReplayBatch` records a
   failed item and continues.
-- **Templates.** Templates (`*.tmpl.md`) and fragments are embedded files ([§2](#2-invariants), I7). A
+- **Templates.** Templates (`*.tmpl.md`) and fragments are embedded files (§2, I7). A
   prompt is a `@!slot!@` template, and a call's system prompt is the fragment named for it:
   `overview-system`, the one system fragment, is the overview call's. A multichoice question has no
   system message. `asks.Render` builds the one user turn. Tests key on the offered letters, the slot
@@ -328,7 +328,7 @@ the stored key outranking the file. It alone computes a `file` key's `upgrade` a
 stored key leaves an `apiKeyFile` unread, so `show-config` alone emits them.
 
 **Input and transport.** `kbase auth add` reads the key from stdin only, at most `authAddInputLimit`
-bytes ([§12](#12-constants)); it reads one byte past the limit to tell more from exactly. A configured key
+bytes (§12); it reads one byte past the limit to tell more from exactly. A configured key
 sent to an `http://` base URL on a host other than loopback travels in cleartext. `build`, `score` and
 `probe` write one stderr line saying so through `warnCleartextKey` (a build writes one per endpoint),
 which names the host and never the key, and proceed. No switch turns the warning off.
@@ -339,7 +339,7 @@ which names the host and never the key, and proceed. No switch turns the warning
 
 **Pattern:** Checkpoint commits, a content-addressed answer cache, and a background job with a status file.
 
-`internal/gitledger` is the only package that execs git ([§2](#2-invariants), I1). It execs the host's
+`internal/gitledger` is the only package that execs git (§2, I1). It execs the host's
 git, which SPEC §2 Given interfaces requires, so the user's configuration, hooks and attributes apply,
 and no git library is a dependency. `internal/build` owns the stage pipeline, the state store's writers,
 resume, `--no-inference`, `--through`, progress and cancel. `internal/buildstore` owns the stage
@@ -395,7 +395,7 @@ and `build` commits them.
   `status` changes between concurrent call batches. Every build record is written once per stage, after
   its calls.
 - **`--no-inference`.** The overview call is the dropped step and no `README.md` is written
-  (SPEC §5 Determinism; [§4](#4-stage-table)).
+  (SPEC §5 Determinism; §4).
 
 ### Preconditions
 
@@ -439,7 +439,7 @@ decision API's usage block has a cached-token field, so the zero is the API's.
 
 The state store's contents and path are SPEC §6 The state store is versioned and SPEC §6 Git holds the
 recoverable record. `--state-dir` defaults to `statedir.Dir`: `statedir.Key` under `statedir.Base`
-([§12](#12-constants)). The layout:
+(§12). The layout:
 
 - `format`, and `lock`, the run lock's second file, with its holder record ([Locks](#locks));
 - `progress.jsonl`, and the rotated `progress-<UTC timestamp>.jsonl` files;
@@ -470,7 +470,7 @@ format 1 `storeUpgrades` has no steps.
 **Pattern:** Keep-last-N retention.
 
 Only a build or a scoring run prunes; `status` and `cancel` remove nothing. Counts are in
-[§12](#12-constants).
+§12.
 
 - **Captured builds.** After the run event, a build keeps the newest `keptBuilds`+1 captured builds
   under `reports/` and removes the rest (`pruneBuildCaptures`, `buildstore.PruneCaptures`). A capture is
@@ -521,7 +521,7 @@ The liveness test is the lock, not the pid: `filelock.Held` takes and drops a sh
 exclusive holder refuses. `build.Hold` takes both files in the order above, and its release function
 removes `<state-dir>/lock` first (`ReleaseRemoving`), so a clean exit, `cancel` included, leaves neither
 file and a standing file is not by itself evidence of a live holder. Each wait is `buildstore.LockWait`
-([§12](#12-constants)). The record is written after the lock is taken, so a state directory named by the
+(§12). The record is written after the lock is taken, so a state directory named by the
 first file whose record is not yet written is reported "a run is starting". `takeOperationLock` and
 `runningRefusal` give the refusals (`check: lock`, `path` the state directory), naming the verb and pid
 read from the store the first file names. A second run on the same store through a different repository,
@@ -545,7 +545,7 @@ new run never reuses the named store.
 
 **The KB write lock.** `write.LockKB` takes an exclusive lock on the directory that contains `kb-root/`,
 which exists before `kb-root/` does and leaves nothing to clean up, waiting up to `write.LockWait`
-([§12](#12-constants)); a holder that keeps it past the wait gives `filelock.ErrHeld`, which
+(§12); a holder that keeps it past the wait gives `filelock.ErrHeld`, which
 `write.HeldLockItem` turns into the `retry` item (SPEC §8 One write lock). `write.Run` takes no lock;
 the caller holds `LockKB` across it, except the build, which holds the run lock instead. The callers are
 `cmd`'s `holdKB` (write batches, `update-format` and `init`) and `holdWriting`, and
@@ -585,7 +585,7 @@ results and around its start rebuild, never across the run ([§6](#writing-the-r
   through `buildstore.Status`. It takes no lock and reads no checkpoint commits until that final
   document. A score run's pid is waited for through `score.RunByPID` and the store's record
   (`score.WaitRun`), so `wait` returns the run's own result document, re-emitted by
-  `result.Reemit`. Values are in [§12](#12-constants).
+  `result.Reemit`. Values are in §12.
 
 ### The build's development replay
 
@@ -594,7 +594,7 @@ results and around its start rebuild, never across the run ([§6](#writing-the-r
 `build.OpenReplay` and `Replay.Walk` (`internal/build/replay.go`, tagged `//go:build kbasedev`, as the scoring replay is,
 [§6](#the-development-replay)) repeat one build's recorded questions under the
 binary's embedded templates and question files, from the inputs the build directory records
-([§2](#2-invariants), I10), so a prompt, a question file or a model can be refined against one build
+(§2, I10), so a prompt, a question file or a model can be refined against one build
 without re-running it. The build is the one a hex prefix of its start commit names, or, given none,
 the directory with the newest modification time, listed by `listTrails`, the listing `pruneTrails`
 orders by.
@@ -652,7 +652,7 @@ orders by.
 
 **Pattern:** Single structured-output writer.
 
-`internal/result` owns the YAML result document and its emitter ([§2](#2-invariants), I5). `result.Write`
+`internal/result` owns the YAML result document and its emitter (§2, I5). `result.Write`
 builds the document as a `yaml.Node` mapping from the ordered `Field` list it is given: the key order
 is the caller's, every string is double-quoted, and a float is written without an exponent. A refusal is
 a list of `Item`s and the emitter writes every item it contains; collecting every offender is each
@@ -723,7 +723,7 @@ the neutral form and the reader's interface formats it.
 **Pattern:** Black-box integration tests with golden fixtures.
 
 Compatibility is judged by kbase's own readers and checks, never by a byte diff of presentation
-([§2](#2-invariants), I4). The hermetic check is `just test-integration`, whose nine members each judge
+(§2, I4). The hermetic check is `just test-integration`, whose nine members each judge
 what their process produced:
 
 - `test-integration-results-fixture`, `test-integration-init`, `test-integration-opscript-results`,
