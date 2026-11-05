@@ -43,6 +43,7 @@ opening line and has no row here.
 | 2. Invariants | §2 | — | — |
 | 3. Principles | §3 | — | — |
 | 4. Stage table | §4 | Checkpoint/restart pipeline | Builds and scoring runs |
+| Finding claims | [§4](#finding-claims) | Novel: what counts as a claim. Machinery: AST extraction; LLM classification of prose spans | The claim graph; Asking a model |
 | 5. Reader and transforms | §5 | Pandoc as the parser; Go transforms over its JSON AST | Reading LaTeX |
 | 5.1 pandoc seam | §5.1 | Wrapped external tool with a version gate | Reading LaTeX |
 | 5.2 Pre-pass registry | §5.2 | Preprocessor registry with instrumentation | Reading LaTeX |
@@ -215,8 +216,8 @@ stage whose mechanism follows the table.
 | `start` | pandoc and git preflight; on a fresh build, refuses any existing `kb-root/` (`buildstore.KBRootExists`, as `init` does); takes the run lock ([§8](#locks)); records `started-at` and the inputs, absolute and in path order, that every later stage reads (SPEC §5 Inputs; SPEC §6 Git holds the recoverable record) | Preflight checks plus a job manifest |
 | `document-graph` | The tree from the top `.tex` files, in path order | Deterministic transform stage |
 | `spine-seed` | Writes the format version where the tree carries none, then the two record files, empty, over that tree (`build.seedSpine`) | Deterministic transform stage |
-| `claims-declared` | Claim-graph pass over author-declared claims | Novel: THESIS "What is new" item 1, defined in SPEC §10 Five node types. Machinery: AST extraction of environments |
-| `claims-discovered` | Claim-graph pass over discovered claims | Novel: THESIS "What is new" item 1, defined in SPEC §5 A build marks every claim and SPEC §10 Five node types. Machinery: claim detection by a model classifier |
+| `claims-declared` | Claim-graph pass over author-declared claims. Detail: [§4](#finding-claims). | Novel: THESIS "What is new" item 1, defined in SPEC §10 Five node types. Machinery: AST extraction of labelled environments |
+| `claims-discovered` | Claim-graph pass over discovered claims. Detail: [§4](#finding-claims). | Novel: THESIS "What is new" item 1, defined in SPEC §5 A build marks every claim and SPEC §10 Five node types. Machinery: LLM classification of prose spans against a fixed answer grammar |
 | `equations-minted` | Equation nodes minted | Mechanical extraction |
 | `references-found` | Unmarked references found. Detail below. | Candidate generation then pairwise classification |
 | `claims-culled` | Co-linearity cull (SPEC §5 Co-linearity cull (`claims-culled`)). Detail below. | Near-duplicate clustering with a canonical representative |
@@ -281,6 +282,117 @@ The build's writes go through the write ops ([§6](#build-only-ops)).
   is refused while its conversion is pending (`loadFormat`, [§12](#format-migration-spec-10)).
 - Stage boundaries are where expensive work becomes recoverable: a stage's per-leaf model work is
   uncommitted until its boundary.
+
+### Finding claims
+
+**Novel.** What counts as a claim is THESIS "What is new" item 1: a labelled environment stating a
+result and a prose paragraph stating one without an environment are each a claim, and each is
+marked in its leaf (SPEC §5 A build marks every claim).
+
+#### `claims-declared`
+
+**Pattern:** AST extraction of labelled environments.
+
+`claimgraph.Declared` reads the blocks the document graph's records name (§5.5) and decides which
+are claims. It is deterministic and runs under `--no-inference`.
+
+- **Blocks.** The reader records every author-declared environment as a `block` whose name is the
+  Div's first class that is not one of `docgraph`'s `structural` classes. The pre-pass replaces a
+  `\newtheorem` internal name by its display name (§5.2; `theoremDeclaration` reads the starred,
+  shared-counter and subordinate-counter forms, and a babel `\theoremname` macro gives its stem). A
+  declaration whose display name is other markup gives no entry, and its blocks keep the internal
+  name. A block is recorded only where its label line is read: the name matches `kb.LabelName` and the
+  block sits at the page margin. An unread one is no block, and its facts host to the enclosing block.
+- **The set.** `inventory.go` classifies the case-folded name.
+  Claim-bearing: `theorem`, `lemma`, `proposition`, `corollary`, `conjecture`, `claim`, `result`.
+  Not claim-bearing: `proof`, `remark`, `definition`, `example`, `assumption`, `notation`,
+  `problem`. A name in neither is admitted as not claim-bearing and counted (`stage-B-unclassified`),
+  never refused. The set is fixed in the code. A claim-bearing block is a claim only if its display
+  line yields a title and a locator (`Block.ClaimBearing`).
+- **Title and locator.** The display line is the first line of the block's content. Its title is the
+  optional argument, `(Title)`, read with balanced parentheses, else the printed name and number
+  with emphasis and stop removed. The span the title is read from is the locator. A span that another
+  display line of the leaf contains grows a word at a time until none does (`distinct`); a block whose
+  span cannot be made distinct is unreadable, counted (`stage-B-unreadable`) and yields no claim. The
+  title is made unique among the KB's claims by a ` (N)` suffix. A title the leaf already hosts is the
+  same claim: it takes that claim's id and writes nothing.
+- **Statement and marker.** The claim record holds a title and a rationale, no statement; the host is
+  where the marker sits (SPEC §10 Statements and anchors). The block is the statement. The marker goes
+  on the one line of the leaf the locator begins on (`write.ExcerptLines`); a locator that names none
+  or several stops the stage.
+- **Equations.** Not minted here. `equations-minted` (`claimgraph.Equations`) mints a node for each
+  labelled display-maths equation that a counting cross-reference names and that no claim-bearing
+  block and no proof holds. A reference counts unless the discovery judged its paragraph not a claim.
+  The title is ``Equation (`label`) — <the leaf's H1>``, and a leaf with no H1 stops the stage. The
+  marker goes inside the fence (SPEC §5 A build marks every claim).
+- **Skipped.** Every environment outside the claim-bearing set. A proof is bound to the claims it
+  establishes (`bindProofs`), and a work cited inside a claim's block or its proof becomes a work
+  node, joined to the claim by a `rests-on` premise written pending (`add-work`, `add-build-edges`;
+  SPEC §5 A build records no judgement). A definition, remark or example is no claim and has no
+  node.
+- **Refusal.** A tree that already holds node records, frontmatter or a statement marker is
+  refused (`checkCleanliness`): a second run would mint a second set of ids.
+- **Records.** The stage writes the four build records fresh. The node-pass record lists every
+  `leaf` document `unread`.
+
+#### `claims-discovered`
+
+**Pattern:** LLM classification of prose spans against a fixed answer grammar.
+
+`claimgraph.Discovered` asks, for each paragraph of each leaf's readable prose, whether it states a
+result of its own. Its step is `spendsOwnInference`, so `--no-inference` drops it: every leaf stays
+`unread`, and every reference counts at `equations-minted`.
+
+- **Pieces.** `renderText` shows a leaf from its first heading as labelled sentences `S1`, `S2`, one
+  per line, as the page shows them (markers off, anchors as their text). Sentence boundaries are
+  heuristic (`sentenceBounds`): a stop followed by a capital, digit or opening mark, not inside a
+  `$` or backtick run and not after a listed abbreviation or an initial. A label naming half a
+  sentence still cuts the author's own bytes. A display-maths fence is one unit, shown line by line
+  under one label. A paragraph ends at a blank line, a heading or an excluded line, and a list item
+  opens one. It is named by its label range, `S3-S5`.
+- **Excluded.** Headings and the claim-bearing, proof and definition blocks (`excludedLines`) are
+  shown unlabelled as context and end the paragraph they interrupt, so a declared claim is never
+  read again. A sentence inside a maths fence cannot open a claim. Code has no exclusion: only the
+  ```` ``` math ```` fence is recognised, and any other code block reads as prose.
+- **Which paragraphs.** A paragraph is asked when it holds a resolving cross-reference, which owes it
+  exactly one verdict (`obligated`), or a sentence that could open a claim (`opensAClaim`: at least
+  `minOpeningWords` canonical words, §12, outside a fence). The others get no verdict.
+- **Question.** One group per leaf (`asks.Paragraph`, named by the leaf's path), one item per asked
+  paragraph, named by its label range. `paragraph.tmpl.md` renders the leaf (`document`, `body`) and
+  the paragraph (`paragraph`, `paragraph-text`). `questions/paragraph.question.yaml` is a `noul`
+  question, "Does this paragraph state a result of its own?", with a criterion for true and one for
+  false. The offered letters are `LetterClaim` (A, the question's `true-letter`) and `LetterNotClaim`
+  (B). The answer is one offered letter, taken by `asks.Decide` from the decision API's confidence
+  ([§7](#the-decision-api)); no reply text is parsed.
+- **Nodes.** `judge` walks the answers in paragraph order. A claim's locator is the paragraph's
+  excerpt, the author's sentences joined, and its marker goes on the line the excerpt begins on
+  (`write.ExcerptLines`). Its title is the paragraph's opener (`opener`: the first sentence that
+  could open a claim, else the first) as the page shows it, on one line, cut at the last word boundary
+  within `titleMaxChars` (§12) and ended `…`. A title the leaf already carries takes ` (¶N)`, N the
+  paragraph's position among the leaf's readable paragraphs. The id is minted by `add-claim`, and all
+  leaves' claims are written in one batch in sorted leaf order once every answer is in.
+- **Refused, unreadable or missing answers.** A reply with no offered letter is retried once with the
+  identical question, then takes the deterministic default (§3): the verdict is `defaulted`, cause
+  `no-letter`, and no claim is minted. A claim answer whose excerpt does not begin on exactly one
+  line is `defaulted`, cause `unplaceable`. Each default is a progress fallback and counts in
+  `stage-C-defaulted`. A call that never completes stops the stage as `inference-failed` after the
+  group records are written; the leaves stay `unread` and a resume asks them again.
+- **Record and resume.** The node-pass record holds per leaf a state (`unread`, `planned`,
+  `landed`), an outcome (`minted`, `no-claim`, `nothing-to-read`) and a verdict per asked paragraph
+  (`claim`, `not-a-claim`, `defaulted`) by the 0-based line it begins on. A `planned` leaf is
+  written from the record without a model call. The stage exits on a comparison: recomputed over the
+  tree it wrote, every obligated paragraph carries a verdict (`verdict-coverage`).
+- **Concurrency and caching.** The leaves' groups are one batch, launched through the build's queue
+  (§12, ask concurrency) with each group's first item alone ([§7](#the-multichoice-ask-interface));
+  answers are cached by the digest of the question and state ([§8](#the-answer-cache)).
+
+Both stages write through the write ops with the build's provenance ([§6](#build-only-ops)); an op
+that answers `retry` is re-issued up to `retryLimit` times (§12), then the stage stops. Everything later
+reads claims from the markers in the leaves, so a declared claim and a discovered one are alike to
+`references-found` and `claims-culled`; `claims-culled` treats a claim neither block-hosted nor an
+equation as a prose claim. `depends-attributed` also reads the verdicts: a reference in a paragraph
+judged `claim` is attributed to the claim marked in it, one in a paragraph judged `not-a-claim`
+names no source, and one in any other paragraph falls to the block and proof rules.
 
 ---
 
@@ -2819,6 +2931,9 @@ constant and link to this one. Exit codes and the placeholder's hash form are de
 | Sheet render concurrency | 4: the most `dot` processes at once; output order is kept ([§6](#sheet)) | `sheet.renderConcurrency` |
 | Unmarked shortlist, proximity slots | 3: the nearest targets in its own paper that `references-found` makes model calls about per source (§4) | `shortlistProximityK`, `internal/claimgraph` |
 | Unmarked shortlist, wildcard slots | 2: the best-ranked targets by cosine asked about per source besides the proximity picks (§4) | `shortlistWildcardK`, `internal/claimgraph` |
+| Claim opening, minimum words | 4: the fewest canonical words a sentence has to open a claim in `claims-discovered`; measured, every folded collision at three words or fewer was a structural label (§4) | `minOpeningWords`, `internal/claimgraph/prose.go` |
+| Prose claim title length | 120 characters: the longest a discovered claim's derived title runs before it is cut at a word boundary (§4) | `titleMaxChars`, `internal/claimgraph/prose.go` |
+| Claim-graph write retries | 3: the identical re-issues of a claim-graph write op that answers `retry` before the stage stops (§4) | `retryLimit`, `internal/claimgraph/write.go` |
 | `stats` leverage bar | 0.65, the strength bar of `highest_leverage`. It is its own constant, not derived from the band ladder, so a change to a band's lower bound does not move `stats` | `query.DefaultMaxStrength` |
 | `stats` dependents floor | 1, the dependents floor of `highest_leverage` | `query.DefaultMinDependents` |
 | `stats` rank limit | 10: the rows each of `highest_leverage` and `weakest` carries | `query.StatsRankLimit` |
