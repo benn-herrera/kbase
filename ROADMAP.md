@@ -30,8 +30,19 @@ Finished items are deleted, not archived.
 ## Claim graph
 
 - A `definition` node. A definition is context today: no node, no edge, no score, and a claim's
-  dependence on a definition is unrecorded. Whether it should be a node kind, and how it would join
-  the scoring relations, is open.
+  dependence on a definition is unrecorded.
+  - Why it matters: a definition compresses a construct into a short handle that claims then use, so
+    every claim built on the handle inherits whatever is wrong with the construct. A definition can be
+    well or poorly posed, and a poorly posed one undermines an argument's validity however sound its
+    steps.
+  - A candidate rigor checklist is the standard well-posedness criteria: the defined object exists
+    and, where claimed, is unique; it does not depend on arbitrary choices (independence of
+    representation); it is not circular; and the term is used afterwards as defined.
+  - A candidate shape: a node kind with its own narrow rigor judgment, which claims rest on through an
+    edge, so a poorly posed definition caps what is built on it as a weak premise does.
+  - Open: the node kind and its relations, how the build finds definitions (the `definition`
+    environment today reads as context), and how it composes with the existing faults that already
+    touch definitions indirectly (`flt-equivocation`, `flt-referent`).
 
 ## Reader fidelity
 
