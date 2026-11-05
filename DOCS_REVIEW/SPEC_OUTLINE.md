@@ -314,6 +314,9 @@ Only then does `SPEC.new.md` replace `SPEC.md`.
 - Code: rename the decision-API setting on every interface — `providers.toml` key `decisionApi`,
   `configure-providers` flag `--decision-api`, `show-config` field `decision-api` — with no alias for
   the old names.
+- Code: an identical add (one that would change no byte of `kb-root/`) is `unchanged`, reporting the
+  existing item; a differing add stays refused (SPEC §8 Idempotence, `add-<kind>`, Edge ops). The
+  same change updates ARCHITECTURE invariant I6 and its detail.
 - ARCHITECTURE: the `claims-declared` and `claims-discovered` stages have no mechanism section — which
   environments become claims, how prose is chunked for the model, what it is asked, and how answers
   become nodes (`internal/claimgraph`).

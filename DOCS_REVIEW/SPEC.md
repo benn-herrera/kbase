@@ -898,11 +898,13 @@ Every op that names something existing first looks it up, and is refused where t
 - A removal is a lookup that can fail. Nothing records what was removed, so a repeated removal and a removal of something that never existed cannot be told apart; both are refused.
 - The remedy of a refusal points at the query that lists what exists: `find` for nodes, `edges` for edges.
 
-An add looks up first too, and is refused where the item is found (`node exists: <id>` or `edge exists: <relation> <source> → <target>`): create fails if the item exists. Nothing is upserted. Where an edge exists with other values, the remedy is `edit-edge`.
+An add looks up first too. Where the item is not found, it is created. Where it is found:
+- an identical add — one whose application would change no byte of `kb-root/`: the same values, the same flag and judged hash, and a node's statement marker already where the add places it — is `unchanged`, and reports the existing item as an add would have;
+- any other add is refused (`node exists: <id>` or `edge exists: <relation> <source> → <target>`). Nothing is upserted: `edit-<kind>` and `edit-edge` change an existing item's values.
 
 An edit that changes nothing, because every value given is already the current one, is `unchanged`: the item exists, and the caller asked for a state the KB is already in. Each batch entry reports its own outcome, so an `unchanged` entry is never hidden in a `done` batch.
 
-So for `add-<kind>` ([§8](#add-kind)), `edit-<kind>` ([§8](#edit-kind)), the edge writes ([§8](#edge-ops)), `restore-demoted` ([§8](#restore-demoted)), `remove-node` ([§8](#remove-node)), `move-node` ([§8](#move-node)) and `add-citation` ([§8](#add-citation)): a repeated add, removal, restore or citation is refused, and a repeated edit or move is `unchanged`, each leaving `kb-root/` byte-identical. There are two exceptions. `init` creates once: a repeat where a `kb-root/` exists is `refused`, never `unchanged`. `update-format` requires a clean `kb-root/`, so a repeat before its output is committed — by its own `commit` or by hand — is refused `dirty-paths`; over a clean tree it already converted, it reports `unchanged`.
+So for `add-<kind>` ([§8](#add-kind)), `edit-<kind>` ([§8](#edit-kind)), the edge writes ([§8](#edge-ops)), `restore-demoted` ([§8](#restore-demoted)), `remove-node` ([§8](#remove-node)), `move-node` ([§8](#move-node)) and `add-citation` ([§8](#add-citation)): a repeated removal, restore or citation is refused, and a repeated add, edit or move is `unchanged`, each leaving `kb-root/` byte-identical. There are two exceptions. `init` creates once: a repeat where a `kb-root/` exists is `refused`, never `unchanged`. `update-format` requires a clean `kb-root/`, so a repeat before its output is committed — by its own `commit` or by hand — is refused `dirty-paths`; over a clean tree it already converted, it reports `unchanged`.
 
 #### Writes leave nothing stale
 
@@ -983,7 +985,7 @@ An omitted `rigor` is `*pending*`. The `manually-scored` flag and the `judged-ha
 
 **Result**, per entry: `id`, the minted id; `add-axiom` adds `heading`, `marked` or `appended`.
 
-**Identity.** A node exists where another node of its kind has its `title` anywhere in the KB; a work also exists where another work has its `label`, and an axiom where another axiom has its `label`. Title and label rules are defined in [§10](#five-node-types). An add of a node that exists is refused "node exists" at `title` or `label`, its `detail` `node exists: <id>`. Entries apply in order, so a batch adding one node twice is refused at the repeat.
+**Identity.** A node exists where another node of its kind has its `title` anywhere in the KB; a work also exists where another work has its `label`, and an axiom where another axiom has its `label`. Title and label rules are defined in [§10](#five-node-types). An add of a node that exists is `unchanged` where it is identical ([§8](#idempotence)), its `id` the existing node's; otherwise it is refused "node exists" at `title` or `label`, its `detail` `node exists: <id>`. Entries apply in order, so a batch adding one node twice is `unchanged` at an identical repeat and refused at a differing one.
 
 **Refusals**, each at the key named:
 - a missing `document`, `line` or `snippet`: a shape refusal naming the key;
@@ -1055,7 +1057,7 @@ kbase citations need no rewrite, since they name the node by id and the naming f
 **Results**: `source`, `target`, `relation` for each.
 
 **`add-edge`**
-- Over an edge of that identity the entry is refused "edge exists", whatever its values; `edit-edge` changes them. Over a demoted record of that relation from `source` to `target`, the add writes the edge with its own values and deletes the record.
+- Over an edge of that identity the entry is `unchanged` where its `bearing` and `context`, as the add would write them, are the edge's own, and the edge's flag and judged hash are those the add would write ([§8](#idempotence)); otherwise it is refused "edge exists", and `edit-edge` changes the values. Over a demoted record of that relation from `source` to `target`, the add writes the edge with its own values and deletes the record.
 - The `manually-scored` flag and the `judged-hash` an edge write sets are defined in [§10](#provenance-and-the-judged-hash). A `bearing` given on a `supports`, `lifts` or `refutes` edge hashes the edge's two ends' statements as the batch leaves them.
 
 **`edit-edge`** changes an existing edge's `bearing`, `context`, or both. `unchanged` where it changes no value, no flag and no judged hash. A `bearing` given on a `supports`, `lifts` or `refutes` edge hashes the edge's two ends' statements as `add-edge` does; an edit giving none keeps the record's `judged-hash`.
@@ -2020,8 +2022,8 @@ kind. No other field is part of an id.
   works, an axiom's among axioms.
 - A label is never an id, and no op takes one where it takes an id.
 - The load refuses an empty title or label and a work's label outside the citation-key grammar. The
-  write ops refuse a title or a label that another node of the kind holds (`node exists` on an add,
-  naming that node); the load does not check uniqueness. The build gives a repeated title the
+  write ops refuse a title or a label that another node of the kind holds (`node exists` on an add
+  that is not identical to that node, naming it); the load does not check uniqueness. The build gives a repeated title the
   counter ` (2)`, ` (3)` and so on, so the KB it writes holds every title unique within its kind.
 - A claim, an analysis and an experiment are hosted (Statements and anchors). An axiom is stated in
   `axioms.md` (Axioms). A work is shown by its entry on the root summary page.
