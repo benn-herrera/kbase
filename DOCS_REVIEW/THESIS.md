@@ -50,8 +50,8 @@ Three things, and only these:
 3. **How the judgments combine.** A formula that carries those local values along the graph's
    edges into a strength for every node.
 
-The machinery that computes all three is standard, and listed above. The definitions are not, and
-SPEC's scoring schemes own them.
+The machinery that computes all three is standard, and listed above. What each of the three is, is
+not, and SPEC's scoring schemes own it.
 
 ### Building: the draft is mechanical, inference only refines it
 
@@ -60,7 +60,7 @@ format serialized it; reading it back is deserialization, not interpretation.
 
 - **The navigation tree** — title, parts, chapters, sections — is a transcription of the sectioning
   commands. A second implementation produces the same tree.
-- **The argument's nodes** — theorems, lemmas, definitions, propositions, displayed equations —
+- **The argument's nodes** — theorems, lemmas, propositions, displayed equations —
   arrive as LaTeX environments with identifiers.
 - **The argument's edge candidates** arrive as `\ref`-family references to those identifiers. A
   reference does not decide an edge: it may be a mention, supported by, or in support of.

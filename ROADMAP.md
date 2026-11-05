@@ -27,6 +27,12 @@ Finished items are deleted, not archived.
 - `score`'s help says it "prices" faults without saying a reply is a fault list kbase converts
   to a value through the pass's table.
 
+## Claim graph
+
+- A `definition` node. A definition is context today: no node, no edge, no score, and a claim's
+  dependence on a definition is unrecorded. Whether it should be a node kind, and how it would join
+  the scoring relations, is open.
+
 ## Reader fidelity
 
 - Display names from `\input`-ed preambles.
