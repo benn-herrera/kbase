@@ -32,9 +32,9 @@ func anyStrings(v any) []string {
 }
 
 // configureRun is what one configure command invocation produced: its result
-// document as parsed and as written, stderr and exit code.
+// as parsed and as written, stderr and exit code.
 type configureRun struct {
-	doc    resultDoc
+	doc    parsedResult
 	stdout string
 	stderr string
 	code   int
@@ -67,7 +67,7 @@ func runProviders(t *testing.T, opts configureProvidersOptions, client *modeltes
 	if err != nil {
 		t.Fatalf("runConfigureProviders: %v", err)
 	}
-	return configureRun{doc: checkDocument(t, "configure-providers", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code}
+	return configureRun{doc: checkResult(t, "configure-providers", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code}
 }
 
 // runModelsConfig runs configure-models with opts, every dial served by
@@ -81,7 +81,7 @@ func runModelsConfig(t *testing.T, opts configureModelsOptions, client *modeltes
 	if err != nil {
 		t.Fatalf("runConfigureModels: %v", err)
 	}
-	return configureRun{doc: checkDocument(t, "configure-models", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code}
+	return configureRun{doc: checkResult(t, "configure-models", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code}
 }
 
 // refusal is the run's one refusal, failing the test where it has another
@@ -231,35 +231,35 @@ func TestConfigureProvidersRefusesArguments(t *testing.T) {
 	}
 }
 
-// TestConfigureLocation: no flag writes the named directory, else the global
-// one, standing repository layer or not; --local writes the repository's,
-// and is refused outside a worktree; --global writes the global one over the
-// environment's; either beside --config-dir, and the two together, are
-// refused.
+// TestConfigureLocation: no --layer writes the named directory, else the
+// global one, standing repository layer or not; --layer repository writes the
+// repository's, and is refused outside a worktree; --layer global writes the
+// global one over the environment's; a layer beside --config-dir, and an
+// unknown layer, are refused.
 func TestConfigureLocation(t *testing.T) {
 	repo, global, home := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
 	environment := providerOptions{Layers: []config.Layer{{Path: "/elsewhere", Source: config.LayerSourceEnvironment}}, WriteDir: "/elsewhere", RepoRoot: repo}
 	for _, tc := range []struct {
-		name          string
-		opts          providerOptions
-		global, local bool
-		dir, layer    string
-		check         string
+		name       string
+		opts       providerOptions
+		want       string
+		dir, layer string
+		check      string
 	}{
 		{name: "named", opts: namedLayer("/somewhere"), dir: "/somewhere", layer: config.LayerSourceExplicit},
 		{name: "environment", opts: environment, dir: "/elsewhere", layer: config.LayerSourceEnvironment},
 		{name: "default, in a repository", opts: globalLayer(global, repo), dir: global, layer: config.LayerSourceGlobal},
-		{name: "--local", opts: globalLayer(global, repo), local: true, dir: config.RepositoryDir(repo), layer: config.LayerSourceRepository},
-		{name: "--local over the environment", opts: environment, local: true, dir: config.RepositoryDir(repo), layer: config.LayerSourceRepository},
-		{name: "--global over the environment", opts: environment, global: true, dir: filepath.Join(home, ".config", "kbase"), layer: config.LayerSourceGlobal},
-		{name: "--local outside a worktree", opts: globalLayer(global, ""), local: true, check: checkWorktree},
-		{name: "--global beside --config-dir", opts: namedLayer("/somewhere"), global: true, check: "usage"},
-		{name: "--local beside --config-dir", opts: namedLayer("/somewhere"), local: true, check: "usage"},
-		{name: "both", opts: globalLayer(global, repo), global: true, local: true, check: "usage"},
+		{name: "--layer repository", opts: globalLayer(global, repo), want: config.LayerSourceRepository, dir: config.RepositoryDir(repo), layer: config.LayerSourceRepository},
+		{name: "--layer repository over the environment", opts: environment, want: config.LayerSourceRepository, dir: config.RepositoryDir(repo), layer: config.LayerSourceRepository},
+		{name: "--layer global over the environment", opts: environment, want: config.LayerSourceGlobal, dir: filepath.Join(home, ".config", "kbase"), layer: config.LayerSourceGlobal},
+		{name: "--layer repository outside a worktree", opts: globalLayer(global, ""), want: config.LayerSourceRepository, check: checkWorktree},
+		{name: "--layer global beside --config-dir", opts: namedLayer("/somewhere"), want: config.LayerSourceGlobal, check: "usage"},
+		{name: "--layer repository beside --config-dir", opts: namedLayer("/somewhere"), want: config.LayerSourceRepository, check: "usage"},
+		{name: "an unknown layer", opts: globalLayer(global, repo), want: "local", check: "usage"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, layer, items, err := configureLocation(tc.opts, tc.global, tc.local, "/start")
+			dir, layer, items, err := configureLocation(tc.opts, tc.want, "/start")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -350,7 +350,7 @@ func TestConfigureModelsWithNoKeyCarriesTheRemedy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := checkDocument(t, "configure-models", stdout.String())
+	got := checkResult(t, "configure-models", stdout.String())
 	items := got.items("failures")
 	if code != 3 || len(items) != 1 || items[0]["remedy"] != config.AuthAddRemedy("solo") || !endsWithNote(items[0]) {
 		t.Errorf("exit %d, failures %v; want one failure carrying the auth add remedy and the refused-key note", code, remedies(items))
@@ -360,12 +360,13 @@ func TestConfigureModelsWithNoKeyCarriesTheRemedy(t *testing.T) {
 	}
 }
 
-// TestConfigureModelsLocalOutsideAWorktree: --local outside a git worktree is
-// refused naming the directory the search started from, nothing dialled.
+// TestConfigureModelsLocalOutsideAWorktree: --layer repository outside a git
+// worktree is refused naming the directory the search started from, nothing
+// dialled.
 func TestConfigureModelsLocalOutsideAWorktree(t *testing.T) {
 	opts := soloModels(t, t.TempDir(), soloURL, map[config.Role]string{config.RoleText: "solo/t"})
 	opts.providerOptions = globalLayer(t.TempDir(), "")
-	opts.Local, opts.WorkDir = true, "/start"
+	opts.Layer, opts.WorkDir = config.LayerSourceRepository, "/start"
 	client := modeltest.NewScriptedMock(nil, catalogue("t"))
 	got := runModelsConfig(t, opts, client)
 	if item := got.refusal(t); item["check"] != checkWorktree || item["path"] != "/start" || item["remedy"] != "git init" {
@@ -376,8 +377,9 @@ func TestConfigureModelsLocalOutsideAWorktree(t *testing.T) {
 // TestConfigureModelsChecksTheWrittenStack: configure-models checks a provider
 // against the layer it writes into and the layers beneath it, not the stack
 // the invocation read. A provider only the repository layer holds is refused
-// under --global, against the global providers.toml with the remedy carrying
-// --global, nothing dialled or written; under --local it is accepted.
+// under --layer global, against the global providers.toml with the remedy
+// carrying --layer global, nothing dialled or written; under --layer
+// repository it is accepted.
 func TestConfigureModelsChecksTheWrittenStack(t *testing.T) {
 	home, repo := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -401,25 +403,25 @@ func TestConfigureModelsChecksTheWrittenStack(t *testing.T) {
 
 	undialled := modeltest.NewScriptedMock(nil, nil)
 	undialled.SetError(errors.New("dialled"))
-	got := runModelsConfig(t, configureModelsOptions{providerOptions: read(), Models: given, Global: true}, undialled)
+	got := runModelsConfig(t, configureModelsOptions{providerOptions: read(), Models: given, Layer: config.LayerSourceGlobal}, undialled)
 	item := got.refusal(t)
 	remedy, _ := item["remedy"].(string)
 	if item["check"] != config.CheckProvider || item["key"] != "--decision" || item["path"] != config.ProvidersPath(global) ||
-		!strings.HasPrefix(remedy, "`kbase configure-providers lab ") || !strings.Contains(remedy, "--global") {
-		t.Errorf("refusal = %v, want provider lab refused against %s with a remedy carrying --global", item, config.ProvidersPath(global))
+		!strings.HasPrefix(remedy, "`kbase configure-providers lab ") || !strings.Contains(remedy, "--layer global") {
+		t.Errorf("refusal = %v, want provider lab refused against %s with a remedy carrying --layer global", item, config.ProvidersPath(global))
 	}
 	if _, err := os.Stat(config.ConfigPath(global)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a refused run wrote the global config.toml (%v)", err)
 	}
 
-	got = runModelsConfig(t, configureModelsOptions{providerOptions: read(), Models: given, Local: true}, modeltest.NewScriptedMock(nil, catalogue("d")))
+	got = runModelsConfig(t, configureModelsOptions{providerOptions: read(), Models: given, Layer: config.LayerSourceRepository}, modeltest.NewScriptedMock(nil, catalogue("d")))
 	if got.code != 0 || got.doc.Outcome != "done" || !slices.Equal(anyStrings(got.doc.Values["written"]), []string{config.ConfigPath(repoDir)}) {
-		t.Errorf("--local: exit %d, %v; want the repository's config.toml written", got.code, got.doc.Values)
+		t.Errorf("--layer repository: exit %d, %v; want the repository's config.toml written", got.code, got.doc.Values)
 	}
 }
 
 // TestConfigureModelsReadsNoLayerOutsideItsStack: a repository providers.toml
-// that fails the strict load does not stop configure-models --global, which
+// that fails the strict load does not stop configure-models --layer global, which
 // neither writes nor checks against that layer; the call answers from the
 // global stack alone.
 func TestConfigureModelsReadsNoLayerOutsideItsStack(t *testing.T) {
@@ -433,7 +435,7 @@ func TestConfigureModelsReadsNoLayerOutsideItsStack(t *testing.T) {
 	}
 	writeConfig(t, config.RepositoryDir(repo), config.ProvidersFileName, "[[[ not toml\n")
 	t.Chdir(repo)
-	args := []string{"configure-models", "--global", "--decision", "nosuch/d"}
+	args := []string{"configure-models", "--layer", "global", "--decision", "nosuch/d"}
 	stdout, stderr, err := executeRoot(t, args...)
 	t.Cleanup(func() {
 		if sub, _, ferr := rootCmd.Find(args); ferr == nil {
@@ -443,7 +445,7 @@ func TestConfigureModelsReadsNoLayerOutsideItsStack(t *testing.T) {
 		}
 	})
 	code := exitStatus(err, stdout, stderr)
-	doc := checkDocument(t, "configure-models", stdout.String())
+	doc := checkResult(t, "configure-models", stdout.String())
 	items := doc.items("refusals")
 	global := filepath.Join(home, ".config", "kbase")
 	if code != 1 || len(items) != 1 || items[0]["check"] != config.CheckProvider || items[0]["path"] != config.ProvidersPath(global) {
@@ -453,7 +455,7 @@ func TestConfigureModelsReadsNoLayerOutsideItsStack(t *testing.T) {
 
 // TestConfigureProvidersReadsNoLayerOutsideItsStack: a repository
 // providers.toml that fails the strict load does not stop
-// configure-providers --global, which neither writes nor reads that layer.
+// configure-providers --layer global, which neither writes nor reads that layer.
 func TestConfigureProvidersReadsNoLayerOutsideItsStack(t *testing.T) {
 	home, repo := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
@@ -465,7 +467,7 @@ func TestConfigureProvidersReadsNoLayerOutsideItsStack(t *testing.T) {
 	}
 	writeConfig(t, config.RepositoryDir(repo), config.ProvidersFileName, "[[[ not toml\n")
 	t.Chdir(repo)
-	args := []string{"configure-providers", "lab", "--global", "--base-url", "http://lab/v1"}
+	args := []string{"configure-providers", "lab", "--layer", "global", "--base-url", "http://lab/v1"}
 	stdout, stderr, err := executeRoot(t, args...)
 	t.Cleanup(func() {
 		if sub, _, ferr := rootCmd.Find(args); ferr == nil {
@@ -475,7 +477,7 @@ func TestConfigureProvidersReadsNoLayerOutsideItsStack(t *testing.T) {
 		}
 	})
 	code := exitStatus(err, stdout, stderr)
-	doc := checkDocument(t, "configure-providers", stdout.String())
+	doc := checkResult(t, "configure-providers", stdout.String())
 	want := config.ProvidersPath(filepath.Join(home, ".config", "kbase"))
 	if code != 0 || doc.Outcome != "done" || !slices.Equal(anyStrings(doc.Values["written"]), []string{want}) {
 		t.Errorf("exit %d, %s, %v; want %s written", code, doc.Outcome, doc.Values, want)

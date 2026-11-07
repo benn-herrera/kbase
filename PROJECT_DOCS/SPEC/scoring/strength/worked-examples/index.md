@@ -1,7 +1,7 @@
-## Worked examples: one input set
+## Worked examples
 
-The example above is the diagram's own fragment, so its figures are the diagram's and move with it. This
-set holds the inputs still instead: the same values are authored on every node in every case, and the only
+The example above is the diagram's own fragment, so its figures are the diagram's and change with it. This
+set keeps the inputs fixed instead: the same values are authored on every node in every case, and the only
 thing that varies is which edges exist. Nothing requires a KB to author the same values everywhere — the repetition
 is the exercise's, not the format's — and it is what lets each relation be read against the same operands.
 
@@ -21,9 +21,9 @@ reaches eight — every fifteen hundredths — and `0.70` is one of them, and th
 reaches eleven — every tenth
 ([RIGOR_AND_BEARING_SCORING_SCHEME.md](../../rigor-and-bearing/the-band-outcomes/the-method-table.md), "The method table", "The
 bearing values"). Three of the four bearings are `1.00`, a link with no bearing charge, and those
-contributions are their sources' own values: the sources are what this set holds still. The exception is
+contributions are their sources' own values: the sources are what this set keeps fixed. The exception is
 the supporting edge's `0.20` — eight bearing charges, a claim
-speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly moves a
+speaking to part of what it is cited for — and that is the set's one edge where a bearing visibly changes a
 number.
 
 The four products, one per relation, are therefore:
@@ -38,7 +38,7 @@ refutes     cap = 1 - (1.00 x a claim's strength 0.70) = 0.30
 The refuter there is a claim like any other: its own strength is `0.70` once the work founds it, and the
 cap multiplies that `0.70` — not the work's rigor.
 
-Bands are `kb.StrengthBandLadder`'s, each threshold an inclusive lower bound:
+Bands are the rungs of [§10 The band ladder](../../../10-metadata-format-version/the-band-ladder.md), each threshold an inclusive lower bound:
 
 | band | at or above |
 |---|---|
@@ -53,10 +53,10 @@ Every figure below is exact at two decimals. The record trims a trailing zero �
 
 Contents:
 
-- [§1 A chain: a work founds a claim, the claim supports another](1-a-founds-and-supports-chain.md)
+- [§1 A founds-and-supports chain](1-a-founds-and-supports-chain.md)
 - [§2 A lift over a weak base](2-a-lift-over-a-weak-base.md)
-- [§3 A refutation caps — and sometimes does not](3-refutation-lowers-the-ceiling.md)
+- [§3 Refutation lowers the ceiling](3-refutation-lowers-the-ceiling.md)
 - [§4 A claim nothing supports](4-a-claim-nothing-supports.md)
-- [§5 Only a node's own rigor makes it pending](5-only-own-rigor-makes-a-node-pending.md)
-- [§6 A claim and an analysis on the same number](6-colocated-claim-and-analysis.md)
+- [§5 Only own rigor makes a node pending](5-only-own-rigor-makes-a-node-pending.md)
+- [§6 Colocated claim and analysis](6-colocated-claim-and-analysis.md)
 - [Summary table](summary-table.md)

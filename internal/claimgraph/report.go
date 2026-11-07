@@ -31,7 +31,7 @@ type Finding struct {
 	Fields result.Record
 }
 
-// Record is the finding as a result-document mapping.
+// Record is the finding as a result mapping.
 func (f Finding) Record() result.Record {
 	return append(result.Record{{Key: "status", Value: f.Status}, {Key: "check", Value: f.Check}}, f.Fields...)
 }
@@ -81,7 +81,7 @@ func (r Report) Failures() []result.Item {
 	return out
 }
 
-// Records is every finding as a result-document mapping, in order.
+// Records is every finding as a result mapping, in order.
 func (r Report) Records() []result.Record {
 	out := make([]result.Record, len(r.Findings))
 	for i, f := range r.Findings {

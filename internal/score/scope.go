@@ -127,7 +127,7 @@ func namedNode(ix *query.Index, id string) (query.Item, error) {
 	var why string
 	switch row.NodeType {
 	case kb.NodeKindWork:
-		why = id + " is a work, whose rigor is judged by hand with the document in hand"
+		why = id + " is a work, whose rigor is judged by hand with the cited work's text in hand"
 	case kb.NodeKindAxiom:
 		why = id + " is an axiom, whose rigor is 1.0 by rule"
 	default:

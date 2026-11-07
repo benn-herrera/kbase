@@ -500,7 +500,7 @@ type buildResult struct {
 	Checks   []string `yaml:"-"`
 }
 
-// readBuildResult is a build's result document at path, its refusals' details
+// readBuildResult is a build's result at path, its refusals' details
 // and the document graph's own check lines read in.
 func readBuildResult(path string) (buildResult, error) {
 	var res buildResult

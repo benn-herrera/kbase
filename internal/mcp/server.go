@@ -8,6 +8,7 @@ import (
 	"kbase/internal/argmark"
 	"kbase/internal/log"
 	"kbase/internal/mcp/protocol"
+	"kbase/internal/result"
 )
 
 // Located is the project a server located from where it started — its git
@@ -47,6 +48,10 @@ type Server struct {
 	// Launches is the launch of each command whose tool starts it as a
 	// process of its own.
 	Launches map[*cobra.Command]Launch
+	// ConfigWarnings is the warnings of the configuration a run started from
+	// dir reads, as its verb reads it: what a launch reports before it starts
+	// the run. It decides nothing; the run reads its configuration again.
+	ConfigWarnings func(dir string) []result.Item
 	// Families is the family tools, Calls' field of the same name; the help
 	// resources serve each one's help.
 	Families []Family
@@ -56,18 +61,20 @@ type Server struct {
 }
 
 // serving is what one Serve binds its launches and resources to: the located
-// project, its logger, its family tools and how a document it serves is
-// spelled over MCP.
+// project, its logger, its family tools, how a result it serves is spelled
+// over MCP, and the configuration check a launch reports.
 type serving struct {
-	located  Located
-	lg       log.Logger
-	families []Family
-	spelling argmark.Spelling
+	located        Located
+	lg             log.Logger
+	families       []Family
+	spelling       argmark.Spelling
+	configWarnings func(dir string) []result.Item
 }
 
 // Serve serves s over in and out until EOF on in.
 func (s Server) Serve(in io.Reader, out io.Writer) error {
-	sv := serving{located: s.Located, lg: s.Logger, families: s.Families, spelling: Spelling(s.Root, true)}
+	sv := serving{located: s.Located, lg: s.Logger, families: s.Families, spelling: Spelling(s.Root, true),
+		configWarnings: s.ConfigWarnings}
 	detached := make(map[*cobra.Command]func(*cobra.Command) (ProjectTool, error), len(s.Launches))
 	for cmd, l := range s.Launches {
 		detached[cmd] = func(cmd *cobra.Command) (ProjectTool, error) { return launchTool(cmd, l, sv, s.Globals) }

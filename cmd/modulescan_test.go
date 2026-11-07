@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path"
@@ -13,7 +14,7 @@ import (
 	"testing"
 )
 
-// The module walk every policy scan reads: the exec, import, read, relation,
+// The module walk every policy scan reads: the exec, import, read, write, stdout, relation,
 // id-prefix, record, registration, key-reveal and key-file-text policies agree on which files
 // are the module's Go source.
 
@@ -21,8 +22,8 @@ import (
 // of the same name (internal/build) is source.
 var rootSkipDirs = map[string]bool{"bin": true, "dist": true, "build": true, "test-data": true, "vendor": true}
 
-// moduleGoFile is one Go file of the module, parsed with object resolution,
-// by module-relative slash path.
+// moduleGoFile is one Go file of the module, parsed, by module-relative slash
+// path.
 type moduleGoFile struct {
 	rel string
 	f   *ast.File
@@ -30,6 +31,27 @@ type moduleGoFile struct {
 
 // production is whether the file is built into the binary, not a test.
 func (m moduleGoFile) production() bool { return !strings.HasSuffix(m.rel, "_test.go") }
+
+// packageInfo is what go/types resolves each identifier of files, one
+// package's, parsed into fset, to: its definitions and its uses. Every import
+// is an empty package and the check's errors are ignored: the policies read
+// only how a name resolves within the package — a builtin, or a constant,
+// variable or parameter the package declares — which needs neither.
+func packageInfo(fset *token.FileSet, files []*ast.File) *types.Info {
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
+	conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}}
+	_, _ = conf.Check("", fset, files, info)
+	return info
+}
+
+// emptyImporter imports every path as a complete package declaring nothing.
+type emptyImporter struct{}
+
+func (emptyImporter) Import(p string) (*types.Package, error) {
+	pkg := types.NewPackage(p, path.Base(p))
+	pkg.MarkComplete()
+	return pkg, nil
+}
 
 // moduleGoFiles is every Go file of the module, tests included, positions
 // recorded in fset. Dot directories and testdata are skipped at any depth,
@@ -92,6 +114,31 @@ func moduleRootDir(t *testing.T) string {
 		}
 		dir = parent
 	}
+}
+
+// pkgRef is one reference to an imported package's name: "path.Name", and
+// where it stands.
+type pkgRef struct {
+	pos  token.Pos
+	name string
+}
+
+// pkgRefs lists every reference in f to a name want holds, by import path and
+// name — a call, or the name taken as a value.
+func pkgRefs(f *ast.File, want map[string]map[string]bool) []pkgRef {
+	imports := importedAs(f)
+	var refs []pkgRef
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); ok && want[imports[pkg.Name]][sel.Sel.Name] {
+			refs = append(refs, pkgRef{sel.Pos(), imports[pkg.Name] + "." + sel.Sel.Name})
+		}
+		return true
+	})
+	return refs
 }
 
 // importedAs maps each name f refers to an import by to the import's path.

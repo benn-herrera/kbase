@@ -14,10 +14,10 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/atomicfile"
 	"kbase/internal/buildrecords"
 	"kbase/internal/index"
 	"kbase/internal/kb"
+	"kbase/internal/kbwrite"
 	"kbase/internal/result"
 )
 
@@ -51,6 +51,7 @@ const (
 	slotProjectName = "project-name"
 	slotScopePin    = "scope-pin"
 	slotPending     = "pending-literal"
+	slotUnknownBand = "unknown-band"
 	slotPassage     = "overview-passage"
 	slotDigestChunk = "digest-chunk"
 	slotSessionRule = "session-rule"
@@ -134,7 +135,7 @@ func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []str
 		if err != nil {
 			return written, reports, err
 		}
-		if err := atomicfile.Write(target, []byte(text), nil); err != nil {
+		if err := kbwrite.Inside(kbRoot, target, []byte(text)); err != nil {
 			return written, reports, err
 		}
 		written = append(written, name)
@@ -144,7 +145,7 @@ func Stamp(src *kb.Source, projectName, scopePin string) (written, reports []str
 	if exists(redirect) {
 		return written, append(reports, kb.AgentsRedirectFile+": present, already the redirect"), nil
 	}
-	if err := atomicfile.Write(redirect, []byte(kb.AgentsRedirect+"\n"), nil); err != nil {
+	if err := kbwrite.Inside(kbRoot, redirect, []byte(kb.AgentsRedirect+"\n")); err != nil {
 		return written, reports, err
 	}
 	return append(written, kb.AgentsRedirectFile), append(reports, kb.AgentsRedirectFile+": written as the redirect to "+kb.AgentsFile), nil
@@ -268,7 +269,7 @@ func Overview(projectName, passage string, digestDrawn bool) (string, error) {
 		}
 	}
 	return fill(OverviewFile, map[string]string{slotProjectName: projectName, slotPending: kb.PendingLiteral,
-		slotPassage: passage, slotDigestChunk: digest})
+		slotUnknownBand: kb.UnknownBandSlug, slotPassage: passage, slotDigestChunk: digest})
 }
 
 func exists(path string) bool {

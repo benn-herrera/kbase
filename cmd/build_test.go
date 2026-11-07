@@ -19,7 +19,7 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-// roleField is one key's value in a result document's role record, nil where
+// roleField is one key's value in a result's role record, nil where
 // the record carries none.
 func roleField(record toolresult.Record, key string) any {
 	for _, f := range record {
@@ -30,8 +30,8 @@ func roleField(record toolresult.Record, key string) any {
 	return nil
 }
 
-// roleOf is the role record a document states for role, or nil.
-func roleOf(doc resultDoc, role string) map[string]any {
+// roleOf is the role record a result states for role, or nil.
+func roleOf(doc parsedResult, role string) map[string]any {
 	for _, record := range doc.items("roles") {
 		if record["role"] == role {
 			return record
@@ -42,7 +42,7 @@ func roleOf(doc resultDoc, role string) map[string]any {
 
 // buildRoles is the roles record a build writes over cfgDir, whose two roles
 // name two different providers, and the endpoints it dialled.
-func buildRoles(t *testing.T) (doc resultDoc, dialled []model.Endpoint) {
+func buildRoles(t *testing.T) (doc parsedResult, dialled []model.Endpoint) {
 	t.Helper()
 	repo, state := buildRepo(t)
 	cfgDir := t.TempDir()
@@ -51,7 +51,7 @@ baseUrl = "http://lab.example/v1"
 
 [cloud]
 baseUrl = "http://cloud.example/v1"
-decisionsFlavor = "decisions"
+decisionApi = "decisions"
 `)
 	writeValues(t, cfgDir, config.ConfigFileName, "[models]\ndecision = \"lab/d3\"\ntext = \"cloud/clef\"\n")
 
@@ -63,7 +63,7 @@ decisionsFlavor = "decisions"
 		t.Fatalf("loading the staged configuration: %v", err)
 	}
 	// A client that answers nothing: the walk fails its items, and what this
-	// test reads is the document the run wrote anyway.
+	// test reads is the result the run wrote anyway.
 	newClient := func(e model.Endpoint) model.Client {
 		dialled = append(dialled, e)
 		return modeltest.NewScriptedMock(nil, nil).Client()
@@ -77,15 +77,15 @@ decisionsFlavor = "decisions"
 	}); err != nil {
 		t.Fatalf("build: %v\n%s", err, stderr.String())
 	}
-	return checkDocument(t, "build", stdout.String()), dialled
+	return checkResult(t, "build", stdout.String()), dialled
 }
 
-// TestBuildDocumentStatesOneRolePerEndpoint: a build's document carries `roles`
+// TestBuildResultStatesOneRolePerEndpoint: a build's result carries `roles`
 // where the endpoint's provenance stood — after state-dir — and no top-level
 // provider, provider-rule or provider-layer at all: a build whose two roles name
 // two different providers cannot state one. Each record is §7.1's, in role
 // order, and each role's asks reach its own provider's client.
-func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
+func TestBuildResultStatesOneRolePerEndpoint(t *testing.T) {
 	doc, dialled := buildRoles(t)
 	keys := slices.DeleteFunc(slices.Clone(doc.Keys), func(k string) bool { return k == "outcome" })
 	if len(keys) < 3 || !slices.Equal(keys[:3], []string{"kb-root", "state-dir", "roles"}) {
@@ -93,7 +93,7 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 	}
 	for _, key := range []string{"provider", "provider-rule", "provider-layer"} {
 		if _, ok := doc.Values[key]; ok {
-			t.Errorf("a build's document carries the top-level key %s: %v", key, doc.Values[key])
+			t.Errorf("a build's result carries the top-level key %s: %v", key, doc.Values[key])
 		}
 	}
 
@@ -134,7 +134,7 @@ func TestBuildDocumentStatesOneRolePerEndpoint(t *testing.T) {
 
 // TestBuildDialsOneEntryBothRolesNameOnce: two roles referencing one OpenAI
 // pool entry are one endpoint, dialled once with the key its apiKeyFile holds; each role's
-// record names that entry; and a key bound for a non-loopback http:// endpoint
+// record names that entry; and a key bound for an http:// endpoint off the local network
 // is one line on the verb's stderr, naming no key.
 func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 	cfgDir := t.TempDir()
@@ -144,7 +144,7 @@ func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 	}
 	// The entry speaks OpenAI chat, the decision surface's protocol, so both
 	// roles reach one endpoint; an entry speaking Messages is two.
-	writeValues(t, cfgDir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://reaper.local:4000/v1\"\napiKeyFile = \"key.txt\"\napi = \"openai\"\n")
+	writeValues(t, cfgDir, config.ProvidersFileName, "[lab]\nbaseUrl = \"http://lab.example/v1\"\napiKeyFile = \"key.txt\"\napi = \"openai\"\n")
 	writeValues(t, cfgDir, config.ConfigFileName, "[models]\ndecision = \"lab/Some-Decision\"\ntext = \"lab/Some-Text\"\n")
 	saved := flagConfigDir
 	t.Cleanup(func() { flagConfigDir = saved })
@@ -167,7 +167,7 @@ func TestBuildDialsOneEntryBothRolesNameOnce(t *testing.T) {
 	if p.Multichoice != "Some-Decision" || p.Overview != "Some-Text" {
 		t.Errorf("provider = %+v, want each role's own model", p)
 	}
-	if len(dialled) != 1 || dialled[0].BaseURL != "http://reaper.local:4000/v1" || dialled[0].APIKey.Reveal() != "secret-key" {
+	if len(dialled) != 1 || dialled[0].BaseURL != "http://lab.example/v1" || dialled[0].APIKey.Reveal() != "secret-key" {
 		t.Errorf("endpoints dialled = %+v, want the one entry, once, with its key file read", len(dialled))
 	}
 	if len(p.Roles) != 2 {
@@ -249,7 +249,7 @@ func TestBuildResumeNamesTheConfigDirAbsolute(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := kbase(t, repo, "build", "paper.tex", "--config-dir", "cfg", "--no-inference", "--state-dir", state)
-	doc := checkDocument(t, "build", out)
+	doc := checkResult(t, "build", out)
 	if _, handed := doc.Values["resume"]; doc.Outcome != toolresult.Refused || handed {
 		t.Fatalf("build = %s, resume %v; want refused inside a stage with no resume, kb-root/ never written\n%s", doc.Outcome, doc.Values["resume"], out)
 	}
@@ -272,9 +272,9 @@ func TestBuildResumeNamesTheConfigDirAbsolute(t *testing.T) {
 	}
 }
 
-// TestBuildDocumentOmitsRolesWithoutInference: a build spending no inference
+// TestBuildResultOmitsRolesWithoutInference: a build spending no inference
 // resolved no endpoint, so it names no role at all.
-func TestBuildDocumentOmitsRolesWithoutInference(t *testing.T) {
+func TestBuildResultOmitsRolesWithoutInference(t *testing.T) {
 	repo, state := buildRepo(t)
 	cfgDir := t.TempDir()
 	saved := flagConfigDir
@@ -293,7 +293,7 @@ func TestBuildDocumentOmitsRolesWithoutInference(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	doc := checkDocument(t, "build", stdout.String())
+	doc := checkResult(t, "build", stdout.String())
 	if _, ok := doc.Values["roles"]; ok {
 		t.Errorf("a build spending no inference carries roles: %v", doc.Values["roles"])
 	}

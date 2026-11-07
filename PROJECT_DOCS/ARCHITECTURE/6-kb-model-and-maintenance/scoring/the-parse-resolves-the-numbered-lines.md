@@ -1,25 +1,34 @@
 #### The parse resolves the numbered lines
 
-`assemble` returns the closed text and a line per line of
-it — the number the call writes, the passage its bytes lie in, and its byte range — because a charge's
-`passage`, `lines` and `offset` are facts about that rendering: a `rigor` call's two passages are a
-node's `title` and `statement`, a `bearing` call's are the `source`'s and the `target`'s.
-`score.ParseAnswer` (`internal/score/answer.go`) reads a reply against them and the item's class's
-`kb.FaultTable`: a charge line's field is one number or a range `N-M`, which `closedText.look`
-resolves — every number one the call shows, all of them in one passage, and nothing between them — so
-a range crossing from one passage to another, or over a blank line, a label or a heading, is
-`malformed`. The recorded `citation` is the cited lines as the call carried them, without the gutter,
-joined by newlines, and `offset` is that quote's byte offset in the closed text. The edge's
-`## Context` — assembled but carrying no number — is a site for no charge; a numbered line lies in one
-passage, so `both` is no longer produced, and a line written earlier may carry it and keeps the
-meaning it was written with. The read yields `Answer{Faults, Moot, Value}`: the charges, the charge
-lines a reply recorded beside a retired `flt-pending` (parsed, priced nowhere, and no longer produced),
-and the price `kb` gives the ids. The parse also refuses a charge
-naming no line, an id no table holds — `flt-pending` among them — and a number the call does not show.
-Duplicate and
-overlap collapsing is the parse's, over cited line sets: an identical set written twice collapses to
-one charge, and two sets of one id that overlap without coinciding are refused. The ids the ledger
-records are the whole input of the price, which is what makes a landing checkable and a run
-re-scorable without a model. The context stays in the assembled text because the ask judges an edge
-on it; the parse merely refuses to anchor a charge there.
+**Pattern:** Structured-output validation against a fixed grammar.
+
+`assemble` returns the item text and one `line` per line of it: the number the call writes, the section
+its bytes lie in, and its byte range. A charge's `passage`, `lines` and `offset` are facts about that
+rendering. A `rigor` call's two sections are a node's `title` and `statement`; a `bearing` call's are the
+`source`'s and the `target`'s. `score.ParseAnswer` (`internal/score/answer.go`) reads a reply against
+those lines and the item's class's `kb.FaultTable`. A charge line's field is one number or a range
+`N-M`, which `closedText.look` resolves; a range that crosses sections, a blank line, a label or a
+heading is `malformed`. The recorded `citation` is the cited lines as the call sent them, without the
+gutter, joined by newlines, and `offset` is that quote's byte offset in the item text. The edge's
+`## Context` has no number and is a site for no charge, so the `passage` value `both` is never produced.
+Grammar, duplicates and overlaps: SPEC §8 The answer.
+
+A refusal is a `malformedError`: its text is the reason the ledger line records, `the reply is no
+answer: ` and the case, and it carries the case as an `asks.Refusal…` constant, the slot values that
+case's fragment names (the reply line numbers, the id and the cited numbers, each as the reply wrote it)
+and the 1-based numbers of the reply lines the case names (none for an empty reply or for `none` beside
+charges), which the runner quotes in a re-ask's correction. A reason names the case, the id and the line
+numbers, never a field's text, and no other text of the reply. The reason is the ledger's alone: the
+re-ask states the case in its fragment's words ([the prompt shelf](the-prompt-shelf.md)).
+
+The three weight tables are `internal/kb`'s: `kb.RigorStatement`, `kb.RigorMethod` and
+`kb.BearingFaults`, each a `kb.FaultTable` of ids and per-occurrence weights in integer hundredths, with
+`IDs`, `Accepts` and `Price`. The parse yields `Answer{Faults, Moot, Value}`: the charges, `Moot` (charge
+lines recorded beside a `flt-pending`, which no table holds; `ParseAnswer` produces none, and a recorded
+line may carry them), and the `Price` of the ids. `Price` of a recorded line carrying `flt-pending` is
+`*pending*`. The value is defined in SPEC §8 The value. The ids a line records are the whole input of the
+value, which makes a written value checkable and a run recomputable without a model.
+
+The grammar is fixed for as long as the ledger's format version is unchanged: a rule loosened later
+would re-read lines already written under a new grammar (SPEC §8 The answer).
 

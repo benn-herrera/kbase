@@ -97,7 +97,7 @@ func TestExportLatexRefusesWhatIsNotAVolume(t *testing.T) {
 	writeFileAt(t, filepath.Join(dir, kb.KBDir), "vol3/index.md", "[↑ Sample KB](../entry-point.md)\n\n# Third Volume\n")
 	writeFileAt(t, filepath.Join(dir, kb.KBDir), "loose/notes.md", "# Notes\n")
 	out, code := kbase(t, dir, "export-latex", "--volume", "vol2", "--volume", "nope", "--volume", "loose", "--volume", "vol1/sub")
-	d := checkDocument(t, "export-latex", out)
+	d := checkResult(t, "export-latex", out)
 	items := d.items("refusals")
 	if code != 1 || d.Outcome != "refused" || len(items) != 3 {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -110,7 +110,7 @@ func TestExportLatexRefusesWhatIsNotAVolume(t *testing.T) {
 		}
 	}
 	out, code = kbase(t, dir, "export-latex", "--volume", "vol3")
-	if items := checkDocument(t, "export-latex", out).items("refusals"); code != 1 || len(items) != 1 ||
+	if items := checkResult(t, "export-latex", out).items("refusals"); code != 1 || len(items) != 1 ||
 		!strings.Contains(items[0]["detail"].(string), "vol3 is a volume the entry point does not list") ||
 		items[0]["remedy"] != "list it there or drop this --volume" {
 		t.Errorf("an unlisted volume: exit %d\n%s", code, out)
@@ -126,7 +126,7 @@ func TestExportLatexRefusesWithoutPandoc(t *testing.T) {
 	dir := exportDir(t)
 	t.Setenv("PATH", t.TempDir())
 	out, code := kbase(t, dir, "export-latex")
-	d := checkDocument(t, "export-latex", out)
+	d := checkResult(t, "export-latex", out)
 	items := d.items("refusals")
 	if code != 1 || d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != "pandoc" ||
 		!strings.Contains(items[0]["detail"].(string), pandoc.InstallPage) {
@@ -145,7 +145,7 @@ func TestExportLatexRefusesForeignGenTex(t *testing.T) {
 	outDir := filepath.Join(dir, "paper")
 	writeFileAt(t, outDir, export.GenTexDir+"/notes.txt", "mine")
 	out, code := kbase(t, dir, "export-latex", "--out", "paper")
-	d := checkDocument(t, "export-latex", out)
+	d := checkResult(t, "export-latex", out)
 	items := d.items("refusals")
 	gen := filepath.Join(outDir, export.GenTexDir)
 	if code != 1 || d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkExportDir ||
@@ -168,7 +168,7 @@ func TestExportLatexReissue(t *testing.T) {
 	outDir := filepath.Join(dir, exportOutDefault)
 	gen := filepath.Join(outDir, export.GenTexDir)
 	out, code := kbase(t, filepath.Join(dir, kb.KBDir, "vol1"), "export-latex")
-	d := checkDocument(t, "export-latex", out)
+	d := checkResult(t, "export-latex", out)
 	if code != 0 || d.Outcome != "done" {
 		t.Fatalf("first export: exit %d\n%s", code, out)
 	}
@@ -202,7 +202,7 @@ func TestExportLatexReissue(t *testing.T) {
 
 	before := dirBytes(t, outDir)
 	out, code = kbase(t, dir, "export-latex")
-	d = checkDocument(t, "export-latex", out)
+	d = checkResult(t, "export-latex", out)
 	if code != 0 || d.Outcome != "unchanged" || len(anyStrings(d.Values["written"])) != 0 {
 		t.Errorf("re-issue: exit %d\n%s", code, out)
 	}
@@ -221,7 +221,7 @@ func TestExportLatexKeepsTheAuthorsPreamble(t *testing.T) {
 	const mine = "\\newcommand{\\R}{\\mathbb{R}}\n"
 	writeFileAt(t, outDir, export.PreambleFile, mine)
 	out, code := kbase(t, dir, "export-latex", "--out", outDir, "--volume", "vol2")
-	d := checkDocument(t, "export-latex", out)
+	d := checkResult(t, "export-latex", out)
 	if code != 0 || d.Outcome != "done" || !slices.Equal(anyStrings(d.Values["volumes"]), []string{"vol2"}) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
@@ -251,7 +251,7 @@ func TestExportLatexRefusesOutsideAWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code := kbase(t, dir, "export-latex")
-	d := checkDocument(t, "export-latex", out)
+	d := checkResult(t, "export-latex", out)
 	items := d.items("refusals")
 	if code != 1 || d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkWorktree {
 		t.Errorf("exit %d\n%s", code, out)

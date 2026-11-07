@@ -19,7 +19,7 @@ import (
 
 var (
 	liveRepo   = flag.String("claimgraph.repo", "", "a repository a build without --no-inference wrote its records into")
-	liveResult = flag.String("claimgraph.result", "", "that build's result document")
+	liveResult = flag.String("claimgraph.result", "", "that build's result")
 	liveOut    = flag.String("claimgraph.out", "", "where counts.yaml, nodepass.json, kb-build-node-pass.yaml and unmarked-plan.json are written")
 )
 
@@ -238,7 +238,7 @@ func writeJSON(t *testing.T, path string, v any) {
 }
 
 // resultFinding is the claim-graph finding named check, out of the stage
-// reports a build's result document names.
+// reports a build's result names.
 func resultFinding(t *testing.T, path, check string) map[string]any {
 	t.Helper()
 	b, err := os.ReadFile(path)

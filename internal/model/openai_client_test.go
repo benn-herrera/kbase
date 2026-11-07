@@ -319,7 +319,7 @@ func TestOpenAIClientEmptyBaseURLErrors(t *testing.T) {
 
 	calls := map[string]func() error{
 		"consultStream": func() error { _, err := c.consultStream(ctx, req); return err },
-		"decision":      func() error { _, err := c.decision(ctx, DecisionRequest{Model: "m"}); return err },
+		"decision":      func() error { _, err := c.decision(ctx, quickRetry(), DecisionRequest{Model: "m"}); return err },
 		"ListModels":    func() error { _, err := c.ListModels(ctx); return err },
 	}
 	for name, call := range calls {
@@ -408,7 +408,7 @@ func TestOpenAIUnsetSamplingSendsTheBaselineBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), "m", "the system", "the prompt", nil, nil); err != nil {
+	if _, err := chat(context.Background(), NewOpenAIClient(Endpoint{BaseURL: srv.URL}), quickRetry(), "m", "the system", "the prompt", nil); err != nil {
 		t.Fatalf("chat: %v", err)
 	}
 	if string(raw) != want {
@@ -455,7 +455,7 @@ func TestOpenAISamplingMapsOntoTheWire(t *testing.T) {
 			defer srv.Close()
 
 			c := NewOpenAIClient(Endpoint{BaseURL: srv.URL, Sampling: tc.sampling})
-			if _, err := chat(context.Background(), c, "m", "the system", "the prompt", nil, nil); err != nil {
+			if _, err := chat(context.Background(), c, quickRetry(), "m", "the system", "the prompt", nil); err != nil {
 				t.Fatalf("chat: %v", err)
 			}
 			var wire map[string]json.RawMessage

@@ -89,10 +89,10 @@ func scoreProvider() providerOptions {
 	}
 }
 
-// scoreResult is one runScore invocation: its document, its streams, its exit
+// scoreResult is one runScore invocation: its result, its streams, its exit
 // code, and how many clients the verb asked its factory for.
 type scoreResult struct {
-	doc     resultDoc
+	doc     parsedResult
 	stdout  string
 	stderr  string
 	code    int
@@ -148,7 +148,7 @@ func scoreDrive(t *testing.T, repo, state string, opts scoreOptions, newClient m
 	if err != nil {
 		t.Fatalf("runScore: %v", err)
 	}
-	got := scoreResult{doc: checkDocument(t, "score", stdout.String()), stdout: stdout.String(), stderr: stderr.String(),
+	got := scoreResult{doc: checkResult(t, "score", stdout.String()), stdout: stdout.String(), stderr: stderr.String(),
 		code: code, dialled: dialled, endpoints: endpoints}
 	if want := toolresult.ExitCode(got.doc.Outcome); got.code != want {
 		t.Errorf("outcome %s with exit %d, want %d\n%s", got.doc.Outcome, got.code, want, got.stdout)
@@ -237,7 +237,7 @@ func scoreFixture(t *testing.T) string {
 }
 
 // TestScoreDocumentsARun: a run resolves the scoring role — never the text one —
-// dials it once, and states the run in its document: the pass asked for, the
+// dials it once, and states the run in its result: the pass asked for, the
 // role's provider and model, the run and its ledger, and the counts and the items
 // scored that the run reported.
 func TestScoreDocumentsARun(t *testing.T) {
@@ -249,7 +249,7 @@ func TestScoreDocumentsARun(t *testing.T) {
 		t.Fatalf("the rigor run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
 	}
 	if want := []string{"outcome", "kb-root", "state-dir", "pass", "roles",
-		"run", "ledger", "counts", "scored"}; !slices.Equal(got.doc.Keys, want) {
+		"run", "ledger", "counts", "scored", "warnings"}; !slices.Equal(got.doc.Keys, want) {
 		t.Errorf("keys %q, want %q", got.doc.Keys, want)
 	}
 	if role := roleOf(got.doc, "scoring"); got.doc.Values["pass"] != query.PassRigor || role == nil ||
@@ -286,7 +286,7 @@ func jsonLines(t *testing.T, path string) []map[string]any {
 }
 
 // TestScoreWalksEveryPassByDefault: a run naming no pass walks both sets and
-// says so in its document, a finished run carries no resume, and a second run
+// says so in its result, a finished run carries no resume, and a second run
 // over the KB it scored asks nothing: every value it landed recorded the hash
 // of what it was judged against, so nothing is dirty.
 func TestScoreWalksEveryPassByDefault(t *testing.T) {
@@ -298,7 +298,7 @@ func TestScoreWalksEveryPassByDefault(t *testing.T) {
 		t.Fatalf("the run: outcome %s, %d dials\n%s", got.doc.Outcome, got.dialled, got.stdout)
 	}
 	if got.doc.Values["pass"] != query.PassAll {
-		t.Errorf("the document's pass = %v, want the mixed set %q", got.doc.Values["pass"], query.PassAll)
+		t.Errorf("the result's pass = %v, want the mixed set %q", got.doc.Values["pass"], query.PassAll)
 	}
 	if counts, _ := got.doc.Values["counts"].(map[string]any); counts["total"] != 8 {
 		t.Errorf("counts %v, want the eight items of both sets\n%s", got.doc.Values["counts"], got.stdout)
@@ -352,8 +352,8 @@ func lineRecord(t *testing.T, path string) map[string]any {
 }
 
 // TestScoreCancelledClosesOnTheItemItStoppedBefore: a run stopped by a cancelled
-// context closes its document on the cancelled record, which names the item the
-// run stopped before, and keeps resume before that record. The document passes
+// context closes its result on the cancelled record, which names the item the
+// run stopped before, and keeps resume before that record. The result passes
 // the contract's own key check, which scoreIn ran.
 func TestScoreCancelledClosesOnTheItemItStoppedBefore(t *testing.T) {
 	repo, state := scoreFixture(t), t.TempDir()
@@ -366,8 +366,8 @@ func TestScoreCancelledClosesOnTheItemItStoppedBefore(t *testing.T) {
 		t.Fatalf("the cancelled run: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
 	keys := got.doc.Keys
-	if keys[len(keys)-1] != "cancelled" || keys[len(keys)-2] != "resume" {
-		t.Errorf("keys %q, want resume before the cancelled record the outcome closes on", keys)
+	if keys[len(keys)-1] != "cancelled" || keys[len(keys)-2] != "warnings" || keys[len(keys)-3] != "resume" {
+		t.Errorf("keys %q, want resume, then warnings, before the cancelled record the outcome closes on", keys)
 	}
 	if stopped, _ := got.doc.Values["cancelled"].(map[string]any); stopped["item"] == nil {
 		t.Errorf("cancelled %v, want the item the run stopped before\n%s", stopped, got.stdout)
@@ -384,8 +384,8 @@ func TestScoreFailedRunCarriesResumeBeforeFailures(t *testing.T) {
 		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
 	}
 	keys := got.doc.Keys
-	if keys[len(keys)-1] != "failures" || keys[len(keys)-2] != "resume" {
-		t.Fatalf("keys %q, want resume before the record the outcome closes on", keys)
+	if keys[len(keys)-1] != "failures" || keys[len(keys)-2] != "warnings" || keys[len(keys)-3] != "resume" {
+		t.Fatalf("keys %q, want resume, then warnings, before the record the outcome closes on", keys)
 	}
 	counts, _ := got.doc.Values["counts"].(map[string]any)
 	if counts["total"] != 4 || counts["done"] != 1 || counts["failed"] != 3 {
@@ -397,7 +397,7 @@ func TestScoreFailedRunCarriesResumeBeforeFailures(t *testing.T) {
 }
 
 // TestScoreFailedRunClosesOnFailures: a run whose item cannot be written ends
-// `failed` and closes its document on the failures record the run reported, not
+// `failed` and closes its result on the failures record the run reported, not
 // on nothing.
 func TestScoreFailedRunClosesOnFailures(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
@@ -459,9 +459,9 @@ func TestScoreRefusesADryRunOnAnOlderKB(t *testing.T) {
 }
 
 // TestScoreSaysTheKeyTravelsInCleartext: a run whose endpoint is http:// to a
-// host other than loopback, with a key configured, says so in one line on stderr
+// host off the local network, with a key configured, says so in one line on stderr
 // and proceeds — the same line `build` writes, naming the host and never the key.
-// A loopback endpoint says nothing of it: on a PATH without dot, stderr holds
+// A local-network endpoint says nothing of it: on a PATH without dot, stderr holds
 // only the lines saying no sheet was drawn.
 func TestScoreSaysTheKeyTravelsInCleartext(t *testing.T) {
 	for _, tc := range []struct {
@@ -525,7 +525,7 @@ func standRuns(t *testing.T, state, kind string, n, at int) []string {
 	return ids
 }
 
-// TestScoreRefusals: a pass no document names is a usage refusal, naming the
+// TestScoreRefusals: an unknown pass is a usage refusal, naming the
 // passes the flag takes; a run that meets the lock another run holds is retry,
 // naming the directory held rather than a file that is not there.
 func TestScoreRefusals(t *testing.T) {
@@ -739,7 +739,7 @@ func (w *scoringWire) promptCacheFields(t *testing.T) []promptCacheField {
 // TestScoreSendsTheRunAsThePromptCacheKey: every ask of a scoring run carries
 // the run's id as `prompt_cache_key`, so a run's asks reach one upstream and
 // share one cache entry. Two items of one run, one server, one key — the id the
-// result document names.
+// result names.
 func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
 	repo := scoreFixture(t)
 	wire := &scoringWire{}
@@ -753,7 +753,7 @@ func TestScoreSendsTheRunAsThePromptCacheKey(t *testing.T) {
 	}
 	run, _ := got.doc.Values["run"].(string)
 	if run == "" {
-		t.Fatalf("the document names no run: %v", got.doc.Values)
+		t.Fatalf("the result names no run: %v", got.doc.Values)
 	}
 	fields := wire.promptCacheFields(t)
 	counts, _ := got.doc.Values["counts"].(map[string]any)
@@ -799,7 +799,7 @@ func TestScoreResumeSendsTheSamePromptCacheKey(t *testing.T) {
 	wire.mu.Unlock()
 	resumed := scoreDrive(t, repo, state, scoreOptions{Resume: true, providerOptions: scoreProviderAt(srv.URL)}, overHTTP)
 	if got := resumed.doc.Values["run"]; got != run {
-		t.Fatalf("the resumed run's document names %v, want %q", got, run)
+		t.Fatalf("the resumed run's result names %v, want %q", got, run)
 	}
 	all := wire.promptCacheFields(t)
 	if len(all) <= len(firstAsks) {
@@ -812,43 +812,29 @@ func TestScoreResumeSendsTheSamePromptCacheKey(t *testing.T) {
 	}
 }
 
-// TestScoreAsksOnceOnARefusalAndToTheCountOnARetryableStatus: an item's ask is
-// re-issued only where the status that ended it may change. A 400 is one
-// request and fails its item at once; a 503 is the transport attempt count,
-// with a pause between attempts — the sequence injected short here, so the
-// count is proved without waiting out the 5 s and 30 s the run pauses by.
-func TestScoreAsksOnceOnARefusalAndToTheCountOnARetryableStatus(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		code int
-		asks int
-	}{
-		{"a refusal", http.StatusBadRequest, 1},
-		{"a retryable status", http.StatusServiceUnavailable, model.ChatAttempts},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, asks := statusProvider(t, tc.code)
-			got := scoreIn(t, scoreRepo(t), t.TempDir(),
-				scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}},
-				func() model.Client { return model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}) })
-			if n := asks(); n != tc.asks {
-				t.Errorf("%d requests, want %d\n%s", n, tc.asks, got.stdout)
-			}
-			if got.doc.Outcome != "failed" || got.code != toolresult.ExitCode("failed") {
-				t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
-			}
-			counts, _ := got.doc.Values["counts"].(map[string]any)
-			if counts["total"] != 1 || counts["failed"] != 1 || counts["done"] != 0 {
-				t.Errorf("counts %v, want the one item failed\n%s", got.doc.Values["counts"], got.stdout)
-			}
-			items := got.doc.items("failures")
-			if len(items) != 1 || items[0]["check"] != checkError {
-				t.Fatalf("failures %v, want the one item's\n%s", items, got.stdout)
-			}
-			detail, _ := items[0]["detail"].(string)
-			if !strings.HasPrefix(detail, "clm-aaaaaa: ") || !strings.Contains(detail, fmt.Sprintf("http %d", tc.code)) {
-				t.Errorf("failure %q, want the item and the status that refused it\n%s", detail, got.stdout)
-			}
-		})
+// TestScoreAsksOnceOnARefusal: a 400 will not change, so the item's ask is one
+// request and fails its item at once, naming the status. The attempt count on
+// a retryable status is internal/model's, pinned there.
+func TestScoreAsksOnceOnARefusal(t *testing.T) {
+	srv, asks := statusProvider(t, http.StatusBadRequest)
+	got := scoreIn(t, scoreRepo(t), t.TempDir(), scoreOptions{Pass: query.PassRigor},
+		func() model.Client { return model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL}) })
+	if n := asks(); n != 1 {
+		t.Errorf("%d requests, want 1\n%s", n, got.stdout)
+	}
+	if got.doc.Outcome != "failed" || got.code != toolresult.ExitCode("failed") {
+		t.Fatalf("the run: outcome %s\n%s", got.doc.Outcome, got.stdout)
+	}
+	counts, _ := got.doc.Values["counts"].(map[string]any)
+	if counts["total"] != 1 || counts["failed"] != 1 || counts["done"] != 0 {
+		t.Errorf("counts %v, want the one item failed\n%s", got.doc.Values["counts"], got.stdout)
+	}
+	items := got.doc.items("failures")
+	if len(items) != 1 || items[0]["check"] != checkError {
+		t.Fatalf("failures %v, want the one item's\n%s", items, got.stdout)
+	}
+	detail, _ := items[0]["detail"].(string)
+	if !strings.HasPrefix(detail, "clm-aaaaaa: ") || !strings.Contains(detail, fmt.Sprintf("http %d", http.StatusBadRequest)) {
+		t.Errorf("failure %q, want the item and the status that refused it\n%s", detail, got.stdout)
 	}
 }

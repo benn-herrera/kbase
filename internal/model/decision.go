@@ -27,11 +27,16 @@ type DecisionQuestion struct {
 // DecisionRequest is one decision call. kbase sends exactly one question.
 //
 // State is the composed prompt, under the name each surface gives it: the
-// SystemOne request's `state`, the Decisions request's `input`.
+// SystemOne request's `state`, the Decisions request's `input`. Correction,
+// where not empty, is text a re-ask appends verbatim — after each question's
+// instructions on the Decisions surface, after the state on the SystemOne
+// surface — bringing its own separator; empty, the body is what it is without
+// the field.
 type DecisionRequest struct {
-	Model     string
-	State     string
-	Questions []DecisionQuestion
+	Model      string
+	State      string
+	Questions  []DecisionQuestion
+	Correction string
 }
 
 // DecisionAnswer is one answer of a decision response, its Key filled from the
@@ -49,6 +54,10 @@ type DecisionAnswer struct {
 	Probabilities           map[string]float64
 }
 
+// DecisionRefusal is the Type of an answer whose model declined the question,
+// as both decision APIs spell it.
+const DecisionRefusal = "refusal"
+
 // DecisionResponse is one decision result, its answers decoded into Answers
 // with each answer's key preserved.
 type DecisionResponse struct {
@@ -58,13 +67,14 @@ type DecisionResponse struct {
 }
 
 // decision performs one decision-model round-trip over the surface the
-// endpoint names: the request re-issued identically up to ChatAttempts on a
-// transport error or a retry-class status (429 or 5xx), with no pause between
-// attempts; a non-retryable non-2xx (any other 4xx) returns at once as
-// StatusError. There is no streaming and no ErrChatIncomplete path — the
-// re-issue loop is this method's own, not chat's. A cancelled ctx returns its
+// endpoint names: the request re-issued identically up to r.Attempts on a
+// transport error, an undecodable body or a retry-class status (429 or 5xx),
+// pausing before each re-issue as chat does (r.before), a pause the context's
+// deadline cannot cover ending the call at once with the attempts it made; a
+// non-retryable non-2xx (any other 4xx) returns at once as StatusError. There
+// is no streaming and no ErrChatIncomplete path. A cancelled ctx returns its
 // error at once.
-func (c *OpenAIClient) decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (c *OpenAIClient) decision(ctx context.Context, r Retry, req DecisionRequest) (DecisionResponse, error) {
 	if c.endpoint.BaseURL == "" {
 		return DecisionResponse{}, fmt.Errorf("endpoint BaseURL is empty")
 	}
@@ -75,7 +85,16 @@ func (c *OpenAIClient) decision(ctx context.Context, req DecisionRequest) (Decis
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= ChatAttempts; attempt++ {
+	for attempt := 1; attempt <= r.Attempts; attempt++ {
+		if attempt > 1 {
+			fits, beyond, err := r.before(ctx, attempt, lastErr)
+			if err != nil {
+				return DecisionResponse{}, err
+			}
+			if !fits {
+				return DecisionResponse{}, fmt.Errorf("%s: %s%s, the last error: %w", surface.path, attemptCount(attempt-1), beyond, lastErr)
+			}
+		}
 		out, err := c.decisionOnce(ctx, surface, body)
 		if err == nil {
 			if err := validateDecisionAnswers(req, out); err != nil {
@@ -94,7 +113,7 @@ func (c *OpenAIClient) decision(ctx context.Context, req DecisionRequest) (Decis
 			return DecisionResponse{}, err
 		}
 	}
-	return DecisionResponse{}, fmt.Errorf("%s: %d attempts, the last error: %w", surface.path, ChatAttempts, lastErr)
+	return DecisionResponse{}, fmt.Errorf("%s: %s, the last error: %w", surface.path, attemptCount(r.Attempts), lastErr)
 }
 
 // decisionOnce is one POST of the pre-encoded body to the surface's path. A
@@ -120,7 +139,7 @@ func (c *OpenAIClient) decisionOnce(ctx context.Context, surface decisionSurface
 
 // retryableStatus reports whether a non-2xx status is worth an identical
 // re-issue: 429 (later) and the 5xx class. Any other 4xx is the request
-// itself being wrong and will be just as wrong three times.
+// itself being wrong and will be just as wrong every time.
 func retryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code/100 == 5
 }

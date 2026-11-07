@@ -76,7 +76,7 @@ func init() {
 	}
 }
 
-// runBuildReplay runs one replay, writes its result document, and returns the
+// runBuildReplay runs one replay, writes its result, and returns the
 // exit code the outcome maps to.
 func runBuildReplay(ctx context.Context, opts buildReplayOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "build"); err != nil {
@@ -148,7 +148,7 @@ func buildReplayRun(ctx context.Context, opts buildReplayOptions) (outcome strin
 		return refusedOrFailed(fields, err)
 	}
 	fields = append(fields, toolresult.Field{Key: "trail", Value: rp.Trail()},
-		toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "dir", Value: rp.Dir()})
+		toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "replay-dir", Value: rp.Dir()})
 	p, err := provider()
 	if err != nil {
 		return refusedOrFailed(fields, err)

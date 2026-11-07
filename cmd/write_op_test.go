@@ -68,7 +68,7 @@ func TestAnEntryReportsItsOpsKeys(t *testing.T) {
 		return
 	}
 	rows, _ := entries[6][4].Value.([]toolresult.Record)
-	if want := []string{"source", "target", "relation", "bearing", "context", "manually_scored", "replaced_relation"}; len(rows) != 1 || !slices.Equal(keys(rows[0]), want) {
+	if want := []string{"source", "target", "relation", "bearing", "context", "manually-scored", "replaced-relation"}; len(rows) != 1 || !slices.Equal(keys(rows[0]), want) {
 		t.Errorf("removed-edges = %v, want one edges row keyed %v", rows, want)
 	}
 }
@@ -101,7 +101,7 @@ func TestARealBatchReportsItsOpsKeys(t *testing.T) {
 	}
 	// check fails t unless d is done and its entries' keys and values are
 	// want's, in order.
-	check := func(d resultDoc, want ...entryWant) {
+	check := func(d parsedResult, want ...entryWant) {
 		t.Helper()
 		n, items := d.Nodes["entries"], d.items("entries")
 		if d.Outcome != toolresult.Done || n == nil || len(n.Content) != len(want) || len(items) != len(want) {
@@ -177,7 +177,7 @@ func TestKBTextPassesThroughUnspelled(t *testing.T) {
 		args map[string]any
 	}{{"find", []string{"find"}, nil}, {"show", []string{"show", id}, map[string]any{"id": id}}} {
 		out, _ := kbase(t, repo, q.argv...)
-		if got := titleOf(checkDocument(t, q.op, out).Values["results"]); got != title || !strings.Contains(out, title) {
+		if got := titleOf(checkResult(t, q.op, out).Values["results"]); got != title || !strings.Contains(out, title) {
 			t.Errorf("%s at the command line: title %q, want %q as it stands\n%s", q.op, got, title, out)
 		}
 		name, args := asOperation(t, q.op, q.args)
@@ -201,14 +201,14 @@ func TestKBTextPassesThroughUnspelled(t *testing.T) {
 func TestAnMCPRefusalNamingADocumentKeepsItsLine(t *testing.T) {
 	repo := committedKB(t)
 	writeRepo(t, repo, map[string]string{"kb-root/a.md": "[↑ KB](entry-point.md)\n\n# A\n\nClaim text.\n\nSee Claim text.\n"})
-	mcpBatch := func(batch string) resultDoc {
+	mcpBatch := func(batch string) parsedResult {
 		t.Helper()
 		var out bytes.Buffer
 		if _, err := runWriteOp(writeOpOptions{Op: write.Batch, WorkDir: repo, Stdin: strings.NewReader(batch), ArgumentEntry: true,
 			Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()}); err != nil {
 			t.Fatal(err)
 		}
-		return checkDocument(t, write.Batch, out.String())
+		return checkResult(t, write.Batch, out.String())
 	}
 	added := mcpBatch(`{"entry":[{"operation":"add-claim","title":"A Result","rationale":"Shown.","document":"a.md","line":5,"snippet":"Claim text."}]}`)
 	if added.Outcome != toolresult.Done || len(added.entryIDs()) != 1 {

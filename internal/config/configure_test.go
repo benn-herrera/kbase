@@ -157,19 +157,19 @@ func TestConfigureModelsRefuses(t *testing.T) {
 
 // TestConfigureModelsNoEntryRemedy: a provider with no entry is refused,
 // against the written layer's providers.toml, with the configure-providers
-// call that adds it, carrying the location flag the call carried.
+// call that adds it, carrying the `--layer` the call carried.
 func TestConfigureModelsNoEntryRemedy(t *testing.T) {
-	for _, flag := range []string{"", "local", "global"} {
-		t.Run(flag, func(t *testing.T) {
+	for _, layer := range []string{"", LayerSourceRepository, LayerSourceGlobal} {
+		t.Run(layer, func(t *testing.T) {
 			dir := t.TempDir()
-			_, err := ConfigureModels(soloInputs(dir), flag, map[Role]string{RoleText: "NoSuch/m"}, nil)
+			_, err := ConfigureModels(soloInputs(dir), layer, map[Role]string{RoleText: "NoSuch/m"}, nil)
 			var refusal result.Refusal
 			if !errors.As(err, &refusal) || len(refusal) != 1 {
 				t.Fatalf("err = %v, want one item", err)
 			}
 			args := map[string]any{"provider": "nosuch", "base-url": "<url>"}
-			if flag != "" {
-				args[flag] = true
+			if layer != "" {
+				args["layer"] = layer
 			}
 			if want := argmark.Call("configure-providers", args); refusal[0].Remedy != want || refusal[0].Path != ProvidersPath(dir) {
 				t.Errorf("remedy = %q, path %q; want %q, %q", refusal[0].Remedy, refusal[0].Path, want, ProvidersPath(dir))
@@ -195,14 +195,14 @@ func TestConfigureModelsFailedListing(t *testing.T) {
 }
 
 // TestProviderEntryRefusals: an unusable name, a base URL that is no absolute
-// http(s) URL or carries credentials, and an api or decisionsFlavor the pool
+// http(s) URL or carries credentials, and an api or decisionApi the pool
 // would drop are each refused, keyed by its argument; a usable entry is not.
 // No refusal of a base URL names any part of it.
 func TestProviderEntryRefusals(t *testing.T) {
 	for _, tc := range []struct {
-		name, provider, baseURL, api, flavor string
-		keys                                 []string
-		unnamed                              []string
+		name, provider, baseURL, api, decisionAPI string
+		keys                                      []string
+		unnamed                                   []string
 	}{
 		{"usable", "lab", "http://lab:8000/v1", "openai", "decisions", nil, nil},
 		{"defaults", "lab_2", "https://x.example/v1", "", "", nil, nil},
@@ -211,10 +211,10 @@ func TestProviderEntryRefusals(t *testing.T) {
 		{"base url", "lab", "lab:8000", "", "", []string{argmark.Flag("base-url")}, []string{"lab:8000"}},
 		{"user and key", "lab", "https://alice:s3cret@host/v1", "", "", []string{argmark.Flag("base-url")}, []string{"alice", "s3cret", "host"}},
 		{"key alone", "lab", "https://s3cret@host/v1", "", "", []string{argmark.Flag("base-url")}, []string{"s3cret", "host"}},
-		{"api and flavor", "lab", "http://lab/v1", "grpc", "other", []string{argmark.Flag("api"), argmark.Flag("decisions-flavor")}, nil},
+		{"api and decision api", "lab", "http://lab/v1", "grpc", "other", []string{argmark.Flag("api"), argmark.Flag("decision-api")}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			refusal := ProviderEntryRefusals(tc.provider, tc.baseURL, tc.api, tc.flavor)
+			refusal := ProviderEntryRefusals(tc.provider, tc.baseURL, tc.api, tc.decisionAPI)
 			var keys []string
 			for _, item := range refusal {
 				keys = append(keys, item.Key)

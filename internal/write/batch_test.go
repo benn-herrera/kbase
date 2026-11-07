@@ -74,7 +74,7 @@ func TestBatchDryRun(t *testing.T) {
 	}
 }
 
-// TestBatchCommitPreflight: a committing batch — commit: true in the document,
+// TestBatchCommitPreflight: a committing batch — commit: true in the batch,
 // or Options.Commit as --commit sets it — reports Commit and runs Preflight
 // once its entries and derivation are known, before the first write, told
 // whether the batch is a dry run, a dry run's included; its error stops the
@@ -90,7 +90,7 @@ func TestBatchCommitPreflight(t *testing.T) {
 		outcome       string
 		written       bool
 	}{
-		{"document", "commit: true\n", false, nil, 1, true, result.Done, true},
+		{"batch", "commit: true\n", false, nil, 1, true, result.Done, true},
 		{"flag", "", true, nil, 1, true, result.Done, true},
 		{"without commit", "", false, nil, 0, false, result.Done, true},
 		{"dry run", "commit: true\ndry-run: true\n", false, nil, 1, true, result.Done, false},
@@ -328,9 +328,9 @@ func TestBatchRetriesWhereThePreflightChangedAFile(t *testing.T) {
 	}
 }
 
-// TestDocumentDryRun: the document's dry-run reads as the batch reads it, and
-// is false where the document does not parse that far.
-func TestDocumentDryRun(t *testing.T) {
+// TestBatchDryRunFlag: the batch's dry-run reads as Run reads it, and
+// is false where the batch does not parse that far.
+func TestBatchDryRunFlag(t *testing.T) {
 	for _, tc := range []struct {
 		name, values string
 		want         bool
@@ -339,10 +339,10 @@ func TestDocumentDryRun(t *testing.T) {
 		{"false", "dry-run: false\nentry: []\n", false},
 		{"absent", "entry: []\n", false},
 		{"refused entries", "dry-run: true\nentry: 3\n", true},
-		{"not a document", "[", false},
+		{"not a batch", "[", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := DocumentDryRun(EditClaim, []byte(tc.values)); got != tc.want {
+			if got := BatchDryRun(EditClaim, []byte(tc.values)); got != tc.want {
 				t.Errorf("got %t, want %t", got, tc.want)
 			}
 		})

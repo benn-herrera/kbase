@@ -4,27 +4,27 @@ import (
 	"errors"
 	"fmt"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 const (
 	// FormatVersion is the one metadata format version kbase reads and writes:
 	// the KB's nodes and edges are records in two files, each scored record
 	// carrying the hash its value was judged against.
-	FormatVersion = format400.Version400
+	FormatVersion = format40.Version
 	// FormatKey is the stamp's one key, in the stamp file and in the frontmatter
 	// of a KB a migration has not stamped there yet.
-	FormatKey = format400.FormatKey
+	FormatKey = format40.FormatKey
 	// FormatFile is the metadata-format stamp file, kb-root-relative.
-	FormatFile = format400.FormatFile
+	FormatFile = format40.FormatFile
 )
 
 // EncodeFormatStamp is the stamp file's content holding version.
-func EncodeFormatStamp(version string) []byte { return format400.EncodeFormatStamp(version) }
+func EncodeFormatStamp(version string) []byte { return format40.EncodeFormatStamp(version) }
 
 // DecodeFormatStamp is the version the stamp file's bytes hold; anything that
 // is not the one key with a non-empty string value is an error.
-func DecodeFormatStamp(data []byte) (string, error) { return format400.DecodeFormatStamp(data) }
+func DecodeFormatStamp(data []byte) (string, error) { return format40.DecodeFormatStamp(data) }
 
 // ErrNoEntryPoint is the loader's error for a kb-root with no entry point.
 var ErrNoEntryPoint = errors.New("kb-root has no " + EntryPointFile)

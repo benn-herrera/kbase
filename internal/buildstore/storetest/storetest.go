@@ -1,6 +1,6 @@
 // Package storetest is test support the build and buildstore tests share: a
 // repository made as git init makes one, git's identity and the state store's
-// home under a test's own directory, and the reading of a result document's
+// home under a test's own directory, and the reading of a result's
 // fields. It imports no build package, so buildstore's in-package tests can
 // import it; nothing outside a test does.
 package storetest
@@ -58,13 +58,13 @@ func Field(fields []result.Field, key string) any {
 	return nil
 }
 
-// Carries is whether the document holds key at all, an absent key told apart
+// Carries is whether the result holds key at all, an absent key told apart
 // from one holding an empty value.
 func Carries(fields []result.Field, key string) bool {
 	return slices.ContainsFunc(fields, func(f result.Field) bool { return f.Key == key })
 }
 
-// FieldKeys is the keys of a field list or a record, in document order.
+// FieldKeys is the keys of a field list or a record, in result order.
 func FieldKeys(fields []result.Field) []string {
 	keys := make([]string, len(fields))
 	for i, f := range fields {

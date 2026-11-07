@@ -61,8 +61,9 @@ an analysis's or an experiment's section in the document that states it, an axio
 `axioms.md` — and a legend keys the rest.
 
 A claim, analysis, work or experiment with no `rigor` reads {pending-literal} wherever it appears,
-and so does the `strength` of a claim or an analysis whose value cannot be derived yet: that says
-*unscored*, not *low* and not *doubted*. A {pending-literal} bearing takes its edge out of the
+and so does the `strength` of a claim or an analysis whose value cannot be derived yet, and its
+`strength-band` then reads `{unknown-band}`: that says *unscored*, not *low*, not *doubted* and not
+a fault. A {pending-literal} bearing takes its edge out of the
 derivation until it is judged, and a bearing of `0` is a judgement that participates.
 
 ## Current Figures
@@ -71,13 +72,15 @@ This file states no counts, because the KB changes after it is written. The curr
 `kbase stats`, run from the project root that holds this KB.
 
 `kbase stats` counts the claim graph: one count per node kind — `claims`, `analyses`, `experiments`,
-`axioms`, `works` — then `edges`, every edge of every class, and `demoted_edges` beside it. The claims
-per band are under `strength_bands`: the {pending-literal} band holds the unscored claims, and every
-other band holds scored ones.
+`axioms`, `works` — then `edges`, every edge of every class, and `demoted-edges` beside it.
+`strength-bands` counts the claims in each band, keyed by the band's slug, then under `{unknown-band}`
+the claims whose `strength` reads {pending-literal}; `{unknown-band}` is no band but stands in a
+band's place, here and in a claim's `strength-band`.
 
-Under `relations`, `kbase stats` splits the edges by relation and, on a scoring relation, counts the
-edges at each bearing; `kbase edges --relation <relation>` lists them, and `kbase edges --id <id>` reports each edge at a
-node with its `relation` and its `bearing`.
+Under `relations`, `kbase stats` splits the edges by relation and, on a scoring relation, lists
+under `bearings` one record per distinct bearing — its `bearing` and, under `edges`, the count of
+edges at it — with {pending-literal} a bearing of its own; `kbase edges --relation <relation>` lists
+them, and `kbase edges --id <id>` reports each edge at a node with its `relation` and its `bearing`.
 
 No command counts the documents: `stats` counts the claim graph and `verify` reports faults.
 

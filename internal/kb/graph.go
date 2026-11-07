@@ -5,21 +5,21 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 // The KB's two authored record files, kb-root-relative: every node in one,
 // every edge in the other.
 const (
-	GraphNodesFile = format400.NodesFile
-	GraphEdgesFile = format400.EdgesFile
+	GraphNodesFile = format40.NodesFile
+	GraphEdgesFile = format40.EdgesFile
 )
 
 // The refusal classes the strict load raises: a record file that breaks its
 // schema or holds records that do not form a graph, and one a stamped KB does
 // not carry.
 const (
-	CheckMetadata = format400.CheckMetadata
+	CheckMetadata = format40.CheckMetadata
 	CheckIndex    = "index"
 )
 
@@ -45,7 +45,7 @@ func LoadGraph(src *Source) (Graph, error) {
 	for _, file := range []struct {
 		rel    string
 		decode func(data []byte, rel string, g *Graph) []GraphFault
-	}{{GraphNodesFile, format400.DecodeNodes}, {GraphEdgesFile, format400.DecodeEdges}} {
+	}{{GraphNodesFile, format40.DecodeNodes}, {GraphEdgesFile, format40.DecodeEdges}} {
 		data, err := src.ReadFile(src.KBPath(file.rel))
 		if ErrNotExist(err) {
 			faults = append(faults, GraphFault{Check: CheckIndex, Path: file.rel, Remedy: RestoreFromGitRemedy,
@@ -147,65 +147,65 @@ func rigorAboveMaximum(g Graph) []GraphFault {
 }
 
 // The live format's definitions — its record types and faults, field names,
-// id grammar, node kinds, relations and encoder — are format400's, named here
+// id grammar, node kinds, relations and encoder — are format40's, named here
 // under the same names.
 
 type (
-	Graph          = format400.Graph
-	ClaimNode      = format400.ClaimNode
-	AnalysisNode   = format400.AnalysisNode
-	ExperimentNode = format400.ExperimentNode
-	WorkNode       = format400.WorkNode
-	AxiomNode      = format400.AxiomNode
-	UnscoredEdge   = format400.UnscoredEdge
-	DemotedEdge    = format400.DemotedEdge
-	BearingEdge    = format400.BearingEdge
-	ScorableEdge   = format400.ScorableEdge
-	EdgeRecord     = format400.EdgeRecord
-	Bearing        = format400.Bearing
-	JudgedHash     = format400.JudgedHash
-	GraphFault     = format400.GraphFault
-	GraphLoadError = format400.GraphLoadError
+	Graph          = format40.Graph
+	ClaimNode      = format40.ClaimNode
+	AnalysisNode   = format40.AnalysisNode
+	ExperimentNode = format40.ExperimentNode
+	WorkNode       = format40.WorkNode
+	AxiomNode      = format40.AxiomNode
+	UnscoredEdge   = format40.UnscoredEdge
+	DemotedEdge    = format40.DemotedEdge
+	BearingEdge    = format40.BearingEdge
+	ScorableEdge   = format40.ScorableEdge
+	EdgeRecord     = format40.EdgeRecord
+	Bearing        = format40.Bearing
+	JudgedHash     = format40.JudgedHash
+	GraphFault     = format40.GraphFault
+	GraphLoadError = format40.GraphLoadError
 )
 
 const (
-	PendingLiteral    = format400.PendingLiteral
-	RigorKey          = format400.RigorKey
-	StatusKey         = format400.StatusKey
-	BearingKey        = format400.BearingKey
-	ManuallyScoredKey = format400.ManuallyScoredKey
-	JudgedHashKey     = format400.JudgedHashKey
-	ClaimPrefix       = format400.ClaimPrefix
-	AnalysisPrefix    = format400.AnalysisPrefix
-	ExperimentPrefix  = format400.ExperimentPrefix
-	WorkPrefix        = format400.WorkPrefix
-	AxiomPrefix       = format400.AxiomPrefix
-	WorkLabelPattern  = format400.WorkLabelPattern
+	PendingLiteral    = format40.PendingLiteral
+	RigorKey          = format40.RigorKey
+	StatusKey         = format40.StatusKey
+	BearingKey        = format40.BearingKey
+	ManuallyScoredKey = format40.ManuallyScoredKey
+	JudgedHashKey     = format40.JudgedHashKey
+	ClaimPrefix       = format40.ClaimPrefix
+	AnalysisPrefix    = format40.AnalysisPrefix
+	ExperimentPrefix  = format40.ExperimentPrefix
+	WorkPrefix        = format40.WorkPrefix
+	AxiomPrefix       = format40.AxiomPrefix
+	WorkLabelPattern  = format40.WorkLabelPattern
 
-	NodeKindClaim      = format400.NodeKindClaim
-	NodeKindAnalysis   = format400.NodeKindAnalysis
-	NodeKindExperiment = format400.NodeKindExperiment
-	NodeKindAxiom      = format400.NodeKindAxiom
-	NodeKindWork       = format400.NodeKindWork
+	NodeKindClaim      = format40.NodeKindClaim
+	NodeKindAnalysis   = format40.NodeKindAnalysis
+	NodeKindExperiment = format40.NodeKindExperiment
+	NodeKindAxiom      = format40.NodeKindAxiom
+	NodeKindWork       = format40.NodeKindWork
 
-	RelationSupports   = format400.RelationSupports
-	RelationFounds     = format400.RelationFounds
-	RelationLifts      = format400.RelationLifts
-	RelationRefutes    = format400.RelationRefutes
-	RelationReferences = format400.RelationReferences
-	RelationDemoted    = format400.RelationDemoted
+	RelationSupports   = format40.RelationSupports
+	RelationFounds     = format40.RelationFounds
+	RelationLifts      = format40.RelationLifts
+	RelationRefutes    = format40.RelationRefutes
+	RelationReferences = format40.RelationReferences
+	RelationDemoted    = format40.RelationDemoted
 
-	ExperimentRun     = format400.ExperimentRun
-	ExperimentPlanned = format400.ExperimentPlanned
+	ExperimentRun     = format40.ExperimentRun
+	ExperimentPlanned = format40.ExperimentPlanned
 )
 
 var (
-	IDKinds            = format400.IDKinds
-	HostedIDKinds      = format400.HostedIDKinds
-	WorkLabel          = format400.WorkLabel
-	NodeKinds          = format400.NodeKinds
-	Relations          = format400.Relations
-	ExperimentStatuses = format400.ExperimentStatuses
+	IDKinds            = format40.IDKinds
+	HostedIDKinds      = format40.HostedIDKinds
+	WorkLabel          = format40.WorkLabel
+	NodeKinds          = format40.NodeKinds
+	Relations          = format40.Relations
+	ExperimentStatuses = format40.ExperimentStatuses
 )
 
 // KindWithArticle is the node kind as prose names one of it.
@@ -219,20 +219,20 @@ var kindArticles = map[string]string{
 	NodeKindWork:       "a work",
 }
 
-func IDBody(kinds ...string) string { return format400.IDBody(kinds...) }
+func IDBody(kinds ...string) string { return format40.IDBody(kinds...) }
 
-func NodeIDKind(id string) (kind string, ok bool) { return format400.NodeIDKind(id) }
+func NodeIDKind(id string) (kind string, ok bool) { return format40.NodeIDKind(id) }
 
 func BearingLegal(relation, sourceKind, targetKind string) bool {
-	return format400.BearingLegal(relation, sourceKind, targetKind)
+	return format40.BearingLegal(relation, sourceKind, targetKind)
 }
 
-func PyFloatRepr(f float64) string { return format400.PyFloatRepr(f) }
+func PyFloatRepr(f float64) string { return format40.PyFloatRepr(f) }
 
 func EdgeKey(relation, replaced, source, target string) []string {
-	return format400.EdgeKey(relation, replaced, source, target)
+	return format40.EdgeKey(relation, replaced, source, target)
 }
 
-func EncodeNodes(g Graph) []byte { return format400.EncodeNodes(g) }
+func EncodeNodes(g Graph) []byte { return format40.EncodeNodes(g) }
 
-func EncodeEdges(g Graph) []byte { return format400.EncodeEdges(g) }
+func EncodeEdges(g Graph) []byte { return format40.EncodeEdges(g) }

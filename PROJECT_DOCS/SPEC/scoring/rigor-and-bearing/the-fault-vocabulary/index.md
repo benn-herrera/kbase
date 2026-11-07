@@ -1,19 +1,19 @@
 ## The fault vocabulary
 
 Fifteen id rows name the faults: four in the statement vocabulary, six in the method vocabulary and
-five in `bearing`, with `flt-contradiction` and `flt-overreach` standing in both rigor vocabularies.
-Thirteen ids are distinct, and a ledger may also carry the retired `flt-pending` from a line written
-before it went. An id is written `flt-[a-z0-9-]+` and spells the criterion it names, so a
+five in `bearing`, with `flt-contradiction` and `flt-overreach` appearing in both rigor vocabularies.
+Thirteen ids are distinct, and a ledger may also contain the retired `flt-pending` from a line written
+before it went. An id is written `flt-[a-z0-9-]+` and writes out the criterion it names, so a
 ledger line needs no table to read.
 
 **An id names one fault wherever it appears.** The `bearing` set is disjoint from both rigor sets. The
 two rigor vocabularies share two ids because `flt-contradiction` and `flt-overreach` name the same
-fault at different subjects, and each shared id carries the same weight in both tables, so a ledger
+fault at different subjects, and each shared id has the same weight in both tables, so a ledger
 line's price never depends on which rigor vocabulary read it; only the definition's subject changes.
-The ids carry no severity and no order — the weight is the table's, below — and `none` is a word, not
+The ids have no severity and no order — the weight is the table's, below — and `none` is a word, not
 an id: it names the absence of a charge and is not a member of any set.
 
-Rows are in walk order within a vocabulary. A criterion is met at each site of the text whose test it
+Rows are in precedence order within a vocabulary. A criterion is met at each site of the text whose test it
 satisfies, and where one site satisfies two rows of the same vocabulary the earlier row's id is the
 charge and the later is not.
 
@@ -25,8 +25,8 @@ do](#what-the-check-does-and-does-not-do)). A shared line is also not the same f
 site: two rows whose tests are met at different occurrence units — a minimal set, a respect, a
 distinct proposition — may anchor at one line, so a parse that refused the second id on a line set
 would refuse defensible answers. Two ids on one line set are therefore accepted and both charged, and
-the shared quote and offset beside the verbatim reply are what let a later reader hold the line
-against the precedence and see whether the walk's order was missed. The cost is stated rather than
+the shared quote and offset beside the verbatim reply are what let a later reader compare the line
+against the precedence and see whether it was missed. The cost is stated rather than
 hidden: a departure from the precedence is priced, not refused. The alternative — the parse refusing a
 second id on a line set — is not the choice, because it turns a judgement it cannot check into
 `malformed`, discarding both the answer and the evidence for it, and a retry is a fresh guess at the

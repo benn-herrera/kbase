@@ -71,7 +71,7 @@ func (f fixture) reset(t *testing.T, commit string) {
 }
 
 // trailLines is the boundaries field as "stage commit subject" lines, in
-// document order.
+// result order.
 func trailLines(fields []result.Field) []string {
 	boundaries, _ := storetest.Field(fields, "boundaries").([]result.Record)
 	lines := make([]string, len(boundaries))
@@ -96,7 +96,7 @@ func resumeFrom(commit string) []string {
 	return []string{"git reset --keep " + commit, argmark.Call("build", map[string]any{"resume": true})}
 }
 
-// TestBuildTrailReportsTheTrail: the document names the commit HEAD stands at
+// TestBuildTrailReportsTheTrail: the result names the commit HEAD stands at
 // and every boundary the trail holds, oldest first, each with its subject and
 // the command that rewinds to it — git reset --keep to its commit, then the
 // build resumed — and takes no target.
@@ -175,7 +175,7 @@ func TestBuildTrailResumesAsTheRunRecorded(t *testing.T) {
 	}
 }
 
-// TestBuildTrailDirtyIsAWarning: the document names what a reset would touch,
+// TestBuildTrailDirtyIsAWarning: the result names what a reset would touch,
 // the whole worktree's changes and not only the paths a build owns, and the
 // outcome stays done.
 func TestBuildTrailDirtyIsAWarning(t *testing.T) {
@@ -198,7 +198,7 @@ func TestBuildTrailDirtyIsAWarning(t *testing.T) {
 	}
 }
 
-// TestBuildTrailDirtyCapsThePaths: past the cap the document names the first
+// TestBuildTrailDirtyCapsThePaths: past the cap the result names the first
 // paths and counts the rest.
 func TestBuildTrailDirtyCapsThePaths(t *testing.T) {
 	f := newTrailFixture(t)
@@ -307,7 +307,7 @@ func TestBuildTrailStartedAt(t *testing.T) {
 }
 
 // TestBuildTrailIsTheNewestBuilds: a fresh build over kb-root/ removed starts
-// a trail above the one before it, and the document and status read that
+// a trail above the one before it, and the result and status read that
 // build's boundaries alone.
 func TestBuildTrailIsTheNewestBuilds(t *testing.T) {
 	f := newTrailFixture(t)
@@ -401,7 +401,7 @@ func TestNoKBRootNoBuild(t *testing.T) {
 }
 
 // TestBuildTrailRefusesAnOutOfOrderTrail: a trail recording a stage over an
-// unrecorded earlier one carries build's own trail refusal, and the document
+// unrecorded earlier one carries build's own trail refusal, and the result
 // still lists the boundaries the trail holds.
 func TestBuildTrailRefusesAnOutOfOrderTrail(t *testing.T) {
 	f := newTrailFixture(t)
@@ -444,7 +444,7 @@ func TestBuildTrailOutsideAWorktree(t *testing.T) {
 }
 
 // TestBuildTrailListsABoundaryOutsideTheVocabulary: a `kb-build:` subject
-// naming no stage is a boundary the document lists and the trail refusal says
+// naming no stage is a boundary the result lists and the trail refusal says
 // nothing of — it reads a gap in walk order, and an id outside the vocabulary
 // is no gap.
 func TestBuildTrailListsABoundaryOutsideTheVocabulary(t *testing.T) {
@@ -465,7 +465,7 @@ func TestBuildTrailListsABoundaryOutsideTheVocabulary(t *testing.T) {
 }
 
 // TestBuildTrailAfterAResetToAMidTrailBoundary: the newer boundaries are gone
-// from the trail a reset leaves, and the document reads that trail.
+// from the trail a reset leaves, and the result reads that trail.
 func TestBuildTrailAfterAResetToAMidTrailBoundary(t *testing.T) {
 	f := newTrailFixture(t)
 	start := f.boundary(t, "start")

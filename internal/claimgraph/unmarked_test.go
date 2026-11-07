@@ -246,7 +246,7 @@ func TestAskPlannedThroughTheLetterSeam(t *testing.T) {
 		t.Errorf("the stage's stop = %v, want inference-failed", askStop(err))
 	}
 	if held != 0 || total != 2 || len(units) != 0 || len(fallbacks) != 0 || len(stopped.Pairs) != 0 {
-		t.Errorf("held %d, units %q of %d, fallbacks %+v, pairs %+v; want two units announced and nothing of the stopped batch taken",
+		t.Errorf("held %d, units %q of %d, fallbacks %+v, pairs %+v; want two units announced and nothing of the stopped wave taken",
 			held, units, total, fallbacks, stopped.Pairs)
 	}
 	if len(groups) != 2 || groups[1].Items[0].Item != "clm-t4" || groups[1].Items[0].Outcome != asks.Failed {

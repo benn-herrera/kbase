@@ -21,8 +21,8 @@ import (
 )
 
 // replayable is a run in dir over the first item of runSet: asked once with a
-// reply the parse refuses, then again, as a resume asks a failed item, with
-// "none". The item list stands beside it as the verb writes one.
+// reply the parse refuses, re-asked with the same reply, then again, as a
+// resume asks a failed item, with "none". The item list stands beside it as the verb writes one.
 func replayable(t *testing.T, dir string) *Ledger {
 	t.Helper()
 	src, ix, set := runSet(t)
@@ -66,8 +66,8 @@ func TestReplayAsksAnItemsLastCapture(t *testing.T) {
 	l := replayable(t, dir)
 	path := filepath.Join(l.Dir(), capturesFile)
 	captures := rawLines(t, path)
-	if len(captures) != 2 {
-		t.Fatalf("the run left %d captures, want two calls of its one item", len(captures))
+	if len(captures) != 3 {
+		t.Fatalf("the run left %d captures, want its one item's ask and re-ask, then the resume's ask", len(captures))
 	}
 	var first map[string]any
 	if err := json.Unmarshal(captures[0], &first); err != nil {
@@ -177,7 +177,7 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	}
 	classes := map[string]bool{}
 	for key, c := range captured {
-		prompt, err := c.class.render(c.closed)
+		prompt, err := c.class.render(c.closed, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,6 +190,38 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 		if !classes[cl.name] {
 			t.Errorf("no capture of class %s was read", cl.name)
 		}
+	}
+
+	// A re-ask's capture renders under the correction it records.
+	reAsked := filepath.Join(replayable(t, t.TempDir()).Dir(), capturesFile)
+	var corrected int
+	for _, raw := range rawLines(t, reAsked) {
+		var rec captureRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Correction == nil {
+			continue
+		}
+		corrected++
+		if rec.Correction.Case == "" || rec.Correction.Values == nil || rec.Correction.Quoted == nil {
+			t.Errorf("the re-ask's capture records %+v, want its case, values and quoted lines", rec.Correction)
+		}
+		cl, _ := classNamed(rec.Class)
+		closed, err := rec.closedText()
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt, err := cl.render(closed, rec.Correction.correction())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digestOf(prompt) != rec.PromptSHA256 || prompt != rec.Prompt {
+			t.Errorf("the re-ask's re-rendered prompt digests %s, the capture records %s", digestOf(prompt), rec.PromptSHA256)
+		}
+	}
+	if corrected != 1 {
+		t.Errorf("the re-asked run left %d captures with a correction, want its one re-ask", corrected)
 	}
 }
 
@@ -251,8 +283,8 @@ func TestResumeDropsATornCapture(t *testing.T) {
 
 	runOnce(reopened(t, dir), "none")
 	captures := rawLines(t, path)
-	if len(captures) != 2 {
-		t.Fatalf("captures.jsonl holds %d lines, want the run's two calls", len(captures))
+	if len(captures) != 3 {
+		t.Fatalf("captures.jsonl holds %d lines, want the run's three calls", len(captures))
 	}
 	for i, c := range captures {
 		if !json.Valid(c) {
@@ -392,7 +424,8 @@ func TestReplayLogsItsProgress(t *testing.T) {
 			rp := twoItemRun(t, t.TempDir())
 			var calls int
 			ask := func(context.Context, string) (Reply, error) {
-				if calls++; calls == 2 {
+				// The second item's ask and its re-ask.
+				if calls++; calls >= 2 {
 					return Reply{Text: tc.second}, nil
 				}
 				return Reply{Text: "none"}, nil

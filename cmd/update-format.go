@@ -20,6 +20,7 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
+	"kbase/internal/kbwrite"
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
@@ -72,14 +73,17 @@ func worktreeRefusal(dir, detail string) toolresult.Item {
 // refusing while a run — a build or a scoring run — holds the operation lock:
 // at once, and again once the lock is taken, for a run that started during the
 // wait. Where release is nil, outcome and items are the verb's answer.
-func holdKB(root, remedy string) (release func(), outcome string, items []toolresult.Item, err error) {
-	return holdWriting(root, remedy, true)
+func holdKB(root, remedy string, lg log.Logger) (release func(), outcome string, items []toolresult.Item, err error) {
+	return holdWriting(root, remedy, true, lg)
 }
 
 // holdWriting is holdKB for a verb that writes the KB at root. probe is
 // whether to refuse while a run holds the operation lock: a scoring run's own
 // landing and refresh clear it, the run that holds that lock being the writer.
-func holdWriting(root, remedy string, probe bool) (release func(), outcome string, items []toolresult.Item, err error) {
+// Once the KB is held, the kb-temp a killed writer left is removed, and release
+// removes the one the verb's writes made before it lets the lock go; a removal
+// release cannot make is logged to lg, and the next writer's start makes it.
+func holdWriting(root, remedy string, probe bool, lg log.Logger) (release func(), outcome string, items []toolresult.Item, err error) {
 	if probe {
 		if running, err := build.RunningOperation(root); err != nil || running != nil {
 			return nil, toolresult.Refused, running, err
@@ -95,7 +99,17 @@ func holdWriting(root, remedy string, probe bool) (release func(), outcome strin
 			return nil, toolresult.Refused, running, err
 		}
 	}
-	return release, "", nil, nil
+	if err := kbwrite.RemoveTemps(root); err != nil {
+		release()
+		return nil, "", nil, err
+	}
+	unlock := release
+	return func() {
+		if err := kbwrite.RemoveTemps(root); err != nil {
+			lg.Warn("kb-temp outlived the write; the next writer removes it", "kb-root", root, "error", err)
+		}
+		unlock()
+	}, "", nil, nil
 }
 
 // holdWrite takes the KB write lock at root, waiting out a writer in progress;
@@ -123,6 +137,17 @@ func openKB(root string) (*kb.Source, []toolresult.Item, error) {
 
 // loadErrorRefusedHelp is the help sentence of a verb refuseLoadError guards.
 const loadErrorRefusedHelp = "A KB whose load fails is refused, naming each fault with its file and record."
+
+// bareIDHelp is what makes a node id bare, as every help naming one words it,
+// over two lines, the second opening with indent.
+func bareIDHelp(indent string) string {
+	return "standing in prose outside code, statement markers and every link,\n" + indent + "or as a link's whole text"
+}
+
+// updateFormatMCPNote is update-format's MCP note: a call over a KB the user
+// has not chosen to convert takes that choice from them, so an agent runs it
+// only at the user's direction.
+const updateFormatMCPNote = "Running it is the user's decision: run it only when the user directs it, a refusal's remedy included."
 
 // refuseLoadError is the answer of a verb whose KB load fails: the load's
 // refusal, an item per fault, or a failure to read the KB. stop is false where
@@ -166,9 +191,9 @@ func migrationRecord(verb string, stderr io.Writer, m *kb.Migration, warnings []
 		{Key: "warnings", Value: items}}
 }
 
-// emitResult writes a verb's result document and returns its exit code.
+// emitResult writes a verb's result and returns its exit code.
 func emitResult(verb string, stdout io.Writer, outcome string, fields []toolresult.Field) (int, error) {
-	if err := toolresult.Emit(documentOut(stdout), outcome, fields...); err != nil {
+	if err := toolresult.Emit(resultOut(stdout), outcome, fields...); err != nil {
 		return 0, fmt.Errorf("%s: writing the result: %w", verb, err)
 	}
 	return toolresult.ExitCode(outcome), nil
@@ -214,8 +239,9 @@ var formatResultLists = []formatResultList{
 }
 
 // listConversion is warnings split into those formatResultLists lists, each
-// list a field keyed by its name in result order, and the rest.
-func listConversion(warnings []kb.MigrationWarning) (own []kb.MigrationWarning, lists []toolresult.Field) {
+// list a field keyed by its name in result order, and the rest. Where the
+// format did not change, only the bare-ids list is a field.
+func listConversion(warnings []kb.MigrationWarning, migrated bool) (own []kb.MigrationWarning, lists []toolresult.Field) {
 	listed := map[string][]toolresult.Record{}
 	for _, w := range warnings {
 		if i := slices.IndexFunc(formatResultLists, func(l formatResultList) bool { return l.list == w.List }); i >= 0 {
@@ -225,9 +251,41 @@ func listConversion(warnings []kb.MigrationWarning) (own []kb.MigrationWarning, 
 		own = append(own, w)
 	}
 	for _, l := range formatResultLists {
-		lists = append(lists, toolresult.Field{Key: l.list, Value: append([]toolresult.Record{}, listed[l.list]...)})
+		if migrated || l.list == kbload.ListBareIDs {
+			lists = append(lists, toolresult.Field{Key: l.list, Value: append([]toolresult.Record{}, listed[l.list]...)})
+		}
 	}
 	return own, lists
+}
+
+// checkCiting is the refusal citeBareIDs would meet over src, the KB as the
+// load converted it, checked before the save writes so that a refused run
+// writes nothing; a KB the save's precheck or load would refuse is refused
+// here, as the save would refuse it.
+func checkCiting(src *kb.Source) error {
+	if err := index.Precheck(src); err != nil {
+		return err
+	}
+	rows, err := index.Derive(src)
+	if err != nil {
+		return err
+	}
+	return write.CheckCiteBareIDs(src, rows.Hosts)
+}
+
+// citeBareIDs cites every bare id of the KB at root, which update-format has
+// saved in the current format, through write.CiteBareIDs under the write lock
+// update-format holds. Its result is returned whatever the outcome, an error
+// for any but done and unchanged.
+func citeBareIDs(root string, lg log.Logger) (write.Result, error) {
+	res := write.Run(write.CiteBareIDs, write.Options{KBRoot: root, Values: []byte("entry: [{}]\n"), Logger: lg})
+	switch res.Outcome {
+	case toolresult.Done, toolresult.Unchanged:
+		return res, nil
+	case toolresult.Refused:
+		return res, toolresult.Refusal(res.Refusals)
+	}
+	return res, fmt.Errorf("citing the bare ids ended %s: %w", res.Outcome, toolresult.Items(append(res.Refusals, res.Failures...)))
 }
 
 // updateFormatRetryRemedy is the remedy of an update-format turned away by
@@ -243,7 +301,7 @@ func updateFormat(opts maintenanceOptions) (string, []toolresult.Field) {
 		return refused(nil, refusals...)
 	}
 	fields := []toolresult.Field{{Key: "kb-root", Value: root}}
-	release, outcome, items, err := holdKB(root, updateFormatRetryRemedy)
+	release, outcome, items, err := holdKB(root, updateFormatRetryRemedy, opts.Logger)
 	if err != nil {
 		return failed(fields, err)
 	}
@@ -276,19 +334,35 @@ func updateFormat(opts maintenanceOptions) (string, []toolresult.Field) {
 	if migrated {
 		fmt.Fprintf(opts.Stderr, "update-format: converting the KB's format %s to %s: %s\n", m.From, m.To, m.Note)
 	}
-	wrote, gone, noDot, err := index.UpdateFormat(src, moves, move, opts.Logger)
+	var wrote, gone []string
+	var noDot bool
+	err = checkCiting(src)
+	if err == nil {
+		wrote, gone, noDot, err = index.UpdateFormat(src, moves, move, opts.Logger)
+	}
 	var unfenced []string
 	if err == nil {
 		var maintained []string
 		maintained, unfenced, err = maintainBlocks(src)
 		wrote = append(wrote, maintained...)
 	}
-	var lists []toolresult.Field
-	if migrated {
-		own := m.Warnings
-		if err == nil {
-			own, lists = listConversion(m.Warnings)
+	listed := slices.Clone(m.Warnings)
+	if err == nil {
+		var cited write.Result
+		cited, err = citeBareIDs(root, opts.Logger)
+		wrote, gone = append(wrote, cited.Written...), append(gone, cited.Removed...)
+		for _, e := range cited.Entries {
+			for _, c := range e.Cited {
+				listed = append(listed, kb.MigrationWarning{List: kbload.ListBareIDs, Path: c.Path, Line: c.Line, ID: c.ID})
+			}
 		}
+	}
+	own := m.Warnings
+	var lists []toolresult.Field
+	if err == nil {
+		own, lists = listConversion(listed, migrated)
+	}
+	if migrated {
 		fields = append(fields, toolresult.Field{Key: "migration", Value: migrationRecord("update-format", opts.Stderr, &m, own)})
 	}
 	if noDot {
@@ -429,25 +503,37 @@ func maintenanceCommand(use, short, long string, run func(maintenanceOptions) (i
 func updateFormatCommand() *cobra.Command {
 	var commit bool
 	cmd := maintenanceCommand("update-format",
-		"convert the KB to the current format, re-derive every derived file and rewrite the maintained blocks",
-		`update-format converts the KB at kb-root/ in the git worktree root to the
+		"convert the KB to the current format, re-derive every derived file, rewrite the maintained blocks and cite every bare node id",
+		`Running update-format is the user's decision: a session asks the user before
+running it, a refusal's `+index.UpdateFormatRemedy+` remedy included. While a
+conversion is pending every other write is refused (check: index; remedy:
+`+index.UpdateFormatRemedy+`).
+
+update-format converts the KB at kb-root/ in the git worktree root to the
 current format, run alone, so that restoring kb-root/ and any moved build
 record from HEAD reverses it. A KB in an older format is rewritten in the
-current one, the format stamp standing at the old version until the save's last
-write moves it, and the files the old format alone used are removed; once the
-KB loads, each build record standing at the repository root is moved into
-kb-root/.build/ with git mv before the save writes, its root path listed under
-"removed" and its new path under "written". Every run, whether or not the
-format changed, re-derives every derived file — every summary page the KB
-calls for, generated and never read as a source, removing a page it no longer
-calls for, and the claim-graph sheets, drawn through Graphviz dot — and
-rewrites the block kbase maintains in AGENTS.md, CONVENTIONS.md and README.md,
-between its vvv-kbase and ^^^-kbase marker lines, leaving the text outside it
-as it stands. An absent AGENTS.md or CONVENTIONS.md is written whole; README.md
-is written only by a build, never created here; a document without the one pair
-of marker lines is left untouched and listed under "unfenced". It writes only
-files whose bytes change. While a conversion is pending every other write is
-refused (check: index; remedy: `+index.UpdateFormatRemedy+`).
+current one, the format stamp standing at the old version until the save's
+last write moves it, and the files the old format alone used are removed;
+once the KB loads, each build record standing at the
+repository root is moved into kb-root/.build/ with git mv before the save
+writes, its root path listed under "removed" and its new path under "written".
+Every run, whether or not the format changed, re-derives every derived file —
+every summary page the KB calls for, generated and never read as a source,
+removing a page it no longer calls for, and the claim-graph sheets, drawn
+through Graphviz dot — and rewrites the block kbase maintains in AGENTS.md,
+CONVENTIONS.md and README.md, between its vvv-kbase and ^^^-kbase marker
+lines, leaving the text outside it as it stands. An absent AGENTS.md or
+CONVENTIONS.md is written whole; README.md is written only by a build, never
+created here; a document without the one pair of marker lines is left
+untouched and listed under "unfenced".
+
+Every run cites each bare node id — one
+`+bareIDHelp("")+` — in every
+document but the summary pages: the id, or the whole link, becomes the node's
+citation in the naming form, and a link into a heading whose anchor that
+moves is re-pointed. "bare-ids" lists each id cited ("path", "line", "id"),
+the conversion's included, [] where none. It writes only files whose bytes
+change.
 
 update-format refuses a kb-root/, or a build record the conversion moves, with
 uncommitted changes, naming each path (check: dirty-paths; remedy: commit or
@@ -456,7 +542,10 @@ discard them). A missing record file is refused (check: index; remedy:
 with its file and record, and update-format repairs none. A KB stamped newer
 than kbase is refused (check: kb-format; remedy: `+kbload.UpdateRemedy+`), and so
 is a conversion that cannot carry a file's content, naming the file and line
-(check: conversion). update-format waits up to 30 s for the KB write lock,
+(check: conversion). A bare id whose node's title has an unbalanced bracket,
+so that its citation would not read as one link, is refused at "id", naming
+the line; give the node a title whose brackets balance with edit-<kind>, then
+re-run. update-format waits up to 30 s for the KB write lock,
 then answers retry (check: lock; remedy: `+updateFormatRetryRemedy+`); while a
 build or a score run holds the operation lock it is refused at once (check:
 lock).
@@ -468,10 +557,9 @@ so in its result: "sheet" is not-drawn and "dot" names the cause.
 Where the format changed, "migration" carries the conversion; its "warnings"
 include each citation link and axiom heading it could not resolve without
 guessing. "ids" pairs each work's and axiom's 3.0.0 id ("from") with the id
-minted in its place ("to"); "bare-ids" lists each bare id turned into a
-citation ("path", "line", "id"); "no-edge" and "strengthen-by" list each dropped
+minted in its place ("to"); "no-edge" and "strengthen-by" list each dropped
 field's node "id" and "text", for the author to recast. A refused or failed run
-lists these four among migration's warnings instead.
+lists these and the conversion's bare ids among migration's warnings instead.
 
 With `+argmark.Flag("commit")+`, it commits the conversion as one commit of kb-root/ and the
 build records it moved, labelled kb-write: update-format <from> → <to> and
@@ -484,6 +572,6 @@ default: without it update-format commits nothing and "commits" is empty.`,
 			return runUpdateFormat(opts)
 		})
 	cmd.Flags().BoolVar(&commit, "commit", false, "commit the conversion as one commit")
-	return mcp.Notes(cmd, "",
-		"With no dot on PATH, stderr says so too.")
+	return mcp.NoteEveryCall(mcp.Notes(mcp.Brief(cmd, "commit", "commit the conversion"), updateFormatMCPNote,
+		"With no dot on PATH, stderr says so too."))
 }

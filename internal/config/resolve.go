@@ -28,7 +28,7 @@ const (
 	RoleScoring Role = "scoring"
 )
 
-// Roles is every role, in the order documents report them.
+// Roles is every role, in the order results report them.
 var Roles = []Role{RoleDecision, RoleText, RoleScoring}
 
 // key is the role as config.toml's [models] table spells it.
@@ -64,7 +64,7 @@ const (
 	BackEndProvider BackEnd = "provider"
 )
 
-// The rules that name an endpoint's provider, as a document reports them. A
+// The rules that name an endpoint's provider, as a result reports them. A
 // role's own reference names it — config — and --scoring-model names it where
 // the flag is given; a catalogue verb names a provider by its flag, or takes
 // the only provider.
@@ -115,13 +115,13 @@ type Inputs struct {
 // itself. KeySource names the store, KeyKindStore, where the store supplied
 // the key.
 type Endpoint struct {
-	Role     Role
-	Provider string
-	Model    string
-	Rule     string
-	Layer    string
-	BaseURL  string
-	Flavor   string
+	Role        Role
+	Provider    string
+	Model       string
+	Rule        string
+	Layer       string
+	BaseURL     string
+	DecisionAPI string
 	// Protocol is the chat wire protocol the provider speaks, its default
 	// filled in — `anthropic` where its table states none. The vocabulary is this
 	// package's, and the model package is handed the resolved fact rather than
@@ -173,7 +173,7 @@ func ResolveFlag(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 	}
 	if value == "" {
 		// The key is what a role left unnamed is refused by, and the three ways
-		// nothing supplied a value read differently: a role flag named the role
+		// nothing supplied a value read differently: probe's --role named the role
 		// and supplies no model, so the key is the whole of what is wrong;
 		// nothing named a selection, so the role is the caller's default and
 		// the key is the first remedy, the flag the other; else a flag could
@@ -217,7 +217,7 @@ func ResolveFlag(in Inputs, role Role, flagModel, flagKey string, defaulted bool
 		return Endpoint{}, result.Refusal{item}
 	}
 	ep := Endpoint{Role: role, Provider: ref.Provider, Model: ref.Model, Rule: rule,
-		Layer: entry.Layer, BaseURL: entry.BaseURL, APIKey: entry.APIKey, Flavor: entry.Flavor(),
+		Layer: entry.Layer, BaseURL: entry.BaseURL, APIKey: entry.APIKey, DecisionAPI: entry.EffectiveDecisionAPI(),
 		Protocol:      entry.Protocol(),
 		BaseURLSource: entry.Layer, ModelSource: in.Cfg.ModelLayer(role)}
 	switch keyKind(entry) {

@@ -84,7 +84,7 @@ func (r *Registry) Get(ep config.Endpoint) model.Client {
 		return client
 	}
 	client := r.newClient(model.Endpoint{Name: ep.Provider, BaseURL: ep.BaseURL, APIKey: ep.APIKey,
-		Protocol: protocol, Decisions: decisionsSurface(ep.Flavor), PromptCacheKey: r.promptCacheKey, IdleConns: r.idleConns,
+		Protocol: protocol, Decisions: decisionsSurface(ep.DecisionAPI), PromptCacheKey: r.promptCacheKey, IdleConns: r.idleConns,
 		Sampling: sampling})
 	r.opened[key] = client
 	return client
@@ -142,7 +142,7 @@ func KeyRefused(err error, provider string) error {
 // nothing the registry does not read.
 func entryEndpoint(entry config.Provider) config.Endpoint {
 	return config.Endpoint{Provider: entry.Name, BaseURL: entry.BaseURL, APIKey: entry.APIKey,
-		Protocol: entry.Protocol(), Flavor: entry.Flavor()}
+		Protocol: entry.Protocol(), DecisionAPI: entry.EffectiveDecisionAPI()}
 }
 
 // catalogueIDs fetches the provider's catalogue and returns the model ids in
@@ -159,11 +159,11 @@ func catalogueIDs(ctx context.Context, client model.Client) ([]string, error) {
 	return ids, nil
 }
 
-// decisionsSurface is whether the decision surface a configured flavour names is
-// the OpenAI Decisions shape. The flavour vocabulary is configuration's — it
+// decisionsSurface is whether the decision API a configured decisionApi names is
+// the OpenAI Decisions shape. The decisionApi vocabulary is configuration's — it
 // refuses a value it does not know at load — and the wire shapes are model's,
 // so the one mapping between the two lives here.
-func decisionsSurface(flavor string) bool { return flavor == config.FlavorDecisions }
+func decisionsSurface(decisionAPI string) bool { return decisionAPI == config.DecisionAPIDecisions }
 
 // chatProtocol is the chat wire protocol a configured `api` names, in the model
 // package's vocabulary. As decisionsSurface is for the decision surfaces: the

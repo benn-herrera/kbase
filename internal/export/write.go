@@ -178,7 +178,7 @@ func writeStarterPreamble(dir string) (string, error) {
 	if !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
-	if err := atomicfile.Write(p, preambleStarter, nil); err != nil {
+	if err := atomicfile.Write(p, preambleStarter); err != nil {
 		return "", err
 	}
 	return p, nil
@@ -244,7 +244,7 @@ func writeChanged(dir, rel string, data []byte) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
 	}
-	if err := atomicfile.Write(p, data, nil); err != nil {
+	if err := atomicfile.Write(p, data); err != nil {
 		return "", err
 	}
 	return p, nil

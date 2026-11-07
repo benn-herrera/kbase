@@ -58,9 +58,9 @@ func run(t *testing.T, root, op, values string) Result {
 }
 
 // TestIdempotence issues a sequence of ops twice each with the same values:
-// a re-issued add or removal is refused and an edit re-issued is unchanged,
-// each leaving kb-root byte-identical, an edit reporting the id the first
-// call did. A marker an add placed on a line ending in whitespace stands
+// a re-issued removal is refused and a re-issued add or edit is unchanged,
+// each leaving kb-root byte-identical, an add or an edit reporting the id the
+// first call did. A marker an add placed on a line ending in whitespace stands
 // once, ahead of that whitespace.
 func TestIdempotence(t *testing.T) {
 	root := seedKB(t)
@@ -74,21 +74,21 @@ func TestIdempotence(t *testing.T) {
 		again      string
 	}{
 		{AddClaim, "entry:\n- title: A New Result\n  rigor: 0.5\n  rationale: Derived from the seed in two steps.\n" +
-			"  document: leaf.md\n  line: 7\n  snippet: names a bound\n", "claim", result.Refused},
-		{AddEdge, edge(AddEdge, seedClaim, "{claim}", kb.RelationSupports, "context: the bound it rests on", "bearing: 0.5"), "", result.Refused},
+			"  document: leaf.md\n  line: 7\n  snippet: names a bound\n", "claim", result.Unchanged},
+		{AddEdge, edge(AddEdge, seedClaim, "{claim}", kb.RelationSupports, "context: the bound it rests on", "bearing: 0.5"), "", result.Unchanged},
 		{EditClaim, "entry:\n- id: {claim}\n  rigor: 0.75\n", "", result.Unchanged},
 		{EditClaim, "entry:\n- id: {claim}\n  rationale: Rewritten whole.\n", "", result.Unchanged},
-		{AddEdge, edge(AddEdge, "{claim}", seedClaim, kb.RelationReferences), "", result.Refused},
-		{AddWork, "entry:\n- label: Smith2020\n  title: Smith (2020)\n  rigor: \"*pending*\"\n  rationale: Cited for the bound.\n", "work", result.Refused},
-		{AddEdge, edge(AddEdge, "{work}", "{claim}", kb.RelationFounds), "", result.Refused},
+		{AddEdge, edge(AddEdge, "{claim}", seedClaim, kb.RelationReferences), "", result.Unchanged},
+		{AddWork, "entry:\n- label: Smith2020\n  title: Smith (2020)\n  rigor: \"*pending*\"\n  rationale: Cited for the bound.\n", "work", result.Unchanged},
+		{AddEdge, edge(AddEdge, "{work}", "{claim}", kb.RelationFounds), "", result.Unchanged},
 		{EditEdge, edge(EditEdge, "{work}", "{claim}", kb.RelationFounds, "bearing: 0.5"), "", result.Unchanged},
 		{AddAnalysis, "entry:\n- title: An Analysis\n  rigor: \"*pending*\"\n  rationale: Lifts the new result.\n" +
-			"  document: leaf.md\n  line: 11\n  snippet: bound is tight\n", "analysis", result.Refused},
-		{AddEdge, edge(AddEdge, "{analysis}", "{claim}", kb.RelationLifts, "bearing: 0.5"), "", result.Refused},
+			"  document: leaf.md\n  line: 11\n  snippet: bound is tight\n", "analysis", result.Unchanged},
+		{AddEdge, edge(AddEdge, "{analysis}", "{claim}", kb.RelationLifts, "bearing: 0.5"), "", result.Unchanged},
 		{EditEdge, edge(EditEdge, "{analysis}", "{claim}", kb.RelationLifts, "bearing: 0.25"), "", result.Unchanged},
-		{AddEdge, edge(AddEdge, "{analysis}", seedClaim, kb.RelationRefutes, "context: the bound is loose"), "", result.Refused},
-		{AddExperiment, "entry:\n- title: A Trial\n  status: run\n  rigor: 0.9\n  document: leaf.md\n  line: 3\n  snippet: Leaf\n", "experiment", result.Refused},
-		{AddEdge, edge(AddEdge, "{experiment}", "{claim}", kb.RelationLifts, "bearing: 0.5"), "", result.Refused},
+		{AddEdge, edge(AddEdge, "{analysis}", seedClaim, kb.RelationRefutes, "context: the bound is loose"), "", result.Unchanged},
+		{AddExperiment, "entry:\n- title: A Trial\n  status: run\n  rigor: 0.9\n  document: leaf.md\n  line: 3\n  snippet: Leaf\n", "experiment", result.Unchanged},
+		{AddEdge, edge(AddEdge, "{experiment}", "{claim}", kb.RelationLifts, "bearing: 0.5"), "", result.Unchanged},
 		{RemoveEdge, edge(RemoveEdge, "{analysis}", seedClaim, kb.RelationRefutes), "", result.Refused},
 	}
 	for i, s := range steps {
@@ -169,7 +169,7 @@ func TestValuesRefusalShape(t *testing.T) {
 		{"blank line names the line", SplitClaim,
 			"entry:\n- id: clm-abcdef\n  title: T\n  rationale: |\n    one\n\n    two\n  document: leaf.md\n  line: 5\n",
 			[]result.Item{{Key: "rationale", Entry: 1, Line: 6}}},
-		{"op named in the document", EditClaim, "op: edit-claim\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
+		{"op named in the batch", EditClaim, "op: edit-claim\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
 			[]result.Item{{Key: "op", Line: 1, Column: 1, Allowed: top}}},
 		{"empty top-level key", EditClaim, "\"\": 1\nentry:\n- id: clm-abcdef\n  rigor: 0.5\n",
 			[]result.Item{{Key: `""`, Line: 1, Column: 1, Allowed: top}}},

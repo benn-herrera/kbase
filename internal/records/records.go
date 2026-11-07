@@ -90,13 +90,13 @@ func Write[C any](stateDir string, recs []Record, censuses []C) error {
 	if err != nil {
 		return err
 	}
-	if err := atomicfile.Write(filepath.Join(dir, DocgraphFile), data, nil); err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, DocgraphFile), data); err != nil {
 		return err
 	}
 	if data, err = encodeJSONL(censuses); err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(dir, PrepassFile), data, nil)
+	return atomicfile.Write(filepath.Join(dir, PrepassFile), data)
 }
 
 // encodeJSONL is one JSON object per line, HTML characters as written.

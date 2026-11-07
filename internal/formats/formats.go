@@ -2,7 +2,7 @@
 // to the current one in memory: the files as bytes in, the next form's files
 // as bytes out, plus the paths the conversion made obsolete. It touches no file.
 // Each format and each conversion step is a package beneath it — the live
-// format, format400, among them — and the tree imports nothing of kbase outside
+// format, format40, among them — and the tree imports nothing of kbase outside
 // itself, so maintaining a live package never changes what an old KB converts
 // to.
 package formats
@@ -15,27 +15,31 @@ import (
 	"strings"
 
 	"kbase/internal/formats/common"
-	"kbase/internal/formats/format100"
-	"kbase/internal/formats/format200"
-	"kbase/internal/formats/format300"
-	"kbase/internal/formats/format400"
-	"kbase/internal/formats/from100to200"
-	"kbase/internal/formats/from200to300"
-	"kbase/internal/formats/from300to400"
+	"kbase/internal/formats/format10"
+	"kbase/internal/formats/format20"
+	"kbase/internal/formats/format30"
+	"kbase/internal/formats/format40"
+	"kbase/internal/formats/from10to20"
+	"kbase/internal/formats/from20to30"
+	"kbase/internal/formats/from30to40"
 )
 
 type (
 	Files           = common.Files
 	Warning         = common.Warning
-	ConversionError = from100to200.ConversionError
+	ConversionError = from10to20.ConversionError
 	// AnnotationError and MalformedError are the 2.0.x load's refusals, which
 	// a conversion from 2.0.x returns unchanged.
-	AnnotationError = format200.AnnotationError
-	MalformedError  = format200.MalformedError
+	AnnotationError = format20.AnnotationError
+	MalformedError  = format20.MalformedError
 	// GraphLoadError is the 3.0.0 load's refusal, which a conversion from
 	// 3.0.0 returns unchanged.
-	GraphLoadError = format300.GraphLoadError
+	GraphLoadError = format30.GraphLoadError
 )
+
+// ExcludeDirs are the directories an older format's documents never lie in,
+// the index among them; a conversion reads no document under one.
+var ExcludeDirs = format20.ExcludeDirs
 
 // The lists a conversion's warnings are grouped under (Warning.List).
 const (
@@ -56,9 +60,9 @@ type converter struct {
 }
 
 var converters = []converter{
-	{From: format100.Version100, To: format200.Version200, Convert: unwarned(from100to200.Convert100To200)},
-	{From: format200.Version200, To: format300.Version300, Convert: from200to300.Convert200To300},
-	{From: format300.Version300, To: format400.Version400, Convert: from300to400.Convert300To400},
+	{From: format10.Version, To: format20.Version, Convert: unwarned(from10to20.Convert)},
+	{From: format20.Version, To: format30.Version, Convert: from20to30.Convert},
+	{From: format30.Version, To: format40.Version, Convert: from30to40.Convert},
 }
 
 // unwarned is a step that reports no warnings.

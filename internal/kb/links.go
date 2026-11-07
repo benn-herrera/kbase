@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 // SkipDirs are never crawled, matched as one path segment at any depth.
@@ -25,27 +25,27 @@ var skipSegmentRuns = [][]string{{"tests", "fixtures"}, {".claude", "worktrees"}
 // where a build stamps it.
 const documentTemplateSuffix = ".tmpl.md"
 
-// The link grammar is format400's: every reader of a document's links, the
+// The link grammar is format40's: every reader of a document's links, the
 // citations among them, reads through it.
 var (
 	// LinkRE is an inline link or image, [text](destination "title"); group 1
 	// is the destination and group 2 the title with its delimiters.
-	LinkRE = format400.LinkRE
+	LinkRE = format40.LinkRE
 	// RefDefRE is a link reference definition; group 1 is the destination.
-	RefDefRE = format400.RefDefRE
+	RefDefRE = format40.RefDefRE
 	// InlineMathRE is the writer's inline maths span.
-	InlineMathRE = format400.InlineMathRE
+	InlineMathRE = format40.InlineMathRE
 )
 
 // Links is every inline link of line, in order: its spans, text, destination
 // and title, and the node id the title cites where it is a citation.
-func Links(line string) []format400.Link { return format400.Links(line) }
+func Links(line string) []format40.Link { return format40.Links(line) }
 
 // TextLink is one inline link in a document's text: its 0-based line and its
 // link, whose offsets hold on the raw line.
 type TextLink struct {
 	Line int
-	format400.Link
+	format40.Link
 }
 
 // TextCitation is a TextLink whose title is a node id.
@@ -72,7 +72,7 @@ func TextLinkDefinitions(text string) []TextLink {
 	var out []TextLink
 	for n, view := range SplitLines(StripCodeSplitLines(text)) {
 		if m := RefDefRE.FindStringSubmatchIndex(view); m != nil {
-			out = append(out, TextLink{Line: n, Link: format400.Link{Start: m[0], End: m[1], DestStart: m[2], DestEnd: m[3], Destination: view[m[2]:m[3]]}})
+			out = append(out, TextLink{Line: n, Link: format40.Link{Start: m[0], End: m[1], DestStart: m[2], DestEnd: m[3], Destination: view[m[2]:m[3]]}})
 		}
 	}
 	return out
@@ -89,12 +89,32 @@ func TextCitations(text string) []TextCitation {
 
 // Citation is the citation of node id whose link text is text and whose
 // destination is destination.
-func Citation(text, destination, id string) string { return format400.Citation(text, destination, id) }
+func Citation(text, destination, id string) string { return format40.Citation(text, destination, id) }
 
-// BareIDs is every node id in line outside a statement marker, a link's
-// destination and title, and a link reference definition; code is the
-// caller's to blank first.
-func BareIDs(line string) []format400.IDToken { return format400.BareIDs(line) }
+// BareIDs is every node id standing bare in line: in prose outside every link,
+// a statement marker and a link reference definition, or as a link's whole
+// text, that token spanning the link. Code is the caller's to blank first.
+func BareIDs(line string) []format40.IDToken { return format40.BareIDs(line) }
+
+// TextBareID is one bare id in a document's text: its 0-based line and its
+// token, whose offsets hold on the raw line.
+type TextBareID struct {
+	Line int
+	format40.IDToken
+}
+
+// TextBareIDs is every bare id in text outside code, in order. Code is
+// blanked byte for byte, so each token's offsets are its offsets in the raw
+// line.
+func TextBareIDs(text string) []TextBareID {
+	var out []TextBareID
+	for n, view := range SplitLines(StripCodeSplitLines(text)) {
+		for _, t := range BareIDs(view) {
+			out = append(out, TextBareID{Line: n, IDToken: t})
+		}
+	}
+	return out
+}
 
 var (
 	fenceLineRE = regexp.MustCompile("^[ \t]*(`{3,}|~{3,})[ \t]*(.*?)[ \t]*$")
@@ -256,7 +276,7 @@ func StripCodeSplitLines(text string) string {
 	return blankInlineSpans(StripCodeFences(text))
 }
 
-func blankInlineSpans(text string) string { return format400.BlankInlineCode(text) }
+func blankInlineSpans(text string) string { return format40.BlankInlineCode(text) }
 
 var (
 	// destinationRE is a link destination wherever a link text closes, so a

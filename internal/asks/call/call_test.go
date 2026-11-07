@@ -62,10 +62,10 @@ func paragraphItems(names ...string) []asks.MultichoiceItem {
 // letters is c's Launch for the decision model m-decision, on a queue of two.
 func letters(c *Caller) asks.Launch { return c.Launch(model.NewQueue(2), "m-decision") }
 
-// askGroup asks items as the one paragraph group of a batch launched through
+// askGroup asks items as the one paragraph group of a wave launched through
 // launch, and returns its record.
 func askGroup(launch asks.Launch, items []asks.MultichoiceItem) (asks.GroupRecord, error) {
-	b := asks.NewBatch(context.Background(), launch)
+	b := asks.NewWave(context.Background(), launch)
 	if err := b.AskGroup(asks.Paragraph, "v/leaf.md", items); err != nil {
 		_, err = b.Wait()
 		return asks.GroupRecord{}, err
@@ -235,8 +235,8 @@ func TestAReaskReachesTheModel(t *testing.T) {
 
 // TestARefusalTakesTheReaskThenTheDefault: the Decisions surface's refusal
 // answer says the model declined and carries no value at all, so the seam
-// reads it as unreadable — the identical question asked once more, then the
-// item defaulted when that is refused too.
+// re-asks the same question once with the decision-correction text, then
+// defaults the item when that is refused too.
 func TestARefusalTakesTheReaskThenTheDefault(t *testing.T) {
 	refusals := &decisions{answers: []model.DecisionAnswer{
 		{Key: "S1", Type: "refusal"},
@@ -249,13 +249,88 @@ func TestARefusalTakesTheReaskThenTheDefault(t *testing.T) {
 	if len(refusals.calls) != 2 {
 		t.Fatalf("%d calls, want the refusal re-asked once", len(refusals.calls))
 	}
+	correction, err := asks.DecisionCorrection()
+	if err != nil {
+		t.Fatal(err)
+	}
 	first, again := refusals.calls[0].Questions[0], refusals.calls[1].Questions[0]
 	if refusals.calls[1].State != refusals.calls[0].State ||
 		again.Key != first.Key || again.Type != first.Type || again.Instructions != first.Instructions {
-		t.Error("the re-ask is not the identical question")
+		t.Error("the re-ask is not the same question")
+	}
+	if refusals.calls[0].Correction != "" || refusals.calls[1].Correction != correction {
+		t.Errorf("corrections %q then %q, want none then the decision-correction text", refusals.calls[0].Correction, refusals.calls[1].Correction)
 	}
 	if rec.Items[0].Outcome != asks.Defaulted {
 		t.Errorf("S1 = %s, want the refused answer defaulted", rec.Items[0].Outcome)
+	}
+}
+
+// TestACachedRefusalResumesIntoTheCorrectedReask: a resume that finds the first
+// ask's refusal in the answer cache asks only the corrected re-ask, and that
+// answer is cached under a key of its own, so a later resume asks nothing.
+func TestACachedRefusalResumesIntoTheCorrectedReask(t *testing.T) {
+	scratch := t.TempDir()
+	// The first run's re-ask finds no answer: the run stops with the refusal
+	// cached and the re-ask unanswered.
+	stopped := &decisions{answers: []model.DecisionAnswer{{Key: "S1", Type: model.DecisionRefusal}}}
+	if _, err := askGroup(letters(newCaller(stopped, scratch)), paragraphItems("S1")); err == nil {
+		t.Fatal("the run whose re-ask found no answer completed")
+	}
+	correction, err := asks.DecisionCorrection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := &decisions{answers: []model.DecisionAnswer{noulAnswer("S1", 0.96)}}
+	rec, err := askGroup(letters(newCaller(resumed, scratch)), paragraphItems("S1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumed.calls) != 1 || resumed.calls[0].Correction != correction {
+		t.Fatalf("the resume made %d calls; want the one re-ask, carrying the decision-correction text", len(resumed.calls))
+	}
+	if *rec.Items[0].Choice != "A" {
+		t.Errorf("S1 = %s, want the re-ask's answer", *rec.Items[0].Choice)
+	}
+	cached, _ := filepath.Glob(filepath.Join(trailAnswers(scratch), "*.json"))
+	if len(cached) != 2 {
+		t.Errorf("cached answers = %q, want the refusal and the corrected re-ask, each under its own key", cached)
+	}
+	again := &decisions{}
+	if rec, err := askGroup(letters(newCaller(again, scratch)), paragraphItems("S1")); err != nil || *rec.Items[0].Choice != "A" || len(again.calls) != 0 {
+		t.Errorf("a second resume made %d calls (%v); want both answers read from the cache", len(again.calls), err)
+	}
+}
+
+// TestAReaskGoesOutAtOnce: the re-ask of a refused answer is a new call, not a
+// re-issue inside the retry, so it waits no pause: on a queue whose every
+// pause is an hour, inside a 10 s deadline, both asks reach the provider.
+func TestAReaskGoesOutAtOnce(t *testing.T) {
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		asked.Add(1)
+		_, _ = io.WriteString(w, `{"model":"m-decision","answers":{"S1":{"type":"refusal"}},"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := model.NewOpenAIClient(model.Endpoint{BaseURL: srv.URL})
+	t.Cleanup(func() { _ = client.Close() })
+	scratch := t.TempDir()
+	q := model.NewQueue(1)
+	q.Retry.Base, q.Retry.Draw = time.Hour, func(n int64) int64 { return n - 1 }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	b := asks.NewWave(ctx, New(client, callerProvider, func() string { return trailDir(scratch) }, log.Discard()).Launch(q, "m-decision"))
+	if err := b.AskGroup(asks.Paragraph, "v/leaf.md", paragraphItems("S1")); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := b.Wait()
+	if err != nil {
+		t.Fatalf("the asks = %v, want the refusal re-asked and defaulted", err)
+	}
+	if n := asked.Load(); n != 2 || recs[0].Items[0].Outcome != asks.Defaulted {
+		t.Errorf("%d asks reached the provider, outcome %s; want the ask and its re-ask, then the default", n, recs[0].Items[0].Outcome)
 	}
 }
 
@@ -275,14 +350,15 @@ func TestCallerNamesTheCallThatNeverCompleted(t *testing.T) {
 // TestARefusedKeyNamesTheRemedy: a provider answering 401 refused the
 // call's key, so the call that never completed carries the command that
 // stores a key for the entry the caller dials — over the decision surface and
-// the overview alike; a 500 is no refused key and carries none.
+// the overview alike; a 400 is no refused key and carries none. Both statuses
+// end the call on its first attempt, so no re-issue pause is waited out.
 func TestARefusedKeyNamesTheRemedy(t *testing.T) {
 	for _, tc := range []struct {
 		code   int
 		remedy string
 	}{
 		{http.StatusUnauthorized, config.AuthAddRemedy(callerProvider)},
-		{http.StatusInternalServerError, ""},
+		{http.StatusBadRequest, ""},
 	} {
 		t.Run(http.StatusText(tc.code), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -294,7 +370,6 @@ func TestARefusedKeyNamesTheRemedy(t *testing.T) {
 			t.Cleanup(func() { _ = client.Close() })
 			scratch := t.TempDir()
 			c := New(client, callerProvider, func() string { return trailDir(scratch) }, log.Discard())
-			c.overviewBackoff = nil
 
 			_, decided := askGroup(letters(c), paragraphItems("S1"))
 			var passaged error
@@ -493,7 +568,7 @@ func TestAnOverviewCutOffBeforeAnyTextIsNotAskedAgain(t *testing.T) {
 }
 
 // TestDecideReturnsItsContextsEnd: a call whose ctx ends while it is in
-// flight — its batch stopped by a sibling — returns that ending, never an
+// flight — its wave stopped by a sibling — returns that ending, never an
 // incomplete call that would read as its own inference failure.
 func TestDecideReturnsItsContextsEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -692,6 +767,18 @@ func TestDecisionDigestIsStable(t *testing.T) {
 	want := asks.Digest("m", "k", "ty", "ins", "T", "a", "one", "b", "two", "st", "1")
 	if got := decisionDigest("m", q); got != want {
 		t.Fatalf("decisionDigest = %s, want %s", got, want)
+	}
+}
+
+// TestACorrectedReaskHasAKeyOfItsOwn: a refusal's corrected re-ask is cached
+// apart from the identical re-ask of the same attempt, and an uncorrected ask's
+// key is the one TestDecisionDigestIsStable pins.
+func TestACorrectedReaskHasAKeyOfItsOwn(t *testing.T) {
+	plain := question("S1", 2)
+	corrected := plain
+	corrected.Correction = "\n\nasked again"
+	if decisionDigest("m", corrected) == decisionDigest("m", plain) {
+		t.Error("a corrected re-ask shares its key with the identical re-ask")
 	}
 }
 

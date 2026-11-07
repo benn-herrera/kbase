@@ -13,11 +13,11 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// NewReplayBatch is NewBatch, save that a call that never completes leaves
-// its item failed and the batch launching the rest; any other error stops
+// NewReplayWave is NewWave, save that a call that never completes leaves
+// its item failed and the wave launching the rest; any other error stops
 // it.
-func NewReplayBatch(ctx context.Context, launch Launch) *Batch {
-	b := NewBatch(ctx, launch)
+func NewReplayWave(ctx context.Context, launch Launch) *Wave {
+	b := NewWave(ctx, launch)
 	b.carryOn = true
 	return b
 }

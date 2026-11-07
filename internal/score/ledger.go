@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,13 +53,13 @@ const (
 	capturesFile = "captures.jsonl"
 	itemsFile    = "items.jsonl"
 	pidFile      = "pid"
-	// resultsDir holds an answered item's result file, from its answer until
+	// resultsDir holds an answered item's answer file, from its answer until
 	// the walk's end folds it: one file per item, named by its place in the
 	// walk and resultSuffix.
 	resultsDir   = "results"
 	resultSuffix = ".json"
-	// ResultFile is the name of the run's result document, written beside its
-	// ledger so a waiter reads the same document the run reported.
+	// ResultFile is the name of the run's stored result, written beside its
+	// ledger so a waiter reads the same stored result the run reported.
 	ResultFile   = "result.yaml"
 	ledgerFormat = 1
 )
@@ -204,10 +205,6 @@ type Ledger struct {
 	// re-derivation rewrites the file, and the last status per item does not say
 	// where a line stands.
 	order []attempt
-	// moved is what this resume's re-pricing landed differently from what its
-	// lines recorded: the count says whether the KB holds a write this
-	// invocation must publish.
-	moved []rePricedLine
 	// folded is the items this resume's fold landed, in the order they landed:
 	// values the KB took in this invocation, which it must publish.
 	folded []query.Item
@@ -241,7 +238,7 @@ func Create(dir string, h RunHeader) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := atomicfile.Write(filepath.Join(l.dir, runFile), b, nil); err != nil {
+	if err := atomicfile.Write(filepath.Join(l.dir, runFile), b); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -259,7 +256,7 @@ func Create(dir string, h RunHeader) (*Ledger, error) {
 // unrepriced: it is a person's now. A line a killed process left torn did not
 // land: it is dropped, and the item it names is asked again; a capture it left
 // torn is dropped too, so this run's first capture is not appended behind it.
-// Before it re-prices, it folds the result files a stopped invocation left, so
+// Before it re-prices, it folds the answer files a stopped invocation left, so
 // a kill forfeits only the calls that were in flight.
 func Resume(dir string, h RunHeader, w Write, skip Skip) (*Ledger, error) {
 	l := &Ledger{dir: filepath.Join(RunsDir(dir), h.Run), lines: map[string]Entry{}}
@@ -315,10 +312,6 @@ func (l *Ledger) refusalFor(have, want RunHeader) error {
 // record it.
 func (l *Ledger) Dir() string { return l.dir }
 
-// Repriced is how many landed values this resume re-derived differently and
-// wrote back to the KB, zero where the run's values all stood.
-func (l *Ledger) Repriced() int { return len(l.moved) }
-
 // Status is the last status the ledger records for it, or "" where it records
 // none: an item the run has not attempted.
 func (l *Ledger) Status(it query.Item) string { return l.lines[itemKey(it)].Status }
@@ -355,13 +348,14 @@ func (l *Ledger) record(lines []attempt) error {
 }
 
 // captureOf is the capture of the call one attempt at it made: the closed text
-// whole, the prompt sent and the reply returned, beside e's outcome. Only an
-// attempt that reached the Ask seam has one. A failed attempt's reason is the
+// whole, the correction a re-ask carried, the prompt sent and the reply
+// returned, beside e's outcome. Only an attempt that reached the Ask seam has
+// one. A failed attempt's reason is the
 // capture's error, where the ledger line carries it as its reply and keeps no
 // text of the model's.
 func (l *Ledger) captureOf(it query.Item, e Entry, c call) captureRecord {
 	rec := captureRecord{Run: l.run, Pass: passOf(it), identity: identityOf(it), Class: c.class.name,
-		Text: c.closed.text, Lines: capturedLines(c.closed.lines), Prompt: c.prompt, PromptSHA256: e.PromptSHA256,
+		Text: c.closed.text, Lines: capturedLines(c.closed.lines), Correction: recordOf(c.correction), Prompt: c.prompt, PromptSHA256: e.PromptSHA256,
 		Reply: c.reply, Model: e.Model, Backend: l.backEnd, Started: e.Started, Ended: e.Ended}
 	if e.Status != StatusDone {
 		rec.Error = e.Reply
@@ -369,19 +363,29 @@ func (l *Ledger) captureOf(it query.Item, e Entry, c call) captureRecord {
 	return rec
 }
 
-// resultRecord is one answered item's result file: the line the walk's end
+// answerFile is one answered item's answer file: the line the walk's end
 // records for it — priced, or failed with its reason — and the capture of the
-// call it made. It is everything the walk's end needs of the item, so a result
-// a kill left folds on the next resume without asking again.
-type resultRecord struct {
+// call it made, and Prior, the refused call a corrective re-ask followed, in
+// the same shape. It is everything the walk's end needs of the item, so a
+// result a kill left folds on the next resume without asking again.
+type answerFile struct {
 	Line    attempt       `json:"line"`
 	Capture captureRecord `json:"capture"`
+	Prior   *answerFile   `json:"prior,omitempty"`
 }
 
-// writeResult writes the result file of the item at place i of the walk. It is
+// inCallOrder is f and every call ahead of it, oldest first; none for nil.
+func (f *answerFile) inCallOrder() []*answerFile {
+	if f == nil {
+		return nil
+	}
+	return append(f.Prior.inCallOrder(), f)
+}
+
+// writeAnswerFile writes the answer file of the item at place i of the walk. It is
 // the one file an answered item writes before the walk ends, and it is that
 // item's alone.
-func (l *Ledger) writeResult(i int, r resultRecord) error {
+func (l *Ledger) writeAnswerFile(i int, r answerFile) error {
 	dir := filepath.Join(l.dir, resultsDir)
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return err
@@ -390,13 +394,13 @@ func (l *Ledger) writeResult(i int, r resultRecord) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(dir, strconv.Itoa(i)+resultSuffix), b, nil)
+	return atomicfile.Write(filepath.Join(dir, strconv.Itoa(i)+resultSuffix), b)
 }
 
-// readResults is the result files standing in the run directory runDir, in the
+// readAnswerFiles is the answer files standing in the run directory runDir, in the
 // order of the walk that wrote them; none standing is none. A name that is no
 // place in a walk — a temp file a killed write left — is no result.
-func readResults(runDir string) ([]resultRecord, error) {
+func readAnswerFiles(runDir string) ([]answerFile, error) {
 	dir := filepath.Join(runDir, resultsDir)
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -407,7 +411,7 @@ func readResults(runDir string) ([]resultRecord, error) {
 	}
 	type placed struct {
 		at int
-		r  resultRecord
+		r  answerFile
 	}
 	var found []placed
 	for _, e := range entries {
@@ -422,36 +426,39 @@ func readResults(runDir string) ([]resultRecord, error) {
 		if err != nil {
 			return nil, err
 		}
-		var r resultRecord
+		var r answerFile
 		if err := json.Unmarshal(b, &r); err != nil {
-			return nil, fmt.Errorf("read the result %s: %w", filepath.Join(dir, e.Name()), err)
+			return nil, fmt.Errorf("read the answer file %s: %w", filepath.Join(dir, e.Name()), err)
 		}
 		found = append(found, placed{at, r})
 	}
 	slices.SortFunc(found, func(a, b placed) int { return a.at - b.at })
-	out := make([]resultRecord, len(found))
+	out := make([]answerFile, len(found))
 	for i, p := range found {
 		out[i] = p.r
 	}
 	return out, nil
 }
 
-// resultCell is one item's place in an ask batch: the line the batch's end
-// records for it and the capture of the call it made, each nil where it has
-// none. A line recording done carries a priced value the end lands first.
+// resultCell is one item's place in a wave of calls: file, the calls the item
+// made, nil where it made none, and line, the line the wave's end records for
+// it — file's own where it made calls, one of its own where it made none, and
+// nil where it records none. A line recording done carries a priced value the
+// end lands first; the line of a call ahead of file's last is failed and lands
+// nothing.
 type resultCell struct {
-	item    query.Item
-	line    *attempt
-	capture *captureRecord
+	item query.Item
+	file *answerFile
+	line *attempt
 }
 
 // fail records that the cell's value did not land: the line records err as its
 // reason and no charges or value — they were a judgement the KB did not take —
-// and the capture carries err as the attempt's error.
+// and the last call's capture carries err as the attempt's error.
 func (c resultCell) fail(err error) {
 	c.line.fail(err)
-	if c.capture != nil {
-		c.capture.Error = err.Error()
+	if c.file != nil {
+		c.file.Capture.Error = err.Error()
 	}
 }
 
@@ -466,10 +473,10 @@ func (a *attempt) fail(err error) {
 	}
 }
 
-// flush ends an ask batch: the values its cells priced land through w in one
+// flush ends a wave of calls: the values its cells priced land through w in one
 // landing, then every capture is appended in one write and every line in
-// another, each in the cells' order, and then the run's result files are
-// removed. A value w does not land fails its cell. It returns the items whose
+// another, each in the cells' order and a cell's calls in call order, and then
+// the run's answer files are removed. A value w does not land fails its cell. It returns the items whose
 // value landed, in the cells' order. It takes no context: a walk the cancel
 // stopped still records everything it answered.
 func (l *Ledger) flush(cells []resultCell, w Write) ([]query.Item, error) {
@@ -499,8 +506,13 @@ func (l *Ledger) flush(cells []resultCell, w Write) ([]query.Item, error) {
 	var captures []any
 	var lines []attempt
 	for _, c := range cells {
-		if c.capture != nil {
-			captures = append(captures, c.capture)
+		// An earlier call's line is recorded only beside the cell's own: a
+		// cell that records no line records none of its calls'.
+		for _, p := range c.file.inCallOrder() {
+			captures = append(captures, &p.Capture)
+			if c.line != nil && p != c.file {
+				lines = append(lines, p.Line)
+			}
 		}
 		if c.line != nil {
 			lines = append(lines, *c.line)
@@ -515,7 +527,7 @@ func (l *Ledger) flush(cells []resultCell, w Write) ([]query.Item, error) {
 	return landed, os.RemoveAll(filepath.Join(l.dir, resultsDir))
 }
 
-// fold flushes the result files a stopped invocation left, in the order of the
+// fold flushes the answer files a stopped invocation left, in the order of the
 // walk that wrote them, as that walk's end would have: each value lands, its
 // capture and its line are appended, and the files are removed. A result whose
 // attempt the ledger already records — the same item, bounds and prompt digest,
@@ -524,7 +536,7 @@ func (l *Ledger) flush(cells []resultCell, w Write) ([]query.Item, error) {
 // standing since the kill; its capture is still appended, the call having been
 // made, and the walk then records the item skipped.
 func (l *Ledger) fold(w Write, skip Skip) error {
-	results, err := readResults(l.dir)
+	results, err := readAnswerFiles(l.dir)
 	if err != nil {
 		return err
 	}
@@ -535,7 +547,7 @@ func (l *Ledger) fold(w Write, skip Skip) error {
 		if ok && have.Started == r.Line.Started && have.Ended == r.Line.Ended && have.PromptSHA256 == r.Line.PromptSHA256 {
 			continue
 		}
-		c := resultCell{item: r.Line.asItem(), capture: &r.Capture}
+		c := resultCell{item: r.Line.asItem(), file: r}
 		if skip == nil || !skip(c.item) {
 			c.line = &r.Line
 		}
@@ -554,17 +566,47 @@ type captureRecord struct {
 	Run  string `json:"run"`
 	Pass string `json:"pass"`
 	identity
-	Class        string         `json:"class"`
-	Text         string         `json:"text"`
-	Lines        []capturedLine `json:"lines"`
-	Prompt       string         `json:"prompt"`
-	PromptSHA256 string         `json:"prompt_sha256"`
-	Reply        string         `json:"reply"`
-	Error        string         `json:"error,omitempty"`
-	Model        string         `json:"model"`
-	Backend      string         `json:"backend"`
-	Started      string         `json:"started"`
-	Ended        string         `json:"ended"`
+	Class        string            `json:"class"`
+	Text         string            `json:"text"`
+	Lines        []capturedLine    `json:"lines"`
+	Correction   *correctionRecord `json:"correction,omitempty"`
+	Prompt       string            `json:"prompt"`
+	PromptSHA256 string            `json:"prompt_sha256"`
+	Reply        string            `json:"reply"`
+	Error        string            `json:"error,omitempty"`
+	Model        string            `json:"model"`
+	Backend      string            `json:"backend"`
+	Started      string            `json:"started"`
+	Ended        string            `json:"ended"`
+}
+
+// correctionRecord is what a re-ask's correction was rendered from, as its
+// capture records it: the refusal's case, the values its fragment names by
+// bare slot name, {} where it names none, and the reply lines it quotes, []
+// where it quotes none.
+type correctionRecord struct {
+	Case   string            `json:"case"`
+	Values map[string]string `json:"values"`
+	Quoted []string          `json:"quoted"`
+}
+
+// correction is the correction the record was rendered from, nil for a first
+// ask.
+func (r *correctionRecord) correction() *asks.Correction {
+	if r == nil {
+		return nil
+	}
+	return &asks.Correction{Case: r.Case, Values: r.Values, Lines: r.Quoted}
+}
+
+// recordOf is c as a capture records it, nil for a first ask.
+func recordOf(c *asks.Correction) *correctionRecord {
+	if c == nil {
+		return nil
+	}
+	values := map[string]string{}
+	maps.Copy(values, c.Values)
+	return &correctionRecord{Case: c.Case, Values: values, Quoted: append([]string{}, c.Lines...)}
 }
 
 // capturedLine is one line of a closed text as a capture records it: the fields
@@ -657,14 +699,14 @@ func (l *Ledger) WriteItems(items []query.Item) error {
 		}
 		b.Write(append(a, '\n'))
 	}
-	return atomicfile.Write(filepath.Join(l.dir, itemsFile), b.Bytes(), nil)
+	return atomicfile.Write(filepath.Join(l.dir, itemsFile), b.Bytes())
 }
 
 // WritePID records the process walking this run, so a waiter can find the run
 // by the pid it was given. A resumed run overwrites the record with its own
 // process: the pid names the invocation in flight, not the run's first.
 func (l *Ledger) WritePID(pid int) error {
-	return atomicfile.Write(filepath.Join(l.dir, pidFile), []byte(strconv.Itoa(pid)), nil)
+	return atomicfile.Write(filepath.Join(l.dir, pidFile), []byte(strconv.Itoa(pid)))
 }
 
 // ClearResult removes a result an earlier invocation left: a run in progress is
@@ -677,15 +719,15 @@ func (l *Ledger) ClearResult() error {
 	return err
 }
 
-// WriteResultDocument writes the run's result document, its outcome and fields
-// as the verb emits them, to the run directory dir so a waiter reads the same
-// document the run reported.
-func WriteResultDocument(dir, outcome string, fields []result.Field) error {
+// WriteStoredResult writes the run's stored result, its outcome and fields as
+// the verb emits them, to the run directory dir so a waiter reads the same
+// stored result the run reported.
+func WriteStoredResult(dir, outcome string, fields []result.Field) error {
 	var b bytes.Buffer
 	if err := result.Emit(&b, outcome, fields...); err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(dir, ResultFile), b.Bytes(), nil)
+	return atomicfile.Write(filepath.Join(dir, ResultFile), b.Bytes())
 }
 
 // RunByPID is the run in the state directory dir whose process is pid, or
@@ -759,18 +801,18 @@ func runKind(name string) string {
 // ledger last records for each, the items whose value landed, and the items
 // that failed with the reason their line recorded.
 type RunStatus struct {
-	Run      string
-	Pass     string
-	Counts   Counts
-	Scored   []string
-	Failures []result.Item
+	Run         string
+	Pass        string
+	Counts      Counts
+	Scored      []string
+	FailedItems []result.Item
 }
 
 // ReadRun reads the run in the state directory dir without opening it for
-// appending: its header, its item list, its ledger lines and the result files
+// appending: its header, its item list, its ledger lines and the answer files
 // not yet folded into the ledger, which count after the lines and so override
 // the ledger's last status for their items. A live run's flush appends the
-// ledger and then removes the result files, so the result files are read before
+// ledger and then removes the answer files, so the answer files are read before
 // the ledger: a flush between the two reads leaves a result in both, never in
 // neither. The item list is the set the run enumerated; a line the list does not carry is an item a
 // resume asked outside it, and is counted too, the ledger being the record.
@@ -784,7 +826,7 @@ func ReadRun(dir, run string) (RunStatus, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return RunStatus{}, err
 	}
-	results, err := readResults(runDir)
+	results, err := readAnswerFiles(runDir)
 	if err != nil {
 		return RunStatus{}, err
 	}
@@ -813,7 +855,7 @@ func ReadRun(dir, run string) (RunStatus, error) {
 			st.Scored = append(st.Scored, a.item())
 		case StatusFailed:
 			st.Counts.Failed++
-			st.Failures = append(st.Failures, failureItem(a.item(), a.entry()))
+			st.FailedItems = append(st.FailedItems, failureItem(a.item(), a.entry()))
 		case StatusSkipped:
 			st.Counts.Skipped++
 		default:
@@ -993,7 +1035,7 @@ type class struct {
 	// context for a bearing call, a node's own title and statement for either
 	// rigor call.
 	edge  bool
-	ask   func(subject string) (string, error)
+	ask   func(subject string, c *asks.Correction) (string, error)
 	table kb.FaultTable
 }
 
@@ -1076,11 +1118,13 @@ func passFactsOf(pass string) (passFacts, error) {
 // an empty subject and concatenated in the run's fixed order: the statement ask
 // and then the method ask for a rigor run, the one bearing ask alone for a
 // bearing run, and the statement, the method and then the bearing ask for an
-// all-pass run. Rendering substitutes and never inspects the text, and no
-// template carries an element keyed on the item's length or shape, so an empty
-// subject covers every fixed byte of the instructions and nothing that varies
-// with one. One field covers the set, because separate digests would agree or
-// differ together.
+// all-pass run. Each class's part is its whole instruction set
+// (asks.ScoreInstructionSet): the first ask and every re-ask its call can
+// close on. Rendering substitutes and never inspects the text, and no template
+// carries an element keyed on the item's length or shape, so an empty subject
+// covers every fixed byte of the instructions and nothing that varies with one.
+// One field covers the set, because separate digests would agree or differ
+// together.
 func askDigest(pass string) (string, error) {
 	facts, err := passFactsOf(pass)
 	if err != nil {
@@ -1088,11 +1132,11 @@ func askDigest(pass string) (string, error) {
 	}
 	var b strings.Builder
 	for _, cl := range facts.classes {
-		prompt, err := cl.ask("")
+		set, err := asks.ScoreInstructionSet(cl.ask)
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(prompt)
+		b.WriteString(set)
 	}
 	return digestOf(b.String()), nil
 }
@@ -1191,7 +1235,6 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 		}
 		l.lines[a.lineKey()] = a.entry()
 	}
-	l.moved = moved
 	// The rewrite replaces the file a fold appended to: the next line opens the
 	// file that stands.
 	if l.f != nil {
@@ -1209,7 +1252,7 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 		}
 		b.Write(append(line, '\n'))
 	}
-	if err := atomicfile.Write(filepath.Join(l.dir, linesFile), b.Bytes(), nil); err != nil {
+	if err := atomicfile.Write(filepath.Join(l.dir, linesFile), b.Bytes()); err != nil {
 		return err
 	}
 	if len(moved) == 0 {
@@ -1219,10 +1262,10 @@ func (l *Ledger) reprice(w Write, skip Skip) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.Write(filepath.Join(l.dir, repricedFile), record, nil)
+	return atomicfile.Write(filepath.Join(l.dir, repricedFile), record)
 }
 
-// item is the item as the ledger names it in prose: the documents' own spelling,
+// item is the item as the ledger names it in prose: the results' own spelling,
 // so a `repriced.yaml` line joins to the result's `scored` without a translation.
 func (id identity) item() string { return ItemName(id.asItem()) }
 

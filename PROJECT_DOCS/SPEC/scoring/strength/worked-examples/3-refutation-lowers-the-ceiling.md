@@ -1,4 +1,4 @@
-### 3. A refutation caps — and sometimes does not
+### 3. Refutation lowers the ceiling
 
 One refuter serves both readings: a claim `R` at `rigor 1.00`, founded by the same work, so
 `σ(R) = min(1.00, 1.00 × 0.70) = 0.70`, refuting at `bearing 1.00`. The cap is `0.30` in both.

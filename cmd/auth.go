@@ -40,7 +40,7 @@ type authOptions struct {
 	Logger          log.Logger
 }
 
-// runAuthVerb runs one auth verb and writes its result document.
+// runAuthVerb runs one auth verb and writes its result.
 func runAuthVerb(name string, verb func(authOptions) (string, []toolresult.Field), opts authOptions) (int, error) {
 	outcome, fields := verb(opts)
 	return emitResult(name, opts.Stdout, outcome, fields)
@@ -175,7 +175,7 @@ func configuredProviderNames(opts providerOptions) []string {
 
 // authVerbCommand is one auth verb: its store resolved under the state base,
 // its stdin handed in, the configured provider names where readsConfig, and its
-// result written as the verb's document.
+// result written.
 func authVerbCommand(use, short, long string, args cobra.PositionalArgs, readsConfig bool, verb func(authOptions) (string, []toolresult.Field)) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,

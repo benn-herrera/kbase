@@ -20,7 +20,7 @@ import (
 
 // modelsOptions is the resolved input of the models verb: the shared
 // provider-reaching options, the logger the registry reports a close failure
-// to, plus the stream its result document goes to.
+// to, plus the stream its result goes to.
 type modelsOptions struct {
 	providerOptions
 
@@ -29,7 +29,7 @@ type modelsOptions struct {
 }
 
 // runModels selects a provider from the loaded pool, fetches its model
-// catalogue, writes the result document — the ids sorted ascending — and
+// catalogue, writes the result — the ids sorted ascending — and
 // returns the exit code its outcome maps to. The pool's faults are the
 // result's warnings and lines on Stderr; a one-line summary goes to Stderr.
 func runModels(ctx context.Context, opts modelsOptions) (int, error) {
@@ -40,16 +40,17 @@ func runModels(ctx context.Context, opts modelsOptions) (int, error) {
 	return emitResult("models", opts.Stdout, outcome, fields)
 }
 
-func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.Field) {
+func listModels(ctx context.Context, opts modelsOptions) (outcome string, fields []toolresult.Field) {
 	warnings := warningsField(warnFaults(opts.Stderr, opts.Faults))
+	defer func() { fields = toolresult.WithWarnings(fields, warnings) }()
 	name, rule, err := config.Select(opts.inputs(), opts.Provider)
 	if err != nil {
-		return refusedOrFailed([]toolresult.Field{warnings}, err)
+		return refusedOrFailed(nil, err)
 	}
 	reg := modelclient.New(opts.NewClient, opts.Logger, "", 0)
 	defer reg.CloseAll()
 	entry := opts.Providers[name]
-	fields := providerFields(name, rule, entry.Layer)
+	fields = providerFields(name, rule, entry.Layer)
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = defaultListTimeout
@@ -60,14 +61,14 @@ func listModels(ctx context.Context, opts modelsOptions) (string, []toolresult.F
 	ids, err := reg.Catalogue(callCtx, entry)
 	var refusal toolresult.Refusal
 	if errors.As(err, &refusal) {
-		return refused([]toolresult.Field{warnings}, refusal...)
+		return refused(nil, refusal...)
 	}
 	if err != nil {
-		return failed(append(fields, warnings), err)
+		return failed(fields, err)
 	}
 	slices.Sort(ids)
 	fmt.Fprintf(opts.Stderr, "models ok: %s count=%d elapsed=%s\n", name, len(ids), time.Since(start).Round(time.Millisecond))
-	return toolresult.Done, append(fields, toolresult.Field{Key: "models", Value: nonNil(ids)}, warnings)
+	return toolresult.Done, append(fields, toolresult.Field{Key: "models", Value: nonNil(ids)})
 }
 
 var (
@@ -84,12 +85,9 @@ ascending, as its result.
 The provider is ` + argmark.Flag("provider") + `, else the only provider in providers.toml — with
 several providers declared and none chosen, the command refuses, listing them,
 rather than picking one. config.toml names no provider here: each role names
-its own provider in its own model reference. Each configuration fault — a
-provider whose table failed to load, a provider that loaded despite a fault in
-its key file, a credentials store directory that did not list — is an item of
-the result's "warnings": "path" the file or directory it is against, "detail"
-what is wrong. "warnings" is empty where there are none, and is carried
-whatever the outcome, refusals included.`,
+its own provider in its own model reference.
+
+` + configWarningsHelp("the result"),
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		wd, err := invocationDir(cmd)

@@ -68,15 +68,15 @@ func (r helpResources) Read(res protocol.Resource) (string, error) {
 }
 
 // familyHelp is f's help resource: its operations, listed from the members
-// its tool's operation names, then what they share, spelled over MCP from the
-// tree under root.
+// its tool's operation names, each with its summary, then what they share,
+// spelled over MCP from the tree under root.
 func familyHelp(root *cobra.Command, f Family, members []*cobra.Command) string {
-	names := make([]string, 0, len(members))
+	lines := make([]string, 0, len(members))
 	for _, c := range members {
-		names = append(names, c.Name())
+		lines = append(lines, "  "+c.Name()+": "+c.Short)
 	}
-	return Spelling(root, true).Spell(fmt.Sprintf("The %s tool's operations: %s. An operation's full help is %s<operation>.\n\n%s\n",
-		f.Name, strings.Join(names, ", "), HelpURIPrefix, strings.TrimSpace(f.Help)))
+	return Spelling(root, true).Spell(fmt.Sprintf("The %s tool's operations:\n%s\n\nAn operation's full help is %s<operation>.\n\n%s\n",
+		f.Name, strings.Join(lines, "\n"), HelpURIPrefix, strings.TrimSpace(f.Help)))
 }
 
 // commandHelp is cmd's help resource: its shared help body, then its argument
@@ -179,7 +179,7 @@ func ArgumentList(cmd *cobra.Command, overMCP bool) (string, error) {
 		args = flagArguments(properties, cmd.LocalNonPersistentFlags(), overMCP)
 	case cmd.Name() == write.Batch:
 		// At the command line the batch options are kbase write's flags, and
-		// entry is a key of the values document, which takes it as a list, as
+		// entry is a key of the batch, which takes it as a list, as
 		// the tool does.
 		schema := batchSchema()
 		for _, name := range slices.Sorted(maps.Keys(schema.Properties)) {
@@ -292,10 +292,11 @@ func subcommandList(cmd *cobra.Command) string {
 }
 
 // toolDescription is the description of the tool cmd alone binds: its
-// summary, then its MCP note, then where its full help is, spelled over MCP.
+// summary, then its MCP note where NoteEveryCall marks it, then where its full
+// help is, spelled over MCP.
 func toolDescription(cmd *cobra.Command) string {
 	parts := []string{cmd.Short + "."}
-	if note := cmd.Annotations[MCPNoteAnnotation]; note != "" {
+	if note := cmd.Annotations[MCPNoteAnnotation]; note != "" && cmd.Annotations[noteEveryCallAnnotation] == "true" {
 		parts = append(parts, strings.TrimSpace(note))
 	}
 	return Spelling(cmd.Root(), true).Spell(strings.Join(append(parts, "Full help: "+helpURI(cmd.Name())+"."), " "))

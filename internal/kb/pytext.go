@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 // The metadata layer's readers follow Python's text semantics: a file read in
@@ -16,11 +16,11 @@ import (
 
 // PyWhitespace is the body of the class Python's \s and str.isspace() share,
 // for use inside a bracket expression.
-const PyWhitespace = format400.PyWhitespace
+const PyWhitespace = format40.PyWhitespace
 
 // PyRE compiles a pattern written in Python's spelling of \s, \S and \d,
 // none of them inside a bracket expression. \d stays ASCII.
-func PyRE(pattern string) *regexp.Regexp { return format400.PyRE(pattern) }
+func PyRE(pattern string) *regexp.Regexp { return format40.PyRE(pattern) }
 
 // TranslateNewlines is text as Python's text-mode read returns it: \r\n and
 // \r translated to \n.
@@ -111,10 +111,10 @@ func NormalizeSpace(s string) string {
 }
 
 // IsWord is whether r is a character Python's \w matches.
-func IsWord(r rune) bool { return format400.IsWord(r) }
+func IsWord(r rune) bool { return format40.IsWord(r) }
 
 // BoundaryAt is Python's \b at byte offset i of s.
-func BoundaryAt(s string, i int) bool { return format400.BoundaryAt(s, i) }
+func BoundaryAt(s string, i int) bool { return format40.BoundaryAt(s, i) }
 
 // findAllBounded is the matches of re in s that Python's \b(...)\b would
 // keep. Exact only where a rejected match cannot overlap an accepted one,
@@ -132,8 +132,8 @@ func findAllBounded(re *regexp.Regexp, s string) []string {
 
 // Slugify is a heading's anchor as GitHub's slugger has it, HTML comments
 // stripped, before any suffix for a repeat.
-func Slugify(heading string) string { return format400.Slugify(heading) }
+func Slugify(heading string) string { return format40.Slugify(heading) }
 
 // Slugger anchors the headings of one document in document order, a repeat
 // suffixed as GitHub's slugger suffixes it.
-type Slugger = format400.Slugger
+type Slugger = format40.Slugger

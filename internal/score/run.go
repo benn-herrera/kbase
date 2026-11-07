@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"kbase/internal/asks"
 	"kbase/internal/kb"
 	"kbase/internal/log"
 	"kbase/internal/query"
@@ -27,7 +28,7 @@ import (
 // run goes on.
 type Ask func(ctx context.Context, prompt string) (Reply, error)
 
-// Launch starts one item of an ask batch: it waits until the item may make its
+// Launch starts one item of a wave of calls: it waits until the item may make its
 // call, adds it to wg, runs item with the Ask its call goes through, then runs
 // the after item returns, where non-nil — the item's per-result writes, made
 // once its call is done — and marks it done in wg. A ctx that ends before the
@@ -72,7 +73,7 @@ type Landing struct {
 	Judged string
 }
 
-// Write lands an ask batch's values in one landing, and returns one error per
+// Write lands a wave's values in one landing, and returns one error per
 // value, in the order given: nil where it landed, and otherwise why it did not,
 // that item then recorded failed and the run going on. Publishing what landed
 // is the caller's refresh. A resume folds a stopped invocation's results and
@@ -144,18 +145,19 @@ type Runner struct {
 	graph *graph
 }
 
-// Run walks the set once, as one ask batch. Its launch loop decides each item's
+// Run walks the set once, as one wave of calls. Its launch loop decides each item's
 // status and skip, composes its closed text and prompt, and launches the items
 // it asks in set order; each launched item asks, reads the charges the reply
 // records against that text, prices them into its own result cell, and writes
-// its result file once its call is done. A result file that cannot be written
+// its answer file once its call is done. An answer file that cannot be written
 // is the run's failure, and stops the launches and the calls still out. When
 // the walk has drained — done, cancelled or failed — the ledger's flush
 // lands the cells' values, then appends their captures and their lines, in walk
-// order, and removes the result files; no common file is written before then. A
-// reply the parse cannot read, a refused text and a failed call or landing are
-// recorded and the run goes on. An item the ledger already records as landed is
-// not asked again — a fresh run's ledger records nothing, so a fresh run asks
+// order, and removes the answer files; no common file is written before then. A
+// reply the parse cannot read is asked once more with a correction, inside the
+// item's own launch; a reply still refused, a refused text and a failed call or
+// landing are recorded and the run goes on. An item the ledger already records
+// as landed is not asked again — a fresh run's ledger records nothing, so a fresh run asks
 // every item. An item Skip names is recorded skipped, once: a line already
 // recording it so is not appended again. A cancelled context stops the walk and
 // records nothing for an item without an answer.
@@ -188,7 +190,7 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 	// cut is each launched item whose call the walk's stop interrupted: it
 	// records nothing.
 	cut := make([]bool, len(items))
-	// walk ends with ctx, or at the first result file an item cannot write,
+	// walk ends with ctx, or at the first answer file an item cannot write,
 	// which is then the run's error.
 	walk, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -232,16 +234,18 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 			continue
 		}
 		err := r.Launch(walk, &wg, func(ask Ask) func() {
-			answered, interrupted := c.attempt(walk, ask, e)
+			calls, interrupted := c.attempt(walk, ask, e)
 			if interrupted {
 				cut[i] = true
 				return nil
 			}
-			rec := r.Ledger.line(it, answered)
-			capture := r.Ledger.captureOf(it, answered, *c)
-			cells[i] = resultCell{item: it, line: &rec, capture: &capture}
+			var file *answerFile
+			for _, a := range calls {
+				file = &answerFile{Line: r.Ledger.line(it, a.entry), Capture: r.Ledger.captureOf(it, a.entry, a.call), Prior: file}
+			}
+			cells[i] = resultCell{item: it, file: file, line: &file.Line}
 			return func() {
-				if err := r.Ledger.writeResult(i, resultRecord{Line: rec, Capture: capture}); err != nil {
+				if err := r.Ledger.writeAnswerFile(i, *file); err != nil {
 					stopOnce.Do(func() {
 						walkErr = fmt.Errorf("write the result of %s: %w", ItemName(it), err)
 						cancel()
@@ -312,39 +316,93 @@ func (r *Runner) prepare(it query.Item, facts passFacts, g graph) (Entry, *call)
 	return e, &call{class: cl, closed: closed, prompt: prompt}
 }
 
-// attempt makes the call through ask and reads its reply, e's bounds stamped
-// around the call alone: e with the charges the reply records and the value they
-// price, which the walk's end lands, or failed with the reason it records none.
-// interrupted reports ctx ended during the call, which is the walk's stop and
-// not the item's outcome: the caller records nothing for it.
-func (c *call) attempt(ctx context.Context, ask Ask, e Entry) (_ Entry, interrupted bool) {
-	e.Started = Stamp()
-	answer, ok, interrupted := c.put(ctx, ask, &e)
-	e.Ended = Stamp()
-	if interrupted {
-		return Entry{}, true
+// attempt makes the call through ask and reads its reply, each entry's bounds
+// stamped around its call alone. A reply the parse refuses is asked once more,
+// while ctx has not ended, with the correction it earns (correctionOf), up to
+// asks.MaxAsks calls in all. It returns every call made, in call order: the
+// last carries e with the charges the reply records and the value they price,
+// which the walk's end lands, or failed with the reason it records none, and
+// any before it is a refused one. interrupted reports ctx ended during a call,
+// which is the walk's stop and not the item's outcome: the caller records
+// nothing for the item, a refused call before it included.
+func (c call) attempt(ctx context.Context, ask Ask, e Entry) (_ []sentCall, interrupted bool) {
+	var out []sentCall
+	for {
+		try := e
+		try.Started = Stamp()
+		answer, interrupted, err := c.put(ctx, ask, &try)
+		try.Ended = Stamp()
+		if interrupted {
+			return nil, true
+		}
+		if err == nil {
+			try.Status, try.Value = StatusDone, kb.BearingText(answer.Value)
+		}
+		out = append(out, sentCall{entry: try, call: c})
+		var refusal malformedError
+		if !errors.As(err, &refusal) || len(out) == asks.MaxAsks || ctx.Err() != nil {
+			return out, false
+		}
+		correction := correctionOf(refusal, c.reply)
+		prompt, err := c.class.render(c.closed, &correction)
+		if err != nil {
+			// The item fails as one whose first ask cannot be composed does
+			// (prepare): its reason is the render's error.
+			out[len(out)-1].entry.Reply = err.Error()
+			return out, false
+		}
+		c.correction, c.prompt, c.reply = &correction, prompt, ""
+		e.PromptSHA256 = digestOf(prompt)
 	}
-	if ok {
-		e.Status, e.Value = StatusDone, kb.BearingText(answer.Value)
-	}
-	return e, false
 }
 
-// call is what one attempt's call carried and returned: the class it asked
-// under, the closed text and the prompt rendered from it, and the reply the Ask
-// seam returned, "" where the call failed.
+// sentCall is one call an attempt made: the entry its line records, and the
+// call as it was sent.
+type sentCall struct {
+	entry Entry
+	call  call
+}
+
+// correctionOf is the correction a re-ask after refusal carries: the refusal's
+// case and the values its fragment names, and each reply line the case names,
+// its trailing whitespace trimmed and the rest sent as the reply wrote it. A
+// quoted line is model output and not item text, so the input guard's check
+// runs over each here, and a line it refuses drops the quotes; nothing is
+// stripped or escaped. The values need no guard: each is a digit string or an
+// id the parse read as `flt-[a-z0-9-]+`, which holds nothing the guard refuses.
+func correctionOf(refusal malformedError, reply string) asks.Correction {
+	c := asks.Correction{Case: refusal.refusal, Values: refusal.values}
+	lines := strings.Split(reply, "\n")
+	quoted := make([]string, 0, len(refusal.lines))
+	for _, n := range refusal.lines {
+		q := strings.TrimRightFunc(lines[n-1], unicode.IsSpace)
+		if _, _, hit := refused(q); hit {
+			return c
+		}
+		quoted = append(quoted, q)
+	}
+	c.Lines = quoted
+	return c
+}
+
+// call is what one call carried and returned: the class it asked under, the
+// closed text, the correction a re-ask carried (nil on a first ask), the prompt
+// rendered from them, and the reply the Ask seam returned, "" where the call
+// failed.
 type call struct {
-	class  class
-	closed closedText
-	prompt string
-	reply  string
+	class      class
+	closed     closedText
+	correction *asks.Correction
+	prompt     string
+	reply      string
 }
 
 // put sends the call's prompt through ask and reads the reply against its closed
 // text under its class's table: the answer, e carrying the reply and its charges,
-// or ok false and e failed with the reason. interrupted reports ctx cancelled
-// during the call, which is the walk's stop: nothing of it is recorded.
-func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, interrupted bool) {
+// or err, the attempt's failure, and e failed with its reason — a malformedError
+// where the parse refused the reply. interrupted reports ctx cancelled during the
+// call, which is the walk's stop: nothing of it is recorded.
+func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, interrupted bool, _ error) {
 	reply, err := ask(ctx, c.prompt)
 	// A truncated reply is the call's failure, as an error from the seam is: the
 	// capture keeps no text of it.
@@ -353,14 +411,14 @@ func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, i
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return Answer{}, false, true
+			return Answer{}, true, nil
 		}
 		e.Status, e.Reply = StatusFailed, err.Error()
 		var remedied RemedyError
 		if errors.As(err, &remedied) {
 			e.Remedy, e.Note = remedied.Remedy, remedied.Note
 		}
-		return Answer{}, false, false
+		return Answer{}, false, err
 	}
 	c.reply = reply.Text
 	answer, err = ParseAnswer(c.reply, c.closed, c.class.table)
@@ -370,10 +428,10 @@ func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, ok, i
 		// blank, cut short or think-lock, and what matters is that it failed. The
 		// capture keeps the text.
 		e.Status, e.Reply = StatusFailed, err.Error()
-		return Answer{}, false, false
+		return Answer{}, false, err
 	}
 	e.Reply, e.Faults, e.Moot = c.reply, answer.Faults, answer.Moot
-	return answer, true, false
+	return answer, false, nil
 }
 
 // compose is the prompt one item's call carries, the digest of exactly it, and
@@ -397,15 +455,18 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 	if err != nil {
 		return "", "", closedText{}, err
 	}
-	if prompt, err = cl.render(closed); err != nil {
+	if prompt, err = cl.render(closed, nil); err != nil {
 		return "", "", closedText{}, err
 	}
 	return prompt, digestOf(prompt), closed, nil
 }
 
 // render is the prompt cl's call carries over closed: its instruction around the
-// text as the call numbers it.
-func (cl class) render(closed closedText) (string, error) { return cl.ask(closed.numbered()) }
+// text as the call numbers it, closed by the correction c a re-ask carries, nil
+// on a first ask.
+func (cl class) render(closed closedText, c *asks.Correction) (string, error) {
+	return cl.ask(closed.numbered(), c)
+}
 
 // graphOf is the loaded index as the run's passages read it: every node by id,
 // each hosted node's host, and each hosted node's statement, read through
@@ -515,12 +576,12 @@ func label(it query.Item) string {
 	return ItemName(it)
 }
 
-// replySummaryLimit bounds the reason a document or a log line carries of a
+// replySummaryLimit bounds the reason a result or a log line carries of a
 // failed attempt. The ledger's line holds the reply whole; none of that belongs
 // in a result's detail or a terminal's log line.
 const replySummaryLimit = 512
 
-// ReplySummary is a failed attempt's reply as a document or a log line states
+// ReplySummary is a failed attempt's reply as a result or a log line states
 // it: bounded and stripped of control characters, with a line break read as a
 // space. A reply is arbitrary bytes the endpoint's answer carried, so nothing it
 // wrote reaches a terminal as an instruction. The ledger's line is

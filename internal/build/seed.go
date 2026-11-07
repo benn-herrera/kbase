@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"slices"
 
-	"kbase/internal/atomicfile"
 	"kbase/internal/buildstore"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbload"
+	"kbase/internal/kbwrite"
 	"kbase/internal/result"
 )
 
@@ -23,7 +23,10 @@ import (
 func seedSpine(w *walk) (result.Record, error) {
 	indexDir := filepath.Join(w.kbRoot, kb.IndexDir)
 	seeded := "present"
-	if info, err := os.Stat(indexDir); err != nil || !info.IsDir() {
+	// The tree's writes made their temps in kb.TempDir, inside indexDir: a
+	// directory holding that alone is one the spine has not been seeded into.
+	entries, err := os.ReadDir(indexDir)
+	if err != nil || len(entries) == 1 && entries[0].Name() == filepath.Base(kb.TempDir) {
 		if err := os.MkdirAll(indexDir, 0o755); err != nil {
 			return nil, err
 		}
@@ -31,7 +34,7 @@ func seedSpine(w *walk) (result.Record, error) {
 	}
 	if !kbload.HasFormatStamp(w.kbRoot) {
 		p := filepath.Join(w.kbRoot, kb.FormatFile)
-		if err := atomicfile.Write(p, kb.EncodeFormatStamp(kb.FormatVersion), nil); err != nil {
+		if err := kbwrite.Inside(w.kbRoot, p, kb.EncodeFormatStamp(kb.FormatVersion)); err != nil {
 			return nil, err
 		}
 	}
@@ -47,10 +50,9 @@ func seedSpine(w *walk) (result.Record, error) {
 		if src.IsFile(p) {
 			continue
 		}
-		if err := atomicfile.Write(p, file.data, nil); err != nil {
+		if err := index.WriteKBFile(src, p, file.data); err != nil {
 			return nil, err
 		}
-		src.Put(p, file.data)
 	}
 	written, err := w.refresh(src)
 	slices.Sort(written)

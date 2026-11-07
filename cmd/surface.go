@@ -145,8 +145,11 @@ func servedServer(root *cobra.Command, located mcp.Located, stderr io.Writer, lg
 		},
 		RenderError: func(err error, out, stderr io.Writer) { exitStatus(err, out, stderr) },
 		Launches:    map[*cobra.Command]mcp.Launch{buildCmd: mcp.BuildLaunch(), scoreCmd: mcp.ScoreLaunch()},
-		Families:    toolFamilies(),
-		Resources:   []mcp.ResourceFamily{mcp.SheetResources(servedKB), mcp.ModelHintsResource(), mcp.HelpResources(root)},
+		ConfigWarnings: func(dir string) []toolresult.Item {
+			return launchConfigWarnings(dir, stderr)
+		},
+		Families:  toolFamilies(),
+		Resources: []mcp.ResourceFamily{mcp.SheetResources(servedKB), mcp.ModelHintsResource(), mcp.HelpResources(root)},
 	}
 }
 

@@ -3,8 +3,11 @@
 # (`just build-release`): `./bin/release/kbase mcp` started in a system temporary directory under no repository, so it locates
 # no project and no count varies with a path, and sent initialize, tools/list
 # and resources/list. TestMeasureMCPSurface measures the frames it answered
-# into surface.yaml. A measurement, not a gate: it fails only where the server
-# exits non-zero, a request goes unanswered or a count is not positive.
+# into surface.yaml: the totals, then under per-tool each tool's tools/list
+# entry length by tool name; and, as tools-list-chars-located, the tools/list
+# a server with a default project answered (run/served/located.list.jsonl).
+# A measurement, not a gate: it fails only where the server exits non-zero, a
+# request goes unanswered or a count is not positive.
 #
 # run/served/ holds the served text in full, for the surface audit, compared
 # with nothing: every listed resource read back (resources.jsonl), tools/list
@@ -60,7 +63,8 @@ sed -n '1,2p' "${run}/requests.jsonl" > "${served}/building.requests.jsonl"
 # so init's birth commit depends on neither.
 mkdir -p "${served}/located"
 sed -n '1,2p' "${run}/requests.jsonl" > "${served}/located.list.requests.jsonl"
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"resources/list"}' >> "${served}/located.list.requests.jsonl"
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"resources/list"}' '{"jsonrpc":"2.0","id":3,"method":"tools/list"}' \
+    >> "${served}/located.list.requests.jsonl"
 set +e
 (
     export GIT_AUTHOR_NAME=measure-mcp-surface GIT_AUTHOR_EMAIL=measure@invalid GIT_COMMITTER_NAME=measure-mcp-surface GIT_COMMITTER_EMAIL=measure@invalid GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${run}/gitconfig"
@@ -72,7 +76,7 @@ printf '%s\n' "$?" > "${served}/located.list.exit"
 set -e
 {
     cat "${served}/located.list.requests.jsonl"
-    id=2
+    id=3
     while IFS= read -r uri; do
         id=$((id + 1))
         printf '{"jsonrpc":"2.0","id":%d,"method":"resources/read","params":{"uri":"%s"}}\n' "${id}" "${uri}"
@@ -109,7 +113,7 @@ if [[ "$(cat "${out}/run/mcp.exit")" -ne 0 ]]; then
     printf 'measure(measure-mcp-surface): kbase mcp exited %s — see run/mcp.log\n' "$(cat "${out}/run/mcp.exit")"
     status=1
 fi
-if ! grep -q 'kbase://sheet/' "${out}/run/served/located.list.jsonl"; then
+if ! grep -q '"uri":"kbase://sheet/' "${out}/run/served/located.list.jsonl"; then
     printf 'measure(measure-mcp-surface): the located server listed no kbase://sheet/ resource — see run/served/located.list.jsonl\n'
     status=1
 fi
@@ -124,11 +128,11 @@ if [[ -e "${out}/run/served/cli-help/failed.txt" ]]; then
     status=1
 fi
 go test -count=1 -run '^TestMeasureMCPSurface$' ./internal/mcp/protocol -args -surface.frames="${out}/run/frames.jsonl" \
-    -surface.out="${out}/surface.yaml" > "${out}/measure.log" 2>&1 || {
+    -surface.located="${out}/run/served/located.list.jsonl" -surface.out="${out}/surface.yaml" > "${out}/measure.log" 2>&1 || {
     printf 'measure(measure-mcp-surface): the frames did not measure — see measure.log\n'
     status=1
 }
-OUT_DIR="${out}" RECIPE="measure-mcp-surface" INVOCATION="run/: a mktemp directory under no repository while the server ran, copied here after\nrun/: ${kbase} mcp < run/requests.jsonl (initialize, notifications/initialized, tools/list, resources/list) > run/frames.jsonl 2> run/mcp.log; its exit in run/mcp.exit\ngo test -run '^TestMeasureMCPSurface\$' ./internal/mcp/protocol -args -surface.frames=run/frames.jsonl -surface.out=surface.yaml > measure.log\nrun/served/: resources.jsonl, every resources/list URI read back; required.jsonl, ${kbase} mcp --project-dir-required sent initialize and tools/list; building.jsonl, initialize from building/, a bare .git with no kb-root/; located.jsonl, ${kbase} mcp from located/, a fresh git repository holding the KB ${kbase} init made, sent initialize, resources/list and a resources/read of each kbase://sheet/ URI the list names (located.list.jsonl); each capture's exit in <capture>.exit, and init's in located.init.exit and the located list's in located.list.exit; cli-help/kbase[.<command>...].txt, ${kbase} [<command>...] --help for the root and each Commands entry, recursively\nsurface.yaml: tools, tools-list-chars (the tools/list result's JSON length), input-schema-chars (every inputSchema's JSON length, summed), instructions-chars" \
+OUT_DIR="${out}" RECIPE="measure-mcp-surface" INVOCATION="run/: a mktemp directory under no repository while the server ran, copied here after\nrun/: ${kbase} mcp < run/requests.jsonl (initialize, notifications/initialized, tools/list, resources/list) > run/frames.jsonl 2> run/mcp.log; its exit in run/mcp.exit\ngo test -run '^TestMeasureMCPSurface\$' ./internal/mcp/protocol -args -surface.frames=run/frames.jsonl -surface.located=run/served/located.list.jsonl -surface.out=surface.yaml > measure.log\nrun/served/: resources.jsonl, every resources/list URI read back; required.jsonl, ${kbase} mcp --project-dir-required sent initialize and tools/list; building.jsonl, initialize from building/, a bare .git with no kb-root/; located.jsonl, ${kbase} mcp from located/, a fresh git repository holding the KB ${kbase} init made, sent initialize, resources/list and a resources/read of each kbase://sheet/ URI the list names (located.list.jsonl, which also sent tools/list); each capture's exit in <capture>.exit, and init's in located.init.exit and the located list's in located.list.exit; cli-help/kbase[.<command>...].txt, ${kbase} [<command>...] --help for the root and each Commands entry, recursively\nsurface.yaml: tools, tools-list-chars (the tools/list result's JSON length, under no repository), tools-list-chars-located (the same in located.list.jsonl, with a default project), input-schema-chars (every inputSchema's JSON length, summed), instructions-chars, then per-tool: each tool's tools/list entry length, by tool name" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     exit 1

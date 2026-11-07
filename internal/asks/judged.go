@@ -28,7 +28,7 @@ func JudgedHash(template string, statements ...string) kb.JudgedHash {
 // statement ask, an analysis's or an experiment's method ask. It is the one
 // mapping from a kind to its ask, which the judged hash and a scoring run's
 // call both read. A kind no rigor pass asks is an error.
-func RigorAsk(kind string) (func(subject string) (string, error), error) {
+func RigorAsk(kind string) (func(subject string, c *Correction) (string, error), error) {
 	switch kind {
 	case kb.NodeKindClaim:
 		return ScoreRigorStatement, nil
@@ -57,9 +57,9 @@ func EdgeJudgedHash(source, target string) (kb.JudgedHash, error) {
 
 // judgedUnder is the judged hash of statements under the template ask renders:
 // its digest is the template rendered for an empty subject, every fixed byte
-// of the instruction and nothing an item varies.
-func judgedUnder(ask func(string) (string, error), statements ...string) (kb.JudgedHash, error) {
-	template, err := ask("")
+// of the first ask's instruction and nothing an item varies.
+func judgedUnder(ask func(string, *Correction) (string, error), statements ...string) (kb.JudgedHash, error) {
+	template, err := ask("", nil)
 	if err != nil {
 		return kb.JudgedHash{}, err
 	}

@@ -23,7 +23,7 @@ import (
 // probeWire answers each request with a short stream and keeps the body it
 // read, so a test reads what the probe actually sent. The deltas are paced —
 // a pause before the first, a longer one before the last — so the timings a
-// document carries are measurements rather than a stub's same-instant reply.
+// result carries are measurements rather than a stub's same-instant reply.
 func probeWire(t *testing.T) (*httptest.Server, func() [][]byte) {
 	t.Helper()
 	return probeStreamWire(t, func(_ http.ResponseWriter, flush func(string)) {
@@ -108,7 +108,7 @@ func probeFixture(t *testing.T, baseURL, otherURL string) string {
 
 // probeRolesFixture stages one pool entry per role, each at its own base URL,
 // and config.toml naming each role its own entry and model — the role's name in
-// both — so a request lands on a server, and a document names a selection, that
+// both — so a request lands on a server, and a result names a selection, that
 // identify the role asked.
 func probeRolesFixture(t *testing.T, urls map[config.Role]string) string {
 	t.Helper()
@@ -124,8 +124,8 @@ func probeRolesFixture(t *testing.T, urls map[config.Role]string) string {
 }
 
 // runProbeVerb runs `kbase probe` through the real root command from work and
-// reads the document it wrote, with the verb's streams.
-func runProbeVerb(t *testing.T, work string, args ...string) (doc resultDoc, stdout, stderr string, code int) {
+// reads the result it wrote, with the verb's streams.
+func runProbeVerb(t *testing.T, work string, args ...string) (doc parsedResult, stdout, stderr string, code int) {
 	t.Helper()
 	t.Chdir(work)
 	stdoutBuf, stderrBuf, err := executeRoot(t, append([]string{"probe"}, args...)...)
@@ -134,16 +134,16 @@ func runProbeVerb(t *testing.T, work string, args ...string) (doc resultDoc, std
 		t.Fatal(err)
 	}
 	stdout, stderr = stdoutBuf.String(), stderrBuf.String()
-	return checkDocument(t, "probe", stdout), stdout, stderr, code
+	return checkResult(t, "probe", stdout), stdout, stderr, code
 }
 
 // answeredProbe reads the fields every healthy probe carries, failing on a
 // field that is missing or of another kind.
-func answeredProbe(t *testing.T, doc resultDoc) (firstToken, wall int, usage map[string]any) {
+func answeredProbe(t *testing.T, doc parsedResult) (firstToken, wall int, usage map[string]any) {
 	t.Helper()
-	for _, key := range []string{"provider", "provider-rule", "provider-layer", "selection", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"} {
+	for _, key := range []string{"provider", "provider-rule", "provider-layer", "probed", "model", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"} {
 		if _, ok := doc.Values[key]; !ok {
-			t.Fatalf("the document carries no %s: %v", key, doc.Values)
+			t.Fatalf("the result carries no %s: %v", key, doc.Values)
 		}
 	}
 	firstToken, okFirst := doc.Values["first-token-ms"].(int)
@@ -172,8 +172,8 @@ func TestProbeReportsTheCall(t *testing.T) {
 		t.Errorf("provider/rule/layer %v/%v/%v, model %v; want the configured scoring reference",
 			doc.Values["provider"], doc.Values["provider-rule"], doc.Values["provider-layer"], doc.Values["model"])
 	}
-	if doc.Values["selection"] != string(config.RoleScoring) {
-		t.Errorf("selection = %v, want the scoring role a bare probe asks", doc.Values["selection"])
+	if doc.Values["probed"] != string(config.RoleScoring) {
+		t.Errorf("probed = %v, want the scoring role a bare probe asks", doc.Values["probed"])
 	}
 	firstToken, wall, usage := answeredProbe(t, doc)
 	if firstToken <= 0 || firstToken >= wall {
@@ -240,7 +240,7 @@ func TestProbeAsksOneBareTurn(t *testing.T) {
 
 // TestProbeSendsAndReportsTheRoleSampling: a chat probe sends its role's
 // sampling — the scoring role's where --model names the selection — and its
-// document reports the temperature and thinking that went on the wire,
+// result reports the temperature and thinking that went on the wire,
 // whether the call was answered or declined. An
 // answer cut off at the completion cap before any text is an answer: done, its
 // finish reason and empty reply reported, on the one request it took.
@@ -264,23 +264,23 @@ func TestProbeSendsAndReportsTheRoleSampling(t *testing.T) {
 		flags    []string
 		sampling string
 		answer   func(w http.ResponseWriter, flush func(string))
-		// temperature is the configured value the document must report, nil
+		// temperature is the configured value the result must report, nil
 		// where none is configured and only agreement with the wire is checked.
 		temperature      any
 		thinking, effort string
 		outcome          string
-		// finishReason and reply are nil where the document carries no answer.
+		// finishReason and reply are nil where the result carries no answer.
 		finishReason, reply any
 	}{
-		{"--text sends the text role's", []string{"--text"},
+		{"--role text sends the text role's", []string{"--role", "text"},
 			"[sampling.text]\ntemperature = 0.3\nthinking = \"low\"\n", answered,
 			0.3, "low", "low", toolresult.Done, "stop", "ok"},
 		{"--model sends the scoring role's", []string{"--model", "local/other"},
 			"[sampling.text]\nthinking = \"high\"\n\n[sampling.scoring]\nthinking = \"medium\"\n", answered,
 			nil, "medium", "medium", toolresult.Done, "stop", "ok"},
-		{"an answer cut off before any text is done", []string{"--text"}, "", cutOff,
+		{"an answer cut off before any text is done", []string{"--role", "text"}, "", cutOff,
 			nil, "off", "", toolresult.Done, "length", ""},
-		{"a declined call reports what it sent", []string{"--text"},
+		{"a declined call reports what it sent", []string{"--role", "text"},
 			"[sampling.text]\ntemperature = 0.3\nthinking = \"low\"\n", declined,
 			0.3, "low", "low", toolresult.Failed, nil, nil},
 	} {
@@ -311,13 +311,13 @@ func TestProbeSendsAndReportsTheRoleSampling(t *testing.T) {
 				wire = fmt.Sprint(*body.Temperature)
 			}
 			if fmt.Sprint(doc.Values["temperature"]) != wire {
-				t.Errorf("document temperature %v, wire %s; want the value sent", doc.Values["temperature"], wire)
+				t.Errorf("result temperature %v, wire %s; want the value sent", doc.Values["temperature"], wire)
 			}
 			if tc.temperature != nil && doc.Values["temperature"] != tc.temperature {
 				t.Errorf("temperature = %v, want the configured %v", doc.Values["temperature"], tc.temperature)
 			}
 			if doc.Values["thinking"] != tc.thinking || body.ReasoningEffort != tc.effort {
-				t.Errorf("document thinking %v, wire reasoning_effort %q; want %s and %q",
+				t.Errorf("result thinking %v, wire reasoning_effort %q; want %s and %q",
 					doc.Values["thinking"], body.ReasoningEffort, tc.thinking, tc.effort)
 			}
 			if doc.Values["finish-reason"] != tc.finishReason || doc.Values["reply"] != tc.reply {
@@ -329,7 +329,7 @@ func TestProbeSendsAndReportsTheRoleSampling(t *testing.T) {
 }
 
 // TestProbeNamesAProviderRefusal: an endpoint that answers with a status that is
-// not success fails the probe in the document's own vocabulary — the call's
+// not success fails the probe in the result's own vocabulary — the call's
 // outcome and text, the status and the provider's words — and exits on that
 // outcome (§7). The one attempt is not re-issued: a 400 will be as wrong again.
 func TestProbeNamesAProviderRefusal(t *testing.T) {
@@ -351,7 +351,7 @@ func TestProbeNamesAProviderRefusal(t *testing.T) {
 		}
 	}
 	if doc.Values["provider"] != "local" || doc.Values["model"] != "judge" {
-		t.Errorf("the document names %v/%v, want the selection it dialled",
+		t.Errorf("the result names %v/%v, want the selection it dialled",
 			doc.Values["provider"], doc.Values["model"])
 	}
 	if n := requests(); n != 1 {
@@ -375,10 +375,10 @@ func TestProbeModelOverridesTheRole(t *testing.T) {
 		t.Errorf("provider/rule model = %v/%v %v, want the flag's reference",
 			doc.Values["provider"], doc.Values["provider-rule"], doc.Values["model"])
 	}
-	// The document names the reference the flag gave as the selection that
+	// The result names the reference the flag gave as the selection that
 	// answered, so a reader does not have to read it out of the model id.
-	if doc.Values["selection"] != "other/alt" {
-		t.Errorf("selection = %v, want the reference --model named", doc.Values["selection"])
+	if doc.Values["probed"] != "other/alt" {
+		t.Errorf("probed = %v, want the reference --model named", doc.Values["probed"])
 	}
 	if len(otherBodies()) != 1 || len(roleBodies()) != 0 {
 		t.Errorf("%d requests to the flag's entry, %d to the role's; want the flag's alone",
@@ -386,20 +386,20 @@ func TestProbeModelOverridesTheRole(t *testing.T) {
 	}
 }
 
-// TestProbeEachRoleFlagAsksItsOwnRole: --decision, --text and --scoring each
+// TestProbeEachRoleAsksItsOwnSelection: --role decision, text and scoring each
 // probe the selection the configuration resolves for that role, and supply no
 // model of their own. A fixture naming three different entries proves which one
-// is dialled; the document names the role as the selection that answered.
-func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
+// is dialled; the result names the role as the selection that answered.
+func TestProbeEachRoleAsksItsOwnSelection(t *testing.T) {
 	for _, tc := range []struct {
-		flag string
-		role config.Role
+		value string
+		role  config.Role
 	}{
-		{"--decision", config.RoleDecision},
-		{"--text", config.RoleText},
-		{"--scoring", config.RoleScoring},
+		{"decision", config.RoleDecision},
+		{"text", config.RoleText},
+		{"scoring", config.RoleScoring},
 	} {
-		t.Run(tc.flag, func(t *testing.T) {
+		t.Run(tc.value, func(t *testing.T) {
 			urls := map[config.Role]string{}
 			asked := map[config.Role]func() []string{}
 			for _, role := range config.Roles {
@@ -408,14 +408,14 @@ func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
 			}
 			dir := probeRolesFixture(t, urls)
 
-			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, tc.flag)
+			doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--role", tc.value)
 			if code != 0 || doc.Outcome != toolresult.Done {
-				t.Fatalf("%s: outcome %s, exit %d\n%s", tc.flag, doc.Outcome, code, stdout)
+				t.Fatalf("--role %s: outcome %s, exit %d\n%s", tc.value, doc.Outcome, code, stdout)
 			}
-			if doc.Values["selection"] != string(tc.role) || doc.Values["provider"] != string(tc.role) ||
+			if doc.Values["probed"] != string(tc.role) || doc.Values["provider"] != string(tc.role) ||
 				doc.Values["model"] != string(tc.role) {
-				t.Errorf("%s asked %v on %v/%v, want the %s role's own selection",
-					tc.flag, doc.Values["selection"], doc.Values["provider"], doc.Values["model"], tc.role)
+				t.Errorf("--role %s asked %v on %v/%v, want the %s role's own selection",
+					tc.value, doc.Values["probed"], doc.Values["provider"], doc.Values["model"], tc.role)
 			}
 			for _, role := range config.Roles {
 				want := 0
@@ -430,21 +430,19 @@ func TestProbeEachRoleFlagAsksItsOwnRole(t *testing.T) {
 	}
 }
 
-// TestProbeRefusesTwoSelections: a probe asks one selection — one of --model,
-// --decision, --text and --scoring. Two role flags, or a role flag with
-// --model, is a usage refusal naming all four, and nothing is dialled, the
-// roles' own configuration notwithstanding.
+// TestProbeRefusesTwoSelections: a probe asks one selection — --model or
+// --role. The two together are a usage refusal naming both, and nothing is
+// dialled, the roles' own configuration notwithstanding.
 func TestProbeRefusesTwoSelections(t *testing.T) {
 	srv, bodies := probeWire(t)
 	dir := probeFixture(t, srv.URL, srv.URL)
-	selectionFlags := []string{"--model", "--decision", "--text", "--scoring"}
+	selectionFlags := []string{"--model", "--role"}
 
 	for _, tc := range []struct {
 		name  string
 		flags []string
 	}{
-		{"two role flags", []string{"--decision", "--text"}},
-		{"a role flag and a reference", []string{"--text", "--model", "other/alt"}},
+		{"a role and a reference", []string{"--role", "text", "--model", "other/alt"}},
 	} {
 		doc, stdout, _, code := runProbeVerb(t, t.TempDir(), append([]string{"--config-dir", dir}, tc.flags...)...)
 		if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
@@ -455,7 +453,7 @@ func TestProbeRefusesTwoSelections(t *testing.T) {
 			t.Fatalf("%s: refusals = %v, want the one usage item", tc.name, items)
 		}
 		if !slices.Equal(anyStrings(items[0]["allowed"]), selectionFlags) {
-			t.Errorf("%s: allowed = %v, want the four that may be chosen once", tc.name, items[0]["allowed"])
+			t.Errorf("%s: allowed = %v, want the two that may be chosen once", tc.name, items[0]["allowed"])
 		}
 		detail, _ := items[0]["detail"].(string)
 		for _, flag := range selectionFlags {
@@ -472,8 +470,8 @@ func TestProbeRefusesTwoSelections(t *testing.T) {
 // TestProbeRefusesAModelItCannotResolve: a model the configuration cannot
 // supply — a --model that is no reference, a provider no layer declares,
 // or a role the files leave unnamed — is a refusal naming the key or the flag
-// and what is missing, before any client is built. A role flag names a role,
-// not a model, so the refusal names the role's own key and never the flag that
+// and what is missing, before any client is built. --role names a role, not a
+// model, so the refusal names the role's own key and never the flag that
 // could have supplied one; a probe naming no selection at all is refused by the
 // scoring role's key first, the role being the default rather than a flag's,
 // and names --model only as the other way to ask.
@@ -497,9 +495,9 @@ func TestProbeRefusesAModelItCannotResolve(t *testing.T) {
 		{"nothing named a selection", unconfigured, "", "", "models.scoring",
 			[]string{"sets no models.scoring", "nothing named a selection",
 				"the scoring role is the default", "--model"}, "names no model"},
-		{"a role flag the files leave unnamed", unconfigured, "", "--text", "models.text",
+		{"a role the files leave unnamed", unconfigured, "", "--role=text", "models.text",
 			[]string{"sets no models.text"}, "--model"},
-		{"the scoring role named by its own flag", unconfigured, "", "--scoring", "models.scoring",
+		{"the scoring role named by --role", unconfigured, "", "--role=scoring", "models.scoring",
 			[]string{"sets no models.scoring"}, "--model"},
 	} {
 		args := []string{"--config-dir", tc.dir}
@@ -582,7 +580,7 @@ data: {"type":"message_stop"}
 // TestProbeReachesAMessagesProvider: a pool entry stating `api = "anthropic"`
 // reaches the ask. The probe's one call lands on `POST <base>/messages` with
 // that protocol's headers and body, and the reply, stop reason and usage come
-// back in the document — so the whole route, from providers.toml to the wire,
+// back in the result — so the whole route, from providers.toml to the wire,
 // is exercised.
 func TestProbeReachesAMessagesProvider(t *testing.T) {
 	srv, requests := anthropicProbeWire(t)
@@ -740,13 +738,13 @@ func probeAskedQuestion(t *testing.T, body []byte) (modelID, key, typ, instructi
 	return req.Model, asked[0].Name, asked[0].Type, asked[0].Instructions
 }
 
-// TestProbeDecisionAsksTheDecisionSurface: --decision asks a decision model on
+// TestProbeDecisionAsksTheDecisionSurface: --role decision asks a decision model on
 // the surface its entry declares, not on the chat path — one request, on
-// /systemone or on /decisions as the entry's decisionsFlavor names, asking the
+// /systemone or on /decisions as the entry's decisionApi names, asking the
 // probe's one question: the model dialled, the key the answer comes back under,
 // the type that surface names a noul question, and the check as its
 // instructions — the probe's own predicate by default, or the one --prompt
-// names. A document whose reply is the answer. The surface blocks, so no first
+// names. A result whose reply is the answer. The surface blocks, so no first
 // token arrived and no finish reason came back; the row states those as zero and
 // null. A probe that took the chat path would be answered 400 and fail.
 func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
@@ -754,13 +752,13 @@ func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 		name, keys, path, prompt, wantType, wantInstructions string
 	}{
 		{"the SystemOne surface, an entry silent on the flavour", "", "/systemone", "", "noul", probeDecisionPrompt},
-		{"the Decisions surface", "decisionsFlavor = \"decisions\"\n", "/decisions", "", "predicate", probeDecisionPrompt},
+		{"the Decisions surface", "decisionApi = \"decisions\"\n", "/decisions", "", "predicate", probeDecisionPrompt},
 		{"the SystemOne surface, --prompt naming the predicate", "", "/systemone", "Is this selection answering?", "noul", "Is this selection answering?"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, served := probeDecisionWire(t, tc.path)
 			dir := probeDecisionConfig(t, srv.URL, tc.keys)
-			args := []string{"--config-dir", dir, "--decision"}
+			args := []string{"--config-dir", dir, "--role", "decision"}
 			if tc.prompt != "" {
 				args = append(args, "--prompt", tc.prompt)
 			}
@@ -769,9 +767,9 @@ func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 			if code != 0 || doc.Outcome != toolresult.Done {
 				t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
 			}
-			if doc.Values["selection"] != string(config.RoleDecision) || doc.Values["model"] != "d" {
-				t.Errorf("selection/model = %v/%v, want the decision role's selection",
-					doc.Values["selection"], doc.Values["model"])
+			if doc.Values["probed"] != string(config.RoleDecision) || doc.Values["model"] != "d" {
+				t.Errorf("probed/model = %v/%v, want the decision role's selection",
+					doc.Values["probed"], doc.Values["model"])
 			}
 			if got := doc.Values["first-token-ms"]; got != 0 {
 				t.Errorf("first-token-ms = %v, want 0: the decision surface streams nothing", got)
@@ -803,14 +801,14 @@ func TestProbeDecisionAsksTheDecisionSurface(t *testing.T) {
 	}
 }
 
-// TestProbeDecisionOnAnAnthropicEntryAsksTheDecisionSurface: --decision on an
+// TestProbeDecisionOnAnAnthropicEntryAsksTheDecisionSurface: --role decision on an
 // entry whose api is anthropic still asks the OpenAI-shaped decision surface on
 // the entry's base URL.
 func TestProbeDecisionOnAnAnthropicEntryAsksTheDecisionSurface(t *testing.T) {
 	srv, served := probeDecisionWire(t, "/systemone")
 	dir := probeDecisionConfig(t, srv.URL, "api = \"anthropic\"\n")
 
-	doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--decision")
+	doc, stdout, _, code := runProbeVerb(t, t.TempDir(), "--config-dir", dir, "--role", "decision")
 	if code != 0 || doc.Outcome != toolresult.Done {
 		t.Fatalf("outcome %s, exit %d; want done, 0\n%s", doc.Outcome, code, stdout)
 	}
@@ -861,10 +859,10 @@ func TestProbeReadsNoKBAndWritesNoState(t *testing.T) {
 		t.Fatalf("outcome %s, exit %d; want done where a KB-refusing KB stands\n%s", doc.Outcome, code, stdout)
 	}
 	if _, ok := doc.Values["kb-root"]; ok {
-		t.Errorf("the document carries kb-root: %v", doc.Values["kb-root"])
+		t.Errorf("the result carries kb-root: %v", doc.Values["kb-root"])
 	}
 	if _, ok := doc.Values["state-dir"]; ok {
-		t.Errorf("the document carries state-dir: %v", doc.Values["state-dir"])
+		t.Errorf("the result carries state-dir: %v", doc.Values["state-dir"])
 	}
 	if entries, err := os.ReadDir(stateHome); err != nil || len(entries) != 0 {
 		t.Errorf("the state store %s holds %v (%v), want nothing written", stateHome, entries, err)
@@ -898,12 +896,12 @@ func TestProbeIsAReadOnlyTool(t *testing.T) {
 	if !strings.Contains(probe.Description, note) {
 		t.Errorf("probe's description %q does not carry its MCP note", probe.Description)
 	}
-	for _, name := range []string{"decision", "text", "scoring", "model", "prompt", "timeout"} {
+	for _, name := range []string{"role", "model", "prompt", "timeout"} {
 		if _, ok := probe.InputSchema.Properties[name]; !ok {
 			t.Errorf("probe's schema takes no %s: %v", name, probe.InputSchema.Properties)
 		}
 	}
-	structured, isError := callTool(t, srv, "probe", map[string]any{"decision": true, "text": true})
+	structured, isError := callTool(t, srv, "probe", map[string]any{"role": "text", "model": "other/alt"})
 	if !isError || structured["outcome"] != toolresult.Refused {
 		t.Fatalf("two selectors over MCP: %v (error %v), want refused", structured, isError)
 	}
@@ -912,7 +910,7 @@ func TestProbeIsAReadOnlyTool(t *testing.T) {
 		t.Fatalf("refusals = %v, want the one usage item", items)
 	}
 	item, _ := items[0].(map[string]any)
-	if want := []string{"model", "decision", "text", "scoring"}; !slices.Equal(anyStrings(item["allowed"]), want) {
+	if want := []string{"model", "role"}; !slices.Equal(anyStrings(item["allowed"]), want) {
 		t.Errorf("allowed = %v, want %v", item["allowed"], want)
 	}
 	if detail, _ := item["detail"].(string); strings.Contains(detail, "--") {
@@ -922,7 +920,7 @@ func TestProbeIsAReadOnlyTool(t *testing.T) {
 
 // TestProbeFoldsTheModelReference: --model's provider part is folded to
 // lowercase, so a reference naming the entry in another case reaches it and the
-// document names it in lowercase.
+// result names it in lowercase.
 func TestProbeFoldsTheModelReference(t *testing.T) {
 	role, _ := probeWire(t)
 	other, otherBodies := probeWire(t)
@@ -932,9 +930,9 @@ func TestProbeFoldsTheModelReference(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("probe --model OTHER/Alt: exit %d\n%s", code, stdout)
 	}
-	if doc.Values["provider"] != "other" || doc.Values["model"] != "Alt" || doc.Values["selection"] != "other/Alt" {
-		t.Errorf("provider %v model %v selection %v, want other, Alt and other/Alt",
-			doc.Values["provider"], doc.Values["model"], doc.Values["selection"])
+	if doc.Values["provider"] != "other" || doc.Values["model"] != "Alt" || doc.Values["probed"] != "other/Alt" {
+		t.Errorf("provider %v model %v probed %v, want other, Alt and other/Alt",
+			doc.Values["provider"], doc.Values["model"], doc.Values["probed"])
 	}
 	if len(otherBodies()) != 1 {
 		t.Errorf("%d requests to the entry the reference names, want 1", len(otherBodies()))

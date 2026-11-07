@@ -17,6 +17,7 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/log"
+	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 )
@@ -191,6 +192,7 @@ step. A re-issue over an unchanged KB writes nothing and reports unchanged. ` +
 		},
 	}
 	cmd.Flags().StringVar(&out, "out", "", "the out directory (default: latex-export/ beside kb-root/)")
+	mcp.Brief(cmd, "out", "output directory, relative to the project root")
 	cmd.Flags().StringArrayVar(&volumes, "volume", nil, "a volume to export, a top-level directory of kb-root/ holding an index.md (default: every volume)")
-	return cmd
+	return mcp.Brief(cmd, "volume", "kb-root/ top-level directories to export")
 }

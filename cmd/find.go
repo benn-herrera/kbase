@@ -22,7 +22,7 @@ func findCommand() *cobra.Command {
 		Short: "the nodes of any kind matching filters on kind, title, label, path, strength and dependents",
 		Long: `find lists the nodes matching every filter given, across every kind; with no
 filter it lists every node. find locates nodes; show reads one. Each row is the
-node's id, node_type, title, label (a work's citation key or an axiom's label;
+node's id, kind, title, label (a work's citation key or an axiom's label;
 null for a claim, an analysis or an experiment), host (the leaf stating it; null
 for a work, an axiom or a node with no statement marker), strength and
 dependents (the count of nodes its strength enters). A claim's or an

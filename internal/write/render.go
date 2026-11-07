@@ -2,7 +2,7 @@
 // statement markers out, each placed marker read back before it replaces a
 // file.
 //
-// values checks a values document against an op's closed key vocabulary;
+// values checks a batch against an op's closed key vocabulary;
 // records applies an op's entries to the records and the leaves it marks,
 // reads the markers back and writes what moved; ops gives each op its
 // semantics.
@@ -14,7 +14,7 @@ import "kbase/internal/kb"
 // so what is stored is what the reader returns.
 func collapse(text string) string { return kb.NormalizeSpace(text) }
 
-// bearingOf is a values document's optional bearing as the edge's: an absent
+// bearingOf is a batch's optional bearing as the edge's: an absent
 // value is the pending judgement.
 func bearingOf(v *float64) kb.Bearing {
 	if v == nil {

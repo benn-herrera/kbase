@@ -57,13 +57,13 @@ func writeReplayTrail(t *testing.T, state string) (string, int) {
 	caller := call.New(replayFixtureClient(), "solo", func() string { return trail }, log.Discard())
 	queue := model.NewQueue(1)
 	ctx := context.Background()
-	batch := asks.NewBatch(ctx, caller.Launch(queue, "decision"))
+	wave := asks.NewWave(ctx, caller.Launch(queue, "decision"))
 	paragraphs := asks.ParagraphAsks("leaf.md", "The leaf.", []asks.ParagraphItem{
 		{Paragraph: replayItem, Text: "Every bounded sequence has a convergent subsequence."}})
-	if err := batch.AskGroup(asks.Paragraph, replayGroup, paragraphs); err != nil {
+	if err := wave.AskGroup(asks.Paragraph, replayGroup, paragraphs); err != nil {
 		t.Fatal(err)
 	}
-	recs, err := batch.Wait()
+	recs, err := wave.Wait()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,14 +96,14 @@ func writeReplayTrail(t *testing.T, state string) (string, int) {
 
 // buildReplayIn drives one build replay from workDir over the store stateDir
 // names, every role answered by replayFixtureClient.
-func buildReplayIn(t *testing.T, workDir, stateDir string) (resultDoc, string) {
+func buildReplayIn(t *testing.T, workDir, stateDir string) (parsedResult, string) {
 	t.Helper()
 	return buildReplayWith(t, context.Background(), replayFixtureClient(), workDir, stateDir)
 }
 
 // buildReplayWith drives one build replay under ctx from workDir over the
 // store stateDir names, every role answered by client.
-func buildReplayWith(t *testing.T, ctx context.Context, client model.Client, workDir, stateDir string) (resultDoc, string) {
+func buildReplayWith(t *testing.T, ctx context.Context, client model.Client, workDir, stateDir string) (parsedResult, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	opts := buildReplayOptions{Replay: true, Given: []string{"replay", "state-dir"}}
@@ -124,7 +124,7 @@ func buildReplayWith(t *testing.T, ctx context.Context, client model.Client, wor
 }
 
 // TestBuildReplayVerb: a replay of an unchanged trail through the verb asks
-// every recorded row, reproduces each, and reports its document's keys with
+// every recorded row, reproduces each, and reports its result's keys with
 // its directory under the trail's.
 func TestBuildReplayVerb(t *testing.T) {
 	state := t.TempDir()
@@ -133,7 +133,7 @@ func TestBuildReplayVerb(t *testing.T) {
 	if doc.Outcome != toolresult.Done {
 		t.Fatalf("the replay: outcome %s, want done\n%s", doc.Outcome, stdout)
 	}
-	if want := []string{"outcome", "state-dir", "trail", "replay", "dir", "counts", "changed"}; !slices.Equal(doc.Keys, want) {
+	if want := []string{"outcome", "state-dir", "trail", "replay", "replay-dir", "counts", "changed"}; !slices.Equal(doc.Keys, want) {
 		t.Errorf("keys %q, want %q", doc.Keys, want)
 	}
 	if got := mappingKeys(doc.Nodes["counts"]); !slices.Equal(got, []string{"total", "done", "failed"}) {
@@ -146,16 +146,16 @@ func TestBuildReplayVerb(t *testing.T) {
 	if doc.Values["state-dir"] != state || doc.Values["trail"] != replayStart {
 		t.Errorf("state-dir %v, trail %v; want %s and %s", doc.Values["state-dir"], doc.Values["trail"], state, replayStart)
 	}
-	dir, _ := doc.Values["dir"].(string)
+	dir, _ := doc.Values["replay-dir"].(string)
 	if replay, _ := doc.Values["replay"].(string); filepath.Base(dir) != replay || filepath.Dir(filepath.Dir(dir)) != trail {
 		t.Errorf("dir %q, replay %v; want the replay's own directory under the trail's replays", dir, doc.Values["replay"])
 	}
 }
 
-// TestBuildReplayCancelledDocument: a replay whose context ends during its
+// TestBuildReplayCancelledResult: a replay whose context ends during its
 // first call leaves the trail's one paragraph item unasked, ends cancelled,
 // and names that item in its cancelled record.
-func TestBuildReplayCancelledDocument(t *testing.T) {
+func TestBuildReplayCancelledResult(t *testing.T) {
 	state := t.TempDir()
 	writeReplayTrail(t, state)
 	ctx, cancel := context.WithCancel(context.Background())

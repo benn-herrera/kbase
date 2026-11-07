@@ -147,3 +147,31 @@ func TestAnObjectPropertyAdmitsItsKeysAlone(t *testing.T) {
 		t.Errorf("an object declaring no keys refused a mapping: %v", faults)
 	}
 }
+
+// TestAFaultInsideAnObjectIsNamedAtItsPath: a fault inside an object argument
+// is reported at its dotted path, and the message names what the key admits.
+func TestAFaultInsideAnObjectIsNamedAtItsPath(t *testing.T) {
+	closed := false
+	edge := Property{Type: "object", Required: []string{"source", "relation"}, AdditionalProperties: &closed,
+		Properties: map[string]Property{"source": {Type: "string"}, "relation": {Type: "string", Enum: []string{"lifts", "supports"}}}}
+	s := Schema{Properties: map[string]Property{"edge": edge}}
+	for _, c := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"an inner enum", map[string]any{"source": "a", "relation": "founds"},
+			`argument "edge.relation" must be one of lifts, supports`},
+		{"an unknown inner key", map[string]any{"source": "a", "relation": "lifts", "other": "x"},
+			`argument "edge.other" is unknown (allowed: relation, source)`},
+		{"a missing inner key", map[string]any{"relation": "lifts"},
+			`argument "edge.source" is required`},
+		{"an inner key of another type", map[string]any{"source": 1.0, "relation": "lifts"},
+			`argument "edge.source" must be of type string`},
+		{"no mapping", "a,lifts", `argument "edge" must be of type object`},
+	} {
+		if got := s.check(map[string]any{"edge": c.value}); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}

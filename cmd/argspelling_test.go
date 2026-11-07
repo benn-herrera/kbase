@@ -23,7 +23,7 @@ import (
 	"kbase/internal/write"
 )
 
-// atTheCommandLine is marked text as a result document at the command line
+// atTheCommandLine is marked text as a result at the command line
 // spells it.
 func atTheCommandLine(text string) string { return mcp.Spelling(rootCmd, false).Spell(text) }
 
@@ -274,7 +274,7 @@ func TestNoCLIOutputCarriesAMarker(t *testing.T) {
 	}
 }
 
-// refusalItem is the one item a refused document closes on.
+// refusalItem is the one item a refused result closes on.
 func refusalItem(t *testing.T, doc map[string]any) map[string]any {
 	t.Helper()
 	items, _ := doc["refusals"].([]any)
@@ -304,10 +304,10 @@ func requireSpelled(t *testing.T, surface string, item map[string]any, key strin
 	}
 }
 
-// cliItem is the first refusal of the CLI document out.
+// cliItem is the first refusal of the CLI result out.
 func cliItem(t *testing.T, verb, out string) map[string]any {
 	t.Helper()
-	items := checkDocument(t, verb, out).items("refusals")
+	items := checkResult(t, verb, out).items("refusals")
 	if len(items) == 0 {
 		t.Fatalf("%s: want a refusal\n%s", verb, out)
 	}
@@ -360,7 +360,7 @@ func TestARefusalNamesItsArgumentAsItsSurfaceTakesIt(t *testing.T) {
 		srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
 		doc, _ := callTool(t, srv, "status", map[string]any{"state-dir": state})
 		out, _ := kbase(t, repo, "status", "--state-dir", state)
-		cli := checkDocument(t, "status", out).Values
+		cli := checkResult(t, "status", out).Values
 		for surface, d := range map[string]map[string]any{"mcp": doc, "cli": cli} {
 			items, _ := d["recent-refusals"].([]any)
 			if len(items) != 1 {

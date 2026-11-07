@@ -12,11 +12,12 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"kbase/internal/argmark"
 	"kbase/internal/kb"
 	"kbase/internal/result"
 )
 
-// entryKey is the top-level key of a values document: a list of entries, each
+// entryKey is the top-level key of a batch: a list of entries, each
 // one edit or one print, the op fixing what an entry means.
 const entryKey = "entry"
 
@@ -439,7 +440,7 @@ func mappingPairs(n *yaml.Node, container string, allowed []string) ([][2]*yaml.
 	return pairs, nil
 }
 
-// keyName is a values document's key as a refusal names it, an empty key
+// keyName is a batch's key as a refusal names it, an empty key
 // spelled as YAML spells it so the item still names its key.
 func keyName(key string) string {
 	if key == "" {
@@ -572,7 +573,7 @@ var checkReferences = tableList(referencesFields, "{ id, context } tables",
 var placementFields = []field{
 	{"document", checkPath, true, "string", "the leaf, kb-root-relative, whose line takes the statement marker"},
 	{"line", checkPositive, true, "integer", "that line's number, 1-based"},
-	{"snippet", checkLine(false), true, "string", "a few distinctive words of that line, which only verify it"},
+	{"snippet", checkLine(false), true, "string", "a few distinctive words of that line, not the whole line: they only verify it"},
 }
 
 // editID is an edit's id: a node of any kind, so that one of another kind is
@@ -599,11 +600,21 @@ const scoreType = `number or "*pending*"`
 var (
 	addedTitle      = field{"title", checkLine(false), true, "string", "the node's title, one line, unique within its kind"}
 	editedTitle     = field{"title", checkLine(false), false, "string", "the node's new title, one line, unique within its kind"}
-	addedRationale  = field{"rationale", checkLine(true), true, "string", "the node's rationale, one line"}
-	editedRationale = field{"rationale", checkLine(true), false, "string", "the node's new rationale, one line"}
+	addedRationale  = field{"rationale", checkLine(true), true, "string", `the node's rationale, one line; "" for none`}
+	editedRationale = field{"rationale", checkLine(true), false, "string", `the node's new rationale, one line; "" for none`}
 	addedRigor      = field{"rigor", checkRigor, false, scoreType, `the node's rigor, in [0, 1] (default: "*pending*"); one given, "*pending*" included, marks it manually scored`}
 	editedRigor     = field{"rigor", checkRigor, false, scoreType, "the node's new rigor, in [0, 1]; one given, the standing value included, marks it manually scored"}
 )
+
+// withTraceAbout is the rationale key f of a claim or an analysis, its
+// description pointing a caller asking what would strengthen the node to
+// trace. A work's rationale has no such pointer: no scoring edge ends at a
+// work.
+func withTraceAbout(f field) field {
+	f.about += "; not what would strengthen the node: " +
+		argmark.Call("trace", map[string]any{"id": "<id>", "direction": "in", "sort": "contribution", "order": "ascending"}) + " answers that"
+	return f
+}
 
 // edgeSourceAbout and edgeTargetAbout describe the keys naming an edge's ends.
 const (
@@ -618,8 +629,8 @@ var judgedRelationsAbout = "where its relation is one a score run judges (" + st
 // opFields is every op's closed key vocabulary: an unknown key is refused,
 // never ignored, and a required key left out is refused by name.
 var opFields = map[string][]field{
-	EditClaim:    {kindEditID(kb.NodeKindClaim, kb.ClaimPrefix), editedTitle, editedRigor, editedRationale},
-	EditAnalysis: {kindEditID(kb.NodeKindAnalysis, kb.AnalysisPrefix), editedTitle, editedRigor, editedRationale},
+	EditClaim:    {kindEditID(kb.NodeKindClaim, kb.ClaimPrefix), editedTitle, editedRigor, withTraceAbout(editedRationale)},
+	EditAnalysis: {kindEditID(kb.NodeKindAnalysis, kb.AnalysisPrefix), editedTitle, editedRigor, withTraceAbout(editedRationale)},
 	EditExperiment: {kindEditID(kb.NodeKindExperiment, kb.ExperimentPrefix), editedTitle,
 		{"status", checkStatus, false, "string", "run or planned: whether the experiment has been run"}, editedRigor},
 	EditWork: {kindEditID(kb.NodeKindWork, kb.WorkPrefix),
@@ -639,8 +650,8 @@ var opFields = map[string][]field{
 		{"id", checkSourceID, true, "string", "the cited node's id"},
 		{"quote", checkLine(false), false, "string", "where the snippet is your paraphrase, the passage it paraphrases, verbatim from the cited statement; " +
 			"left out, the snippet is the node's id (naming form) or a verbatim span of its statement"}},
-	AddClaim:    append([]field{addedTitle, addedRationale, addedRigor}, placementFields...),
-	AddAnalysis: append([]field{addedTitle, addedRationale, addedRigor}, placementFields...),
+	AddClaim:    append([]field{addedTitle, withTraceAbout(addedRationale), addedRigor}, placementFields...),
+	AddAnalysis: append([]field{addedTitle, withTraceAbout(addedRationale), addedRigor}, placementFields...),
 	AddExperiment: append([]field{addedTitle, {"status", checkStatus, true, "string", "run or planned: whether the experiment has been run"},
 		addedRigor}, placementFields...),
 	AddWork: {
@@ -700,6 +711,7 @@ var opFields = map[string][]field{
 		{"statement-end", checkPositive, false, "", ""},
 		{"statement-line", checkPositive, false, "", ""},
 	},
+	CiteBareIDs: {},
 }
 
 // entry is one accepted values entry: its 1-based position, its op, and its
@@ -710,7 +722,7 @@ type entry struct {
 	Values map[string]any
 }
 
-// batch is an accepted values document: its entries, in order, and whether
+// batch is a batch as accepted: its entries, in order, and whether
 // it is a dry run and whether it commits.
 type batch struct {
 	entries []entry
@@ -744,11 +756,11 @@ func (e entry) restsOn(key string) []restsOnValue {
 	return out
 }
 
-// parseValues checks a values document — YAML, or JSON, which YAML reads —
+// parseValues checks a batch — YAML, or JSON, which YAML reads —
 // as op's: a batch of op's entries, or, where op is Batch, of entries each
 // naming its op under operation. This is the batch's shape phase: it returns
 // every entry, or every refusal and no entry, each op's own checks over its
-// entries included. A dry run is reported wherever the document states it.
+// entries included. A dry run is reported wherever the batch states it.
 func parseValues(data []byte, op string) (batch, []result.Item) {
 	top := []string{commitKey, dryRunKey, entryKey}
 	if op != Batch {
@@ -759,7 +771,7 @@ func parseValues(data []byte, op string) (batch, []result.Item) {
 	if !utf8.Valid(data) {
 		line := bytes.Count(data[:invalidUTF8At(data)], []byte("\n")) + 1
 		return batch{}, []result.Item{{Key: entryKey, Line: line, Allowed: top,
-			Detail: "is not valid UTF-8. A values document is read as strict UTF-8 and never decoded with replacement characters"}}
+			Detail: "is not valid UTF-8. A batch is read as strict UTF-8 and never decoded with replacement characters"}}
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -768,7 +780,7 @@ func parseValues(data []byte, op string) (batch, []result.Item) {
 	}
 	if doc.Kind == 0 || len(doc.Content) == 0 {
 		return batch{}, []result.Item{{Key: entryKey, Line: 1, Allowed: top,
-			Detail: "the document is empty; every op reads its values from the entry list"}}
+			Detail: "the input is empty; a batch is a table holding the entry list, which may be empty (entry: [])"}}
 	}
 	root := resolved(doc.Content[0])
 	if root.Kind != yaml.MappingNode {
@@ -797,13 +809,13 @@ func parseValues(data []byte, op string) (batch, []result.Item) {
 			}
 		default:
 			refusals = append(refusals, result.Item{Key: keyName(p[0].Value), Line: p[0].Line, Column: p[0].Column, Allowed: top,
-				Detail: "is not a key of a values document; its top-level keys are " + strings.Join(top, ", ")})
+				Detail: "is not a key of a batch; its top-level keys are " + strings.Join(top, ", ")})
 		}
 	}
 	switch {
 	case entries == nil:
 		return b, append(refusals, result.Item{Key: entryKey, Line: root.Line, Column: root.Column, Allowed: top,
-			Detail: "is missing; every op reads its values from the entry list"})
+			Detail: "is missing; a batch is a table holding the entry list, which may be empty (entry: [])"})
 	case entries.Kind != yaml.SequenceNode:
 		return b, append(refusals, result.Item{Key: entryKey, Line: entries.Line, Column: entries.Column, Allowed: top,
 			Detail: fmt.Sprintf("expected a list of tables, got %s", typename(entries))})

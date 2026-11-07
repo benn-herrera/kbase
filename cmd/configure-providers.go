@@ -25,12 +25,13 @@ import (
 type configureProvidersOptions struct {
 	providerOptions
 
-	Name            string
-	BaseURL         string
-	API             string
-	DecisionsFlavor string
-	Remove          bool
-	Global, Local   bool
+	Name        string
+	BaseURL     string
+	API         string
+	DecisionAPI string
+	Remove      bool
+	// Layer is the --layer flag, "" where it names none.
+	Layer string
 
 	// WorkDir is where the repository search started; the worktree refusal
 	// names it.
@@ -59,10 +60,10 @@ func configureProviders(ctx context.Context, opts configureProvidersOptions) (st
 	if items := providerArgumentRefusals(opts); items != nil {
 		return refused(nil, items...)
 	}
-	if refusal := config.ProviderEntryRefusals(name, opts.BaseURL, opts.API, opts.DecisionsFlavor); refusal != nil {
+	if refusal := config.ProviderEntryRefusals(name, opts.BaseURL, opts.API, opts.DecisionAPI); refusal != nil {
 		return refused(nil, refusal...)
 	}
-	dir, layer, items, err := configureLocation(opts.providerOptions, opts.Global, opts.Local, opts.WorkDir)
+	dir, layer, items, err := configureLocation(opts.providerOptions, opts.Layer, opts.WorkDir)
 	if err != nil {
 		return failed(nil, err)
 	}
@@ -83,7 +84,7 @@ func configureProviders(ctx context.Context, opts configureProvidersOptions) (st
 		}
 		outcome, written, act = toolresult.Done, []string{path}, "removed"
 	} else {
-		wrote, err := config.SetProvider(path, config.Provider{Name: name, BaseURL: opts.BaseURL, API: opts.API, DecisionsFlavor: opts.DecisionsFlavor})
+		wrote, err := config.SetProvider(path, config.Provider{Name: name, BaseURL: opts.BaseURL, API: opts.API, DecisionAPI: opts.DecisionAPI})
 		if err != nil {
 			return failed(fields, err)
 		}
@@ -95,8 +96,8 @@ func configureProviders(ctx context.Context, opts configureProvidersOptions) (st
 
 	stack, err := loadProvidersStack(dir, layer, opts.StoredKeys)
 	if err != nil {
-		return outcome, append(fields, toolresult.Field{Key: "next", Value: []string{fmt.Sprintf(
-			"the provider is %s, but the configuration did not reload: %v; %s", act, err, argmark.Call("show-config", nil))}},
+		return outcome, toolresult.WithWarnings(append(fields, toolresult.Field{Key: "next", Value: []string{fmt.Sprintf(
+			"the provider is %s, but the configuration did not reload: %v; %s", act, err, argmark.Call("show-config", nil))}}),
 			warningsField(nil))
 	}
 	warnings := warningsField(warnFaults(opts.Stderr, stack.Faults))
@@ -104,9 +105,9 @@ func configureProviders(ctx context.Context, opts configureProvidersOptions) (st
 		if next := removalNext(opts, stack, name); next != nil {
 			fields = append(fields, toolresult.Field{Key: "next", Value: next})
 		}
-		return outcome, append(fields, warnings)
+		return outcome, toolresult.WithWarnings(fields, warnings)
 	}
-	return outcome, append(append(fields, dialWrittenProvider(ctx, opts, stack, name)...), warnings)
+	return outcome, toolresult.WithWarnings(append(fields, dialWrittenProvider(ctx, opts, stack, name)...), warnings)
 }
 
 // loadProvidersStack loads, over stored, the configuration configure-providers
@@ -131,7 +132,7 @@ func providerArgumentRefusals(opts configureProvidersOptions) []toolresult.Item 
 	}
 	var items []toolresult.Item
 	for _, f := range []struct{ flag, value string }{
-		{"base-url", opts.BaseURL}, {"api", opts.API}, {"decisions-flavor", opts.DecisionsFlavor},
+		{"base-url", opts.BaseURL}, {"api", opts.API}, {"decision-api", opts.DecisionAPI},
 	} {
 		if f.value != "" {
 			items = append(items, toolresult.Item{Check: toolresult.CheckUsage, Key: argmark.Flag(f.flag),
@@ -153,8 +154,8 @@ func removalNext(opts configureProvidersOptions, stack config.Loaded, name strin
 	var next []string
 	for _, rr := range config.RolesNaming(stack.Cfg, name) {
 		args := map[string]any{string(rr.Role): "<provider>/<model>"}
-		if flag := locationFlag(opts.Global, opts.Local); flag != "" {
-			args[flag] = true
+		if opts.Layer != "" {
+			args["layer"] = opts.Layer
 		}
 		next = append(next, fmt.Sprintf("the %s role's reference %s names the removed provider; %s replaces it",
 			rr.Role, rr.Reference, argmark.Call("configure-models", args)))
@@ -208,10 +209,10 @@ func dialWrittenProvider(ctx context.Context, opts configureProvidersOptions, st
 // configureLocationHelp is where a configure command writes, as both
 // commands' help states it.
 var configureLocationHelp = `It writes into the directory --config-dir or KBASE_CONFIG_DIR names, else
-~/.config/kbase. ` + argmark.Flag("local") + ` writes into <repository>/` + config.RepositoryDirName + ` instead (check: worktree;
-remedy: git init); ` + argmark.Flag("global") + ` writes into ~/.config/kbase even where
-KBASE_CONFIG_DIR is set. ` + argmark.Flag("global") + ` with ` + argmark.Flag("local") + `, or either with --config-dir, is
-refused.`
+~/.config/kbase. ` + argmark.FlagValue("layer", config.LayerSourceRepository) + ` writes into <repository>/` + config.RepositoryDirName + ` instead (check: worktree;
+remedy: git init); ` + argmark.FlagValue("layer", config.LayerSourceGlobal) + ` writes into ~/.config/kbase even where
+KBASE_CONFIG_DIR is set. ` + argmark.Flag("layer") + ` with --config-dir is refused, and so is a layer
+other than those two.`
 
 // configureMCPNote is both configure commands' and show-config's MCP note: the
 // location the server's own launch fixes.
@@ -219,12 +220,11 @@ const configureMCPNote = `--config-dir and KBASE_CONFIG_DIR are set where the se
 call cannot change them.`
 
 var (
-	configureProvidersFlagBaseURL string
-	configureProvidersFlagAPI     string
-	configureProvidersFlagFlavor  string
-	configureProvidersFlagRemove  bool
-	configureProvidersFlagGlobal  bool
-	configureProvidersFlagLocal   bool
+	configureProvidersFlagBaseURL     string
+	configureProvidersFlagAPI         string
+	configureProvidersFlagDecisionAPI string
+	configureProvidersFlagRemove      bool
+	configureProvidersFlagLayer       string
 )
 
 func configureProvidersCommand() *cobra.Command {
@@ -237,9 +237,8 @@ func configureProvidersCommand() *cobra.Command {
 is folded to lowercase and matches a provider whatever its case.
 
 ` + argmark.Flag("base-url") + ` sets the provider's base URL, an absolute http or https URL carrying
-no credentials (a key is stored with kbase auth add). ` + argmark.Flag("api") + ` (anthropic, the
-default, or openai) and ` + argmark.Flag("decisions-flavor") + ` (systemone, the default, or
-decisions) set its chat protocol and its decision surface where given. Every
+no credentials (a key is stored with kbase auth add). ` + argmark.Flag("api") + ` and
+` + argmark.Flag("decision-api") + ` set its chat protocol and its decision API where given. Every
 other field of the provider's table and every other byte of the file stand; a
 provider already holding the values given is unchanged. ` + argmark.Flag("remove") + ` removes the
 provider's table, and a provider with no table in the file is refused (check:
@@ -256,8 +255,9 @@ outcome done. Where the dial fails, the written provider does not load, or a
 removal leaves a role or a stored key naming a provider that no layer this call
 writes into or reads beneath still holds, next gives the steps that follow.
 
-` + configureLocationHelp + ` The result gives "provider"; "layer" (global,
-repository, explicit or environment); "written", the files written; "models"
+` + configureLocationHelp + ` The result gives "provider"; "layer" (global or
+repository, or explicit or environment where --config-dir or KBASE_CONFIG_DIR
+chose it); "written", the files written; "models"
 and "next" as above; and "warnings": one item per configuration fault in the
 files this call writes into or reads beneath, as ` + argmark.Call("models", nil) + ` reports them, "path"
 the file or directory it is against, "detail" what is wrong. The written
@@ -284,10 +284,9 @@ outcome from the write on; a refusal or a write that fails carries none.`,
 				Name:            args[0],
 				BaseURL:         configureProvidersFlagBaseURL,
 				API:             configureProvidersFlagAPI,
-				DecisionsFlavor: configureProvidersFlagFlavor,
+				DecisionAPI:     configureProvidersFlagDecisionAPI,
 				Remove:          configureProvidersFlagRemove,
-				Global:          configureProvidersFlagGlobal,
-				Local:           configureProvidersFlagLocal,
+				Layer:           configureProvidersFlagLayer,
 				WorkDir:         wd,
 				StoredKeys:      readStoredKeys(storeDir),
 				Stdout:          cmd.OutOrStdout(),
@@ -304,12 +303,18 @@ outcome from the write on; a refusal or a write that fails carries none.`,
 	}
 	cmd.Flags().StringVar(&configureProvidersFlagBaseURL, "base-url", "",
 		"the provider's base URL, an absolute http or https URL; required unless "+argmark.Flag("remove"))
+	mcp.Brief(cmd, "base-url", "the provider's base URL; required unless "+argmark.Flag("remove"))
 	cmd.Flags().StringVar(&configureProvidersFlagAPI, "api", "",
-		"the provider's chat protocol, anthropic or openai (unset: anthropic)")
-	cmd.Flags().StringVar(&configureProvidersFlagFlavor, "decisions-flavor", "",
-		"the decision surface the provider's server speaks, systemone or decisions (unset: systemone)")
+		"the provider's chat protocol, "+strings.Join(config.ProviderAPIs, " or ")+" (unset: "+config.ProviderAPIAnthropic+")")
+	mcp.EnumFlag(cmd.Flags().Lookup("api"), config.ProviderAPIs...)
+	mcp.Brief(cmd, "api", "the provider's chat protocol")
+	cmd.Flags().StringVar(&configureProvidersFlagDecisionAPI, "decision-api", "",
+		"the decision API the provider's server speaks, "+strings.Join(config.DecisionAPIs, " or ")+" (unset: "+config.DecisionAPISystemOne+")")
+	mcp.EnumFlag(cmd.Flags().Lookup("decision-api"), config.DecisionAPIs...)
+	mcp.Brief(cmd, "decision-api", "the provider's decision API")
 	cmd.Flags().BoolVar(&configureProvidersFlagRemove, "remove", false, "remove the provider instead of writing it")
-	registerLocationFlags(cmd, &configureProvidersFlagGlobal, &configureProvidersFlagLocal)
-	return mcp.Notes(mcp.DescribePositional(cmd, "provider", "the provider to write or remove, by its name"),
-		configureMCPNote, "")
+	mcp.Brief(cmd, "remove", "remove the provider")
+	registerLayerFlag(cmd, &configureProvidersFlagLayer)
+	mcp.DescribePositional(cmd, "provider", "the provider to write or remove, by its name")
+	return mcp.Notes(mcp.Brief(cmd, "provider", "the provider's name"), configureMCPNote, "")
 }

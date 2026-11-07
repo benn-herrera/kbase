@@ -12,6 +12,7 @@ import (
 
 	"kbase/internal/argmark"
 	"kbase/internal/kb"
+	"kbase/internal/kbwrite"
 	"kbase/internal/log"
 	"kbase/internal/query"
 	"kbase/internal/result"
@@ -233,7 +234,7 @@ func opened(l *Ledger, inv Invocation, items []query.Item) error {
 }
 
 // stopped is the record a cancelled run closes on: the walk's first item that
-// carries no attempt — the one the run stopped before — named as the document
+// carries no attempt — the one the run stopped before — named as the result
 // names items, and an empty record where every item of the walk carries one.
 func stopped(walked []query.Item, l *Ledger) result.Record {
 	for _, it := range walked {
@@ -334,6 +335,13 @@ func landValues(open func(kbRoot string) (*kb.Source, error), root string, value
 		return errs
 	}
 	defer release()
+	// Deferred after release, so it runs first: the landing's kb-temp goes
+	// while the lock is still held.
+	defer func() {
+		if err := kbwrite.RemoveTemps(root); err != nil {
+			lg.Warn("kb-temp outlived the landing; the next writer removes it", "kb-root", root, "error", err)
+		}
+	}()
 	ix, g, err := graphAt(open, root)
 	if err != nil {
 		for i := range values {

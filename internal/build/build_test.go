@@ -722,6 +722,44 @@ func TestDirtRefusedUnlessAnInterruptedStageAccountsForIt(t *testing.T) {
 	}
 }
 
+// TestBuildStartClearsKBTemp: kb-root/.index/kb-temp/ does not stand after a
+// build; a temp a killed write left there is removed at a resume's start, and
+// is no dirt that refuses it; a file of the user's shaped like a temp elsewhere
+// in kb-root/ survives the resume.
+func TestBuildStartClearsKBTemp(t *testing.T) {
+	f := newFixture(t)
+	opts := f.options()
+	opts.Through = "spine-seed"
+	if outcome, fields := f.build(t, opts); outcome != result.Bounded {
+		t.Fatalf("build = %s %v", outcome, fields)
+	}
+	kbRoot := filepath.Join(f.repo, kb.KBDir)
+	tempDir := filepath.Join(kbRoot, kb.TempDir)
+	if _, err := os.Lstat(tempDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s stands after the build (%v), want it removed", tempDir, err)
+	}
+	leftover := filepath.Join(tempDir, ".entry-point.md.3k9x2a.tmp")
+	notes := filepath.Join(kbRoot, ".notes.old.tmp")
+	// As a killed write leaves it: the temp beside the ignore file its write
+	// made first.
+	storetest.WriteFile(t, filepath.Join(tempDir, ".gitignore"), "*\n")
+	storetest.WriteFile(t, leftover, "torn")
+	storetest.WriteFile(t, notes, "the user's\n")
+	if _, err := f.ledger(t).Commit("the user's notes", ""); err != nil {
+		t.Fatal(err)
+	}
+	opts.Through = ""
+	if outcome, fields := f.build(t, resuming(opts)); outcome != result.Done {
+		t.Fatalf("a resume over a leftover temp = %s %v, want done", outcome, fields)
+	}
+	if _, err := os.Lstat(tempDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s stands after the resume (%v), want it removed", tempDir, err)
+	}
+	if data, err := os.ReadFile(notes); err != nil || string(data) != "the user's\n" {
+		t.Errorf("%s = %q (%v), want it untouched", notes, data, err)
+	}
+}
+
 // TestSpineStampsTheFormat: the spine's boundary commits the format stamp
 // file holding the format version; a resume over a KB a newer kbase stamped
 // is refused, naming the format.
@@ -891,8 +929,8 @@ func TestKillAndResume(t *testing.T) {
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
-	if restored, _ := storetest.Field(fields, "restored").([]string); !slices.Equal(restored, dirty) {
-		t.Errorf("restored %q, want the interrupted stage's dirt %q", restored, dirty)
+	if reset, _ := storetest.Field(fields, "reset").([]string); !slices.Equal(reset, dirty) {
+		t.Errorf("reset %q, want the interrupted stage's dirt %q", reset, dirty)
 	}
 	sameModuloIDs(t, f.repo, reference(t))
 }
@@ -1629,15 +1667,15 @@ func TestTrailOutOfOrderRefused(t *testing.T) {
 		!strings.Contains(items[0].Detail, "depends-attributed") || !strings.Contains(items[0].Detail, "claims-culled") {
 		t.Fatalf("a resume over an out-of-order trail = %s %+v, want refused naming both stages", outcome, items)
 	}
-	if restored := storetest.Field(fields, "restored"); restored != nil {
-		t.Errorf("the refusal restored %v", restored)
+	if reset := storetest.Field(fields, "reset"); reset != nil {
+		t.Errorf("the refusal restored %v", reset)
 	}
 	if after := snapshot(t, f.repo); !maps.Equal(after, before) {
 		t.Errorf("the refusal touched the owned paths")
 	}
 }
 
-// resumeArgv is the words a resume — the recorded build call a document
+// resumeArgv is the words a resume — the recorded build call a result
 // carries — holds after the command; nil where it holds no build call.
 func resumeArgv(resume string) []string {
 	calls := argmark.Calls(resume)

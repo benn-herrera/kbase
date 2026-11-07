@@ -14,7 +14,6 @@ import (
 	"sync"
 
 	"kbase/internal/asks"
-	"kbase/internal/atomicfile"
 	"kbase/internal/buildstore"
 	"kbase/internal/claimgraph"
 	"kbase/internal/docgraph"
@@ -22,6 +21,7 @@ import (
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
+	"kbase/internal/kbwrite"
 	"kbase/internal/latex/pandoc"
 	"kbase/internal/records"
 	"kbase/internal/result"
@@ -99,10 +99,10 @@ var referenceWrapperRE = regexp.MustCompile(`\[([^\[\]]*<a\s[^<>]*\bdata-referen
 // document's heading.
 func unwrapReferences(text string) string { return referenceWrapperRE.ReplaceAllString(text, "$1") }
 
-// unwrapTree rewrites each document under dir that holds a wrapped
+// unwrapTree rewrites each document under kbRoot that holds a wrapped
 // cross-reference with it unwrapped.
-func unwrapTree(dir string) error {
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+func unwrapTree(kbRoot string) error {
+	return filepath.WalkDir(kbRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || filepath.Ext(p) != ".md" {
 			return err
 		}
@@ -111,7 +111,7 @@ func unwrapTree(dir string) error {
 			return err
 		}
 		if text := unwrapReferences(string(data)); text != string(data) {
-			return atomicfile.Write(p, []byte(text), nil)
+			return kbwrite.Inside(kbRoot, p, []byte(text))
 		}
 		return nil
 	})
@@ -248,16 +248,23 @@ func (w *walk) ensureRecords() error {
 }
 
 // firstDifference is the first path, in sorted order, whose bytes under dir
-// and in files differ, or that only one of them holds.
+// and in files differ, or that only one of them holds. kb.TempDir under dir,
+// which git never holds, is not compared.
 func firstDifference(dir string, files map[string][]byte) (string, bool, error) {
 	on := map[string][]byte{}
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
 		}
 		rel, err := filepath.Rel(dir, p)
 		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			if filepath.ToSlash(rel) == kb.TempDir {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		b, err := os.ReadFile(p)
 		on[filepath.ToSlash(rel)] = b
@@ -389,10 +396,6 @@ func stampReadiness(w *walk) (result.Record, error) {
 // source is the KB the walk has built so far, as the loader opens it.
 func (w *walk) source() (*kb.Source, error) { return kbload.Open(w.kbRoot) }
 
-// overviewAsks is how many times the overview passage is asked for: once,
-// and once more where the reply cannot be used.
-const overviewAsks = 2
-
 // overviewRejected is the judgement of an overview reply the document cannot
 // take: one holding lines a passage may not, or empty.
 const overviewRejected asks.Outcome = "rejected"
@@ -433,7 +436,7 @@ func overview(w *walk) (result.Record, error) {
 		wg               sync.WaitGroup
 	)
 	err = w.passage(w.ctx, &wg, func(ask func(context.Context, string, []string, int) (string, error)) func(error) {
-		for attempt := 1; attempt <= overviewAsks; attempt++ {
+		for attempt := 1; attempt <= asks.MaxAsks; attempt++ {
 			reply, err := ask(w.ctx, ex.Text, rejected, attempt)
 			if err != nil {
 				askErr = err
@@ -474,5 +477,5 @@ func overview(w *walk) (result.Record, error) {
 	if err != nil {
 		return rec, err
 	}
-	return rec, atomicfile.Write(filepath.Join(w.kbRoot, kbdocs.OverviewFile), []byte(text), nil)
+	return rec, kbwrite.Inside(w.kbRoot, filepath.Join(w.kbRoot, kbdocs.OverviewFile), []byte(text))
 }

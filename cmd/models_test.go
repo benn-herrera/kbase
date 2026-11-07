@@ -35,11 +35,11 @@ func catalogue(ids ...string) []model.ModelInfo {
 	return infos
 }
 
-// result is what one runModels invocation produced: its result document,
+// result is what one runModels invocation produced: its result,
 // stdout as written, stderr, the exit code, and the endpoints the client
 // factory was asked to build.
 type result struct {
-	doc       resultDoc
+	doc       parsedResult
 	stdout    string
 	stderr    string
 	code      int
@@ -77,7 +77,7 @@ func run(t *testing.T, opts modelsOptions, client *modeltest.MockClient) result 
 	if err != nil {
 		t.Fatalf("runModels: %v", err)
 	}
-	return result{doc: checkDocument(t, "models", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code, endpoints: seen}
+	return result{doc: checkResult(t, "models", stdout.String()), stdout: stdout.String(), stderr: stderr.String(), code: code, endpoints: seen}
 }
 
 // TestVerbStreamGuard: the guard the verbs share still names the verb that
@@ -156,7 +156,7 @@ func TestRunModelsSortedOutput(t *testing.T) {
 // the endpoint its own entry declares.
 func TestRunModelsCarriesTheDecisionSurface(t *testing.T) {
 	onDecisions := provider("deciding", "http://deciding.example/v1")
-	onDecisions.DecisionsFlavor = config.FlavorDecisions
+	onDecisions.DecisionAPI = config.DecisionAPIDecisions
 
 	got := run(t, modelsOptions{providerOptions: providerOptions{
 		Providers: config.Providers{"deciding": onDecisions},

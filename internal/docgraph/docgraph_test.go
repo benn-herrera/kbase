@@ -42,8 +42,8 @@ func TestRelative(t *testing.T) {
 
 func TestDistinct(t *testing.T) {
 	taken := map[string]bool{}
-	got := []string{distinct("intro", taken, 1), distinct("intro", taken, 2), distinct("index", taken, 3), distinct("tools", taken, 4)}
-	want := []string{"intro", "intro-2", "index-3", "tools-4"}
+	got := []string{distinct("intro", taken, 1), distinct("intro", taken, 2), distinct("index", taken, 3), distinct("axioms", taken, 4), distinct("tools", taken, 5)}
+	want := []string{"intro", "intro-2", "index-3", "axioms-4", "tools"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("distinct #%d = %q, want %q", i, got[i], want[i])

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -89,7 +90,7 @@ func commitKB(t *testing.T, repo string) {
 }
 
 // updateFormatKB commits repo's kb-root/ and runs update-format over it,
-// failing t unless it succeeds; it returns the result document.
+// failing t unless it succeeds; it returns the result.
 func updateFormatKB(t *testing.T, repo string) string {
 	t.Helper()
 	commitKB(t, repo)
@@ -107,10 +108,10 @@ func updateFormatKB(t *testing.T, repo string) string {
 func TestVerifyRefusesAMalformedRecord(t *testing.T) {
 	repo := maintenanceRepo(t)
 	values := t.TempDir()
-	run := func(want string, args ...string) resultDoc {
+	run := func(want string, args ...string) parsedResult {
 		t.Helper()
 		out, code := kbase(t, repo, args...)
-		d := checkDocument(t, args[0], out)
+		d := checkResult(t, args[0], out)
 		if d.Outcome != want || code != toolresult.ExitCode(want) {
 			t.Fatalf("%q: outcome %s, exit %d; want %s\n%s", args, d.Outcome, code, want, out)
 		}
@@ -141,7 +142,7 @@ func TestVerifyRefusesAMalformedRecord(t *testing.T) {
 	if code != toolresult.ExitCode("refused") {
 		t.Fatalf("verify: exit %d, want refused\n%s", code, out)
 	}
-	d := checkDocument(t, "verify", out)
+	d := checkResult(t, "verify", out)
 	items := d.items("refusals")
 	if d.Outcome != "refused" || len(items) != 1 {
 		t.Fatalf("outcome %q with %d refusals, want refused with one:\n%s", d.Outcome, len(items), out)
@@ -160,12 +161,12 @@ func TestVerifyRefusesAMalformedRecord(t *testing.T) {
 }
 
 // TestUpdateFormatAndVerifyVerbs: a hosted claim whose register page stands
-// nowhere is a refused verify naming the page, remedy the empty write batch;
-// update-format over the 4.0.0 KB renders it, writes the absent maintained
-// documents whole and leaves the entry point and a bare id as they stand; a
-// second run over the committed result changes nothing; verify then finds only
-// the bare id, remedy the add-citation entry naming it as snippet, and once
-// that entry has run, nothing.
+// nowhere is a refused verify naming the page, remedy the empty write batch,
+// and a bare id is refused too, remedy update-format; update-format over the
+// current-format KB renders the page, writes the absent maintained documents whole,
+// leaves the entry point as it stands and cites the bare id, listing it; a
+// second run over the committed result changes nothing and lists no bare id;
+// verify then finds nothing.
 func TestUpdateFormatAndVerifyVerbs(t *testing.T) {
 	repo := maintenanceRepo(t)
 	rigor := 0.5
@@ -176,41 +177,143 @@ func TestUpdateFormatAndVerifyVerbs(t *testing.T) {
 	sub := filepath.Join(repo, kb.KBDir)
 
 	code, out := runMaintenance(t, runVerify, repo)
-	if d := parseResult(t, out); code != 1 || d.Outcome != "refused" || !hasItem(d.items("refusals"), index.CheckRegisterFreshness, kb.RegisterFile, atTheCommandLine(index.EmptyBatchRemedy)) {
-		t.Errorf("verify before update-format: exit %d, want the missing %s refused with remedy %q\n%s", code, kb.RegisterFile, atTheCommandLine(index.EmptyBatchRemedy), out)
+	if d := parseResult(t, out); code != 1 || d.Outcome != "refused" || !hasItem(d.items("refusals"), index.CheckRegisterFreshness, kb.RegisterFile, atTheCommandLine(index.EmptyBatchRemedy)) ||
+		!hasItem(d.items("refusals"), index.CheckBareID, "a.md", atTheCommandLine(index.UpdateFormatRemedy)) {
+		t.Errorf("verify before update-format: exit %d, want the missing %s refused with remedy %q and the bare id with remedy %q\n%s",
+			code, kb.RegisterFile, atTheCommandLine(index.EmptyBatchRemedy), atTheCommandLine(index.UpdateFormatRemedy), out)
 	}
 	commitKB(t, repo)
 	code, out = runMaintenance(t, runUpdateFormat, sub)
-	d := checkDocument(t, "update-format", out)
-	if code != 0 || d.Outcome != "done" || !slices.Equal(anyStrings(d.Values["written"]), []string{kb.AgentsFile, kb.ConventionsFile, kb.ClaimGraphFile, kb.RegisterFile}) {
-		t.Errorf("first update-format: exit %d, want the register page, the sheet and the two maintained documents written\n%s", code, out)
+	d := checkResult(t, "update-format", out)
+	if code != 0 || d.Outcome != "done" || !slices.Equal(anyStrings(d.Values["written"]), []string{kb.AgentsFile, kb.ConventionsFile, "a.md", kb.ClaimGraphFile, kb.RegisterFile}) {
+		t.Errorf("first update-format: exit %d, want the register page, the sheet, the two maintained documents and the cited leaf written\n%s", code, out)
 	}
-	if slices.ContainsFunc(d.Keys, func(k string) bool { return k == "migration" || k == "bare-ids" }) {
-		t.Errorf("update-format over a 4.0.0 KB carries the conversion's keys: %q", d.Keys)
+	if slices.Contains(d.Keys, "migration") {
+		t.Errorf("update-format over the current-format KB carries the conversion's record: %q", d.Keys)
+	}
+	if bare := d.items("bare-ids"); len(bare) != 1 || bare[0]["path"] != "a.md" || bare[0]["line"] != 7 || bare[0]["id"] != "clm-aaaaaa" {
+		t.Errorf("bare-ids = %v, want the one bare id at a.md:7", bare)
 	}
 	if b, _ := os.ReadFile(filepath.Join(sub, kb.EntryPointFile)); string(b) != maintenanceEntryPoint {
 		t.Errorf("update-format left the entry point as\n%s\nwant it as it stood:\n%s", b, maintenanceEntryPoint)
 	}
-	if b, _ := os.ReadFile(filepath.Join(sub, "a.md")); string(b) != leaf {
-		t.Errorf("update-format rewrote the leaf holding a bare id:\n%s", b)
+	if b, _ := os.ReadFile(filepath.Join(sub, "a.md")); string(b) != strings.Replace(leaf, "As clm-aaaaaa", `As [A Result](a.md#a "clm-aaaaaa")`, 1) {
+		t.Errorf("update-format left the leaf holding a bare id as\n%s\nwant the id its naming-form citation", b)
 	}
 	commitKB(t, repo)
-	if code, out := runMaintenance(t, runUpdateFormat, repo); code != 0 || !strings.Contains(out, `outcome: "unchanged"`) {
-		t.Errorf("second update-format: exit %d\n%s", code, out)
-	}
-	code, out = runMaintenance(t, runVerify, repo)
-	if items := parseResult(t, out).items("refusals"); code != 1 || len(items) != 1 || items[0]["check"] != "bare-id" ||
-		items[0]["remedy"] != "cite the node: `printf 'entry:\\n  - document: a.md\\n    id: clm-aaaaaa\\n    line: 7\\n    operation: add-citation\\n    snippet: clm-aaaaaa\\n' | kbase write`, which replaces the id with its naming-form citation" {
-		t.Errorf("verify after update-format: exit %d, want the bare id alone, its remedy the add-citation entry\n%s", code, out)
-	}
-	if d := writeBatch(t, repo, "write", "entry:\n  - document: a.md\n    id: clm-aaaaaa\n    line: 7\n    operation: add-citation\n    snippet: clm-aaaaaa\n", false); d.Outcome != toolresult.Done {
-		t.Fatalf("the bare id's remedy: %s\n%v", d.Outcome, d.Values)
+	code, out = runMaintenance(t, runUpdateFormat, repo)
+	if d := parseResult(t, out); code != 0 || d.Outcome != toolresult.Unchanged || !slices.Contains(d.Keys, "bare-ids") || len(d.items("bare-ids")) != 0 {
+		t.Errorf("second update-format: exit %d, want unchanged with bare-ids []\n%s", code, out)
 	}
 	if code, out := runMaintenance(t, runVerify, repo); code != 0 {
-		t.Errorf("verify after the bare id's remedy: exit %d, want done\n%s", code, out)
+		t.Errorf("verify after update-format: exit %d, want done\n%s", code, out)
 	}
 	if code, out := runMaintenance(t, runVerify, t.TempDir()); code != 1 || !strings.Contains(out, "not inside a git worktree") {
 		t.Errorf("verify outside a worktree: exit %d\n%s", code, out)
+	}
+}
+
+// TestUpdateFormatCitesEveryBareID: over a current-format KB, update-format
+// cites each bare id — a claim's twice on one line and once in a heading, a
+// link whose whole text is the id, a work's and an axiom's — each in the
+// naming form, the whole-text link replaced whole; an id that is only part of
+// a link's text stays; a link into the heading the citing moved is
+// re-pointed; bare-ids lists each id cited; verify then finds nothing, and a
+// second run is unchanged.
+func TestUpdateFormatCitesEveryBareID(t *testing.T) {
+	repo := maintenanceRepo(t)
+	files := recordFiles(kb.Graph{
+		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A Result", Rationale: "Shown."}},
+		Works:  []kb.WorkNode{{ID: "wrk-aaaaaa", Label: "Work2020", Title: "A Work", Rationale: "Cited."}},
+		Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "Closure"}},
+	})
+	files["kb-root/"+kb.EntryPointFile] = "# KB\n\n- [a](a.md)\n- [b](b.md)\n- [axioms](axioms.md)\n"
+	files["kb-root/axioms.md"] = "[↑ KB](entry-point.md)\n\n### Axiom S1: Closure" + kb.StatementMarker("axm-s10000") + "\n"
+	files["kb-root/a.md"] = "[↑ KB](entry-point.md)\n\n# A\n\n## On clm-aaaaaa\n\nThe result." + kb.StatementMarker("clm-aaaaaa") + "\n\n" +
+		"Both clm-aaaaaa and clm-aaaaaa, as [clm-aaaaaa](b.md) says, rest on wrk-aaaaaa and axm-s10000.\n\n" +
+		"[the claim clm-aaaaaa](b.md) stays.\n"
+	files["kb-root/b.md"] = "[↑ KB](entry-point.md)\n\n# B\n\nSee [the heading](a.md#on-clm-aaaaaa).\n"
+	writeRepo(t, repo, files)
+	commitKB(t, repo)
+
+	code, out := runMaintenance(t, runUpdateFormat, repo)
+	d := checkResult(t, "update-format", out)
+	if code != 0 || d.Outcome != toolresult.Done {
+		t.Fatalf("update-format: exit %d, want done\n%s", code, out)
+	}
+	var listed []string
+	for _, item := range d.items("bare-ids") {
+		listed = append(listed, fmt.Sprintf("%v:%v %v", item["path"], item["line"], item["id"]))
+	}
+	if want := []string{"a.md:5 clm-aaaaaa", "a.md:9 clm-aaaaaa", "a.md:9 clm-aaaaaa", "a.md:9 clm-aaaaaa", "a.md:9 wrk-aaaaaa", "a.md:9 axm-s10000"}; !slices.Equal(listed, want) {
+		t.Errorf("bare-ids = %q, want %q", listed, want)
+	}
+	tr := tree(t, repo)
+	a, b := tr["kb-root/a.md"], tr["kb-root/b.md"]
+	lines := kb.SplitLines(a)
+	if bare := kb.TextBareIDs(a); len(bare) != 0 {
+		t.Errorf("a.md still holds bare ids %+v:\n%s", bare, a)
+	}
+	cited := map[string]int{}
+	for _, c := range kb.TextCitations(a) {
+		if c.Line == 8 {
+			cited[c.Title]++
+		}
+	}
+	if want := map[string]int{"clm-aaaaaa": 3, "wrk-aaaaaa": 1, "axm-s10000": 1}; !maps.Equal(cited, want) {
+		t.Errorf("a.md:9 cites %v, want %v:\n%s", cited, want, lines[8])
+	}
+	if strings.Contains(a, "[clm-aaaaaa](b.md)") || !strings.Contains(a, "[the claim clm-aaaaaa](b.md) stays.") {
+		t.Errorf("a.md: want the whole-text link replaced and the link holding the id in its text left standing:\n%s", a)
+	}
+	anchor := kb.HeadingAnchors(a)[4]
+	if anchor == "" || anchor == "on-clm-aaaaaa" || !strings.Contains(b, "(a.md#"+anchor+")") {
+		t.Errorf("b.md's link into the cited heading, now anchored %q, was not re-pointed:\n%s", anchor, b)
+	}
+	if code, out := runMaintenance(t, runVerify, repo); code != 0 {
+		t.Errorf("verify after update-format: exit %d, want done\n%s", code, out)
+	}
+	commitKB(t, repo)
+	code, out = runMaintenance(t, runUpdateFormat, repo)
+	if d := parseResult(t, out); code != 0 || d.Outcome != toolresult.Unchanged || len(d.items("bare-ids")) != 0 {
+		t.Errorf("second update-format: exit %d, want unchanged with no bare id\n%s", code, out)
+	}
+}
+
+// TestUpdateFormatRefusesAnUncitableBareIDBeforeWriting: a bare id whose
+// node's title has an unbalanced bracket, so that its naming-form citation
+// would not read as one link, refuses update-format at id, naming the line,
+// and nothing is written, though the save had a summary page to render.
+func TestUpdateFormatRefusesAnUncitableBareIDBeforeWriting(t *testing.T) {
+	repo := maintenanceRepo(t)
+	files := recordFiles(kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A [Result", Rationale: "Shown."}}})
+	files["kb-root/a.md"] = "[↑ KB](entry-point.md)\n\n# A\n\nThe result." + kb.StatementMarker("clm-aaaaaa") + "\n\nAs clm-aaaaaa shows.\n"
+	writeRepo(t, repo, files)
+	commitKB(t, repo)
+	before := tree(t, repo)
+
+	code, out := runMaintenance(t, runUpdateFormat, repo)
+	items := parseResult(t, out).items(toolresult.RefusalsKey)
+	if code != 1 || len(items) != 1 || items[0]["key"] != "id" || items[0]["path"] != "a.md" || items[0]["line"] != 7 ||
+		!strings.Contains(items[0]["detail"].(string), "clm-aaaaaa") {
+		t.Errorf("update-format: exit %d, want one refusal at id naming a.md:7 and clm-aaaaaa\n%s", code, out)
+	}
+	if !maps.Equal(before, tree(t, repo)) {
+		t.Error("a refused update-format wrote to the repository")
+	}
+}
+
+// TestUpdateFormatDoesNotRefuseAnUnmarkedNodesBareID: a bare id of a hosted
+// node with no statement marker, which verify reports, does not refuse
+// update-format.
+func TestUpdateFormatDoesNotRefuseAnUnmarkedNodesBareID(t *testing.T) {
+	repo := maintenanceRepo(t)
+	files := recordFiles(kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A Result", Rationale: "Shown."}}})
+	files["kb-root/a.md"] = "[↑ KB](entry-point.md)\n\n# A\n\nAs clm-aaaaaa shows.\n"
+	writeRepo(t, repo, files)
+	commitKB(t, repo)
+	if code, out := runMaintenance(t, runUpdateFormat, repo); code != 0 {
+		t.Errorf("update-format: exit %d, want done\n%s", code, out)
 	}
 }
 
@@ -263,7 +366,7 @@ func TestUpdateFormatRefusesADirtyKBRoot(t *testing.T) {
 	commitKB(t, repo)
 	writeRepo(t, repo, map[string]string{"kb-root/a.md": "[↑ KB](entry-point.md)\n\n# A, edited\n", "kb-root/b.md": "# B\n", "outside.md": "not kbase's\n"})
 	code, out := runMaintenance(t, runUpdateFormat, repo)
-	d := checkDocument(t, "update-format", out)
+	d := checkResult(t, "update-format", out)
 	var paths []string
 	for _, it := range d.items("refusals") {
 		if it["check"] == checkDirtyPaths {
@@ -295,7 +398,7 @@ func TestALoadErrorIsRefusedByEveryLoadingVerb(t *testing.T) {
 
 	for _, args := range [][]string{{"export-latex"}, {"verify"}, {"update-format"}} {
 		out, code := kbase(t, repo, args...)
-		d := checkDocument(t, args[0], out)
+		d := checkResult(t, args[0], out)
 		if code != toolresult.ExitCode("refused") || !hasItem(d.items("refusals"), kb.CheckMetadata, kb.GraphEdgesFile, kb.ConsistentRecordsRemedy) {
 			t.Errorf("%s over a load error: exit %d, want refused naming the fault with remedy %q\n%s", args[0], code, kb.ConsistentRecordsRemedy, out)
 		}

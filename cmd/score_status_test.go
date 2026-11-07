@@ -74,7 +74,7 @@ func buildRan(t *testing.T, state, at string) {
 
 // scoreLedger opens a run in the store at state, records its two items and the
 // line the first landed, and returns the closed ledger — the run status finds a
-// result document for, or finds abandoned.
+// stored result for, or finds abandoned.
 func scoreLedger(t *testing.T, state, kbRoot, run, started string) *score.Ledger {
 	t.Helper()
 	l, err := score.Create(state, score.RunHeader{Run: run, KBRoot: kbRoot, Pass: query.PassRigor, Started: started})
@@ -99,8 +99,8 @@ func scoreLedger(t *testing.T, state, kbRoot, run, started string) *score.Ledger
 }
 
 // scoreRan records a score run in the store: its header started at, its two
-// items, the line the first landed and — where outcome is not "" — the result
-// document the verb writes beside them. A run left with no result document is
+// items, the line the first landed and — where outcome is not "" — the stored
+// result the verb writes beside them. A run left with no stored result is
 // one whose process ended before writing it.
 func scoreRan(t *testing.T, state, kbRoot, run, started, outcome string) {
 	t.Helper()
@@ -108,7 +108,7 @@ func scoreRan(t *testing.T, state, kbRoot, run, started, outcome string) {
 	if outcome == "" {
 		return
 	}
-	if err := score.WriteResultDocument(l.Dir(), outcome, nil); err != nil {
+	if err := score.WriteStoredResult(l.Dir(), outcome, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -135,8 +135,8 @@ func holdScoreRun(t *testing.T, repo, state, run string) func() {
 	}
 }
 
-// statusOf is status's document for the store, as the verb reports it.
-func statusOf(t *testing.T, repo, state string) resultDoc {
+// statusOf is status's result for the store, as the verb reports it.
+func statusOf(t *testing.T, repo, state string) parsedResult {
 	t.Helper()
 	out, code := kbase(t, repo, "status", "--state-dir", state)
 	if code != 0 {
@@ -145,16 +145,16 @@ func statusOf(t *testing.T, repo, state string) resultDoc {
 	return parseResult(t, out)
 }
 
-// checkScoreDocument fails unless d is the document of the run named run, read
+// checkScoreResult fails unless d is the result of the run named run, read
 // at the state store.
-func checkScoreDocument(t *testing.T, d resultDoc, state, run, started, wantState string) {
+func checkScoreResult(t *testing.T, d parsedResult, state, run, started, wantState string) {
 	t.Helper()
 	if d.Values["run"] != run || d.Values["state"] != wantState || d.Values["pass"] != query.PassRigor {
-		t.Errorf("document names run %v, state %v, pass %v; want %s, %s, %s\n%v",
+		t.Errorf("result names run %v, state %v, pass %v; want %s, %s, %s\n%v",
 			d.Values["run"], d.Values["state"], d.Values["pass"], run, wantState, query.PassRigor, d.Values)
 	}
 	if d.Values["state-dir"] != state || d.Values["started"] != started {
-		t.Errorf("document names state-dir %v, started %v; want %s, %s", d.Values["state-dir"], d.Values["started"], state, started)
+		t.Errorf("result names state-dir %v, started %v; want %s, %s", d.Values["state-dir"], d.Values["started"], state, started)
 	}
 	counts, _ := d.Values["counts"].(map[string]any)
 	if counts["total"] != 2 || counts["done"] != 1 || counts["failed"] != 0 || counts["remaining"] != 1 {
@@ -165,22 +165,22 @@ func checkScoreDocument(t *testing.T, d resultDoc, state, run, started, wantStat
 	}
 }
 
-// checkBuildDocument fails unless d is the build's document, reporting state.
-func checkBuildDocument(t *testing.T, d resultDoc, wantState string) {
+// checkBuildResult fails unless d is the build's result, reporting state.
+func checkBuildResult(t *testing.T, d parsedResult, wantState string) {
 	t.Helper()
 	if d.Values["state"] != wantState || d.Values["stages"] == nil {
-		t.Errorf("document reports state %v with stages %v; want the build's %s\n%v",
+		t.Errorf("result reports state %v with stages %v; want the build's %s\n%v",
 			d.Values["state"], d.Values["stages"], wantState, d.Values)
 	}
 	if run, ok := d.Values["run"]; ok {
-		t.Errorf("the build's document names a run: %v", run)
+		t.Errorf("the build's result names a run: %v", run)
 	}
 }
 
-// TestPersistScoreResultLogsAWriteItCannotMake: the result document is written
+// TestPersistScoreResultLogsAWriteItCannotMake: the stored result is written
 // on the way out of a verb that cannot return an error there, so a run
 // directory that refuses the write leaves the failure in the run's log, naming
-// the ledger, and no document.
+// the ledger, and no stored result.
 func TestPersistScoreResultLogsAWriteItCannotMake(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o555); err != nil {
@@ -195,12 +195,12 @@ func TestPersistScoreResultLogsAWriteItCannotMake(t *testing.T) {
 		t.Errorf("the failed write was not logged against the ledger: %+v", capture.Snapshot())
 	}
 	if _, err := os.Stat(filepath.Join(dir, score.ResultFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the run directory holds a result document: %v", err)
+		t.Errorf("the run directory holds a stored result: %v", err)
 	}
 }
 
 // TestPersistScoreResultWritesNothingWithoutALedger: a run that named no
-// ledger has nowhere to write its document, and no failure to report.
+// ledger has nowhere to write its stored result, and no failure to report.
 func TestPersistScoreResultWritesNothingWithoutALedger(t *testing.T) {
 	capture := &logtest.Capture{}
 	persistScoreResult(capture, []toolresult.Field{{Key: "kb-root", Value: t.TempDir()}}, toolresult.Done)
@@ -211,7 +211,7 @@ func TestPersistScoreResultWritesNothingWithoutALedger(t *testing.T) {
 
 // TestStatusReportsTheNewestScoreRun: with no run holding the store, status
 // reports the store's newest run, and a score run that started after the last
-// build invocation is that run — its own document, with the counts and state
+// build invocation is that run — its own result, with the counts and state
 // its records give.
 func TestStatusReportsTheNewestScoreRun(t *testing.T) {
 	repo, state := statusStore(t)
@@ -222,15 +222,15 @@ func TestStatusReportsTheNewestScoreRun(t *testing.T) {
 	if d.Outcome != toolresult.Done {
 		t.Fatalf("status: outcome %s\n%v", d.Outcome, d.Values)
 	}
-	checkScoreDocument(t, d, state, "run-newer", statusLater, toolresult.Done)
+	checkScoreResult(t, d, state, "run-newer", statusLater, buildstore.StateFinished)
 	if pid, ok := d.Values["pid"]; !ok || pid != nil {
-		t.Errorf("the document names pid %v for a run no process holds", pid)
+		t.Errorf("the result names pid %v for a run no process holds", pid)
 	}
 }
 
 // TestStatusAndWaitReportADryRun: a dry run's dry- id names a run directory as
-// a real run's does, so wait finds it by its process and returns the document it
-// wrote, and status reports it as the store's newest run.
+// a real run's does, so wait finds it by its process and returns the stored
+// result it wrote, and status reports it as the store's newest run.
 func TestStatusAndWaitReportADryRun(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
 	gitRepo(t, repo)
@@ -251,8 +251,8 @@ func TestStatusAndWaitReportADryRun(t *testing.T) {
 	}
 
 	d := statusOf(t, repo, state)
-	if d.Outcome != toolresult.Done || d.Values["run"] != run || d.Values["state"] != toolresult.Done {
-		t.Errorf("status reported outcome %s, run %v, state %v; want done, %s, done\n%v",
+	if d.Outcome != toolresult.Done || d.Values["run"] != run || d.Values["state"] != buildstore.StateFinished {
+		t.Errorf("status reported outcome %s, run %v, state %v; want done, %s, finished\n%v",
 			d.Outcome, d.Values["run"], d.Values["state"], run, d.Values)
 	}
 }
@@ -269,7 +269,7 @@ func TestStatusReportsTheBuildNewerThanTheNewestScoreRun(t *testing.T) {
 	if d.Outcome != toolresult.Done {
 		t.Fatalf("status: outcome %s\n%v", d.Outcome, d.Values)
 	}
-	checkBuildDocument(t, d, "finished")
+	checkBuildResult(t, d, "finished")
 }
 
 // TestStatusReportsTheHolderWhicheverRunIsNewer: a live holder names the run
@@ -289,7 +289,7 @@ func TestStatusReportsTheHolderWhicheverRunIsNewer(t *testing.T) {
 			}
 		})
 
-		checkBuildDocument(t, statusOf(t, repo, state), "running")
+		checkBuildResult(t, statusOf(t, repo, state), "running")
 	})
 
 	t.Run("a live score run over a newer build invocation", func(t *testing.T) {
@@ -299,20 +299,20 @@ func TestStatusReportsTheHolderWhicheverRunIsNewer(t *testing.T) {
 		t.Cleanup(holdScoreRun(t, repo, state, "run-live"))
 
 		d := statusOf(t, repo, state)
-		// The run holds the store and has written no result document, so it is
+		// The run holds the store and has written no stored result, so it is
 		// running under the holder's process.
 		if d.Values["run"] != "run-live" || d.Values["state"] != "running" || d.Values["pid"] != os.Getpid() {
-			t.Errorf("document names run %v, state %v, pid %v; want run-live, running, %d\n%v",
+			t.Errorf("result names run %v, state %v, pid %v; want run-live, running, %d\n%v",
 				d.Values["run"], d.Values["state"], d.Values["pid"], os.Getpid(), d.Values)
 		}
 	})
 }
 
 // TestStatusReportsTheBuildWhereTheStoreRecordsNoRun: a store no run wrote
-// reports the build's own document, its state none.
+// reports the build's own result, its state none.
 func TestStatusReportsTheBuildWhereTheStoreRecordsNoRun(t *testing.T) {
 	repo, state := statusStore(t)
-	checkBuildDocument(t, statusOf(t, repo, state), "none")
+	checkBuildResult(t, statusOf(t, repo, state), "none")
 }
 
 // TestStatusSkipsScoreRunsWithoutAHeader: a run directory whose run.yaml is
@@ -336,7 +336,7 @@ func TestStatusSkipsScoreRunsWithoutAHeader(t *testing.T) {
 		}
 		// Each skipped run claims an outcome, so a status that reported it
 		// would say done instead of the build's finished.
-		if err := score.WriteResultDocument(dir, toolresult.Done, nil); err != nil {
+		if err := score.WriteStoredResult(dir, toolresult.Done, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -345,7 +345,7 @@ func TestStatusSkipsScoreRunsWithoutAHeader(t *testing.T) {
 	if d.Outcome != toolresult.Done {
 		t.Fatalf("status: outcome %s\n%v", d.Outcome, d.Values)
 	}
-	checkBuildDocument(t, d, "finished")
+	checkBuildResult(t, d, "finished")
 }
 
 // TestStatusReportsTheBuildWhereAStartDoesNotParse: two starts that do not
@@ -359,7 +359,7 @@ func TestStatusReportsTheBuildWhereAStartDoesNotParse(t *testing.T) {
 		buildRan(t, state, statusEarlier)
 		scoreRan(t, state, filepath.Join(repo, kb.KBDir), "run-unstamped", unreadable, toolresult.Done)
 
-		checkBuildDocument(t, statusOf(t, repo, state), "finished")
+		checkBuildResult(t, statusOf(t, repo, state), "finished")
 	})
 
 	t.Run("the build's start", func(t *testing.T) {
@@ -367,6 +367,6 @@ func TestStatusReportsTheBuildWhereAStartDoesNotParse(t *testing.T) {
 		buildRan(t, state, unreadable)
 		scoreRan(t, state, filepath.Join(repo, kb.KBDir), "run-stamped", statusLater, toolresult.Done)
 
-		checkBuildDocument(t, statusOf(t, repo, state), "finished")
+		checkBuildResult(t, statusOf(t, repo, state), "finished")
 	})
 }

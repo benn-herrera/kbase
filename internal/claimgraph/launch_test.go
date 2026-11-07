@@ -193,11 +193,11 @@ func TestAStageTakesItsAnswersByPositionNotArrival(t *testing.T) {
 	}
 }
 
-// TestAStageReportsItsBatchWallTimeNotItsCallsSum: a stage's ask totals carry
-// stage-wall-seconds, the batch's elapsed time, beside wall-seconds, the sum
+// TestAStageReportsItsWaveWallTimeNotItsCallsSum: a stage's ask totals carry
+// stage-wall-seconds, the wave's elapsed time, beside wall-seconds, the sum
 // of its calls' — so two calls held in flight together report a stage time
 // near one call's and a sum near two.
-func TestAStageReportsItsBatchWallTimeNotItsCallsSum(t *testing.T) {
+func TestAStageReportsItsWaveWallTimeNotItsCallsSum(t *testing.T) {
 	const hold = 300 * time.Millisecond
 	node := func(id string) ClaimNode { return ClaimNode{ID: id, Document: "v/a.md", Title: "Claim " + id} }
 	var candidates []candidate

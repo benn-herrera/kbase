@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/atomicfile"
 	"kbase/internal/kb"
+	"kbase/internal/kbwrite"
 	"kbase/internal/log"
 	"kbase/internal/result"
 	"kbase/internal/sheet"
@@ -266,7 +266,7 @@ func WriteKBFile(src *kb.Source, p string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := writeInside(src.Root(), p, data); err != nil {
+	if err := kbwrite.Inside(src.Root(), p, data); err != nil {
 		return err
 	}
 	src.Put(p, data)
@@ -296,17 +296,6 @@ func WriteGraph(src *kb.Source, g kb.Graph) ([]string, error) {
 		written = append(written, f.rel)
 	}
 	return written, nil
-}
-
-// writeInside replaces p with data atomically, refusing a path that is a
-// symbolic link or resolves outside root as the KB's symlink refusal.
-func writeInside(root, p string, data []byte) error {
-	err := atomicfile.WriteIn(root, p, data)
-	var link *atomicfile.LinkError
-	if errors.As(err, &link) {
-		return result.Refusal{{Check: kb.CheckSymlink, Path: p, Detail: link.Detail}}
-	}
-	return err
 }
 
 func strengthLine(v *float64, trace string) string {

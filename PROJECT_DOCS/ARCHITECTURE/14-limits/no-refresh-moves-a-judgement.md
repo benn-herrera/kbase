@@ -1,5 +1,6 @@
 ### No refresh moves a judgement
 
-A refresh — `update-format`'s re-derivation included — asks no model, so a derived value changes only when the
-records do — a write op or a scoring run's landing. `verify`'s freshness is
-between the records and a register page, never between two judgements.
+A rebuild of the derived views, `update-format`'s included, makes no model call, so a derived value
+changes only when the records do: a write op, or a scoring run writing its results. `verify`'s
+freshness check is between the records and a summary page, never between two judgements.
+

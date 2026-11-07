@@ -13,8 +13,10 @@ this is not JSON
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"query","arguments":{}}}
 {"jsonrpc":"2.0","id":5,"error":{"code":-32602,"message":"query: argument \"operation\" is required"}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"query","arguments":{"operation":"tree","arguments":[],"page":2}}}
-{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"query: argument \"arguments\" must be of type object; argument \"operation\" must be one of citations-of, edges, find, show, stats, trace; argument \"page\" is not one this tool takes (it takes arguments, operation, project-dir)"}}
+{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"query: argument \"arguments\" must be of type object; argument \"operation\" must be one of citations-of, edges, find, show, stats, trace; argument \"page\" is unknown (allowed: arguments, operation, project-dir)"}}
 {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"query","arguments":[]}}
 {"jsonrpc":"2.0","id":7,"error":{"code":-32602,"message":"params.arguments must be an object"}}
 {"jsonrpc":"2.0","method":"no/such/notification"}
 null
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"score","arguments":{"edge":{"source":"${ID1}","target":"${ID2}","relation":"founds"}}}}
+{"jsonrpc":"2.0","id":8,"error":{"code":-32602,"message":"score: argument \"edge.relation\" must be one of supports, lifts, refutes"}}

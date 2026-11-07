@@ -60,14 +60,14 @@ func refuseCommits(t *testing.T, repo string) {
 
 // writeBatch runs op's batch from repo, values on stdin and --commit as given,
 // and reads its result against the documented keys.
-func writeBatch(t *testing.T, repo, op, values string, commit bool) resultDoc {
+func writeBatch(t *testing.T, repo, op, values string, commit bool) parsedResult {
 	t.Helper()
 	var out bytes.Buffer
 	if _, err := runWriteOp(writeOpOptions{Op: op, WorkDir: repo, Stdin: strings.NewReader(values), Commit: commit,
 		Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()}); err != nil {
 		t.Fatal(err)
 	}
-	return checkDocument(t, op, out.String())
+	return checkResult(t, op, out.String())
 }
 
 // committedPaths is the paths commit changed, sorted, a rename as its two
@@ -137,6 +137,32 @@ func TestACommittingBatchCommitsBeforeAndAfter(t *testing.T) {
 	gitIn(t, repo, "revert", "--no-edit", commits[2]["commit"].(string))
 	if after := tree(t, repo); !maps.Equal(after, prior) {
 		t.Errorf("reverting the batch commit left kb-root/ other than it stood before the batch")
+	}
+}
+
+// TestAWriteClearsKBTemp: kb-root/.index/kb-temp/, a temp a killed write left
+// there included, does not stand after the next write batch, a file of the
+// user's shaped like a temp elsewhere in kb-root/ does, and git lists nothing
+// under kb-temp/ after a batch run without commit.
+func TestAWriteClearsKBTemp(t *testing.T) {
+	repo := committedKB(t)
+	tempDir := kb.KBDir + "/" + kb.TempDir
+	notes := kb.KBDir + "/.notes.old.tmp"
+	// The leftover as a killed write leaves it, beside the ignore file its write
+	// made first.
+	writeRepo(t, repo, map[string]string{tempDir + "/.gitignore": "*\n", tempDir + "/.a.md.3k9x2a.tmp": "torn", notes: "the user's\n"})
+
+	if d := writeBatch(t, repo, "add-axiom", "entry:\n- label: S1\n  title: A rule\n", false); d.Outcome != toolresult.Done {
+		t.Fatalf("the batch: %s\n%v", d.Outcome, d.Values)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, tempDir)); !os.IsNotExist(err) {
+		t.Errorf("%s stands after the batch (%v), want it removed", tempDir, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(repo, notes)); err != nil || string(data) != "the user's\n" {
+		t.Errorf("%s = %q (%v), want it untouched", notes, data, err)
+	}
+	if status := gitIn(t, repo, "status", "--porcelain", kb.KBDir); strings.Contains(status, kb.TempDir) {
+		t.Errorf("git status after the batch lists kb-temp:\n%s", status)
 	}
 }
 
@@ -273,29 +299,29 @@ func TestEveryGitCallerIsRefusedWhereGitReadsAnotherRepository(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		withKB bool
-		run    func(t *testing.T, inner string) resultDoc
+		run    func(t *testing.T, inner string) parsedResult
 	}{
-		{"a committing batch", true, func(t *testing.T, inner string) resultDoc {
+		{"a committing batch", true, func(t *testing.T, inner string) parsedResult {
 			return writeBatch(t, inner, "write", "commit: true\nentry: []\n", false)
 		}},
-		{"a committing dry run", true, func(t *testing.T, inner string) resultDoc {
+		{"a committing dry run", true, func(t *testing.T, inner string) parsedResult {
 			d := writeBatch(t, inner, "write", "commit: true\ndry-run: true\nentry: []\n", false)
 			if d.Values["dry-run"] != true {
 				t.Errorf("dry-run %v, want true", d.Values["dry-run"])
 			}
 			return d
 		}},
-		{"update-format", true, func(t *testing.T, inner string) resultDoc {
+		{"update-format", true, func(t *testing.T, inner string) parsedResult {
 			_, out := runMaintenance(t, runUpdateFormat, inner)
-			return checkDocument(t, "update-format", out)
+			return checkResult(t, "update-format", out)
 		}},
-		{"init", false, func(t *testing.T, inner string) resultDoc {
+		{"init", false, func(t *testing.T, inner string) parsedResult {
 			out, _ := kbase(t, inner, "init")
-			return checkDocument(t, "init", out)
+			return checkResult(t, "init", out)
 		}},
-		{"build", true, func(t *testing.T, inner string) resultDoc {
+		{"build", true, func(t *testing.T, inner string) parsedResult {
 			out, _ := kbase(t, inner, "build", "paper.tex", "--config-dir", t.TempDir(), "--no-inference", "--state-dir", filepath.Join(t.TempDir(), "state"))
-			return checkDocument(t, "build", out)
+			return checkResult(t, "build", out)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -347,13 +373,13 @@ func TestUpdateFormatCommit(t *testing.T) {
 	commitKB(t, repo)
 	stamped := formatOf(t, repo)
 
-	run := func() resultDoc {
+	run := func() parsedResult {
 		t.Helper()
 		var out bytes.Buffer
 		if _, err := runUpdateFormat(maintenanceOptions{WorkDir: repo, Commit: true, Stdout: &out, Stderr: &bytes.Buffer{}, Logger: log.Discard()}); err != nil {
 			t.Fatal(err)
 		}
-		return checkDocument(t, "update-format", out.String())
+		return checkResult(t, "update-format", out.String())
 	}
 	d := run()
 	commits := d.items("commits")

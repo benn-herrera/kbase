@@ -481,15 +481,15 @@ func writeTrail(t *testing.T, state, start string) string {
 	caller := call.New(client, "solo", func() string { return trail }, log.Discard())
 	queue := model.NewQueue(1)
 	ctx := context.Background()
-	batch := asks.NewReplayBatch(ctx, caller.Launch(queue, "decision"))
+	wave := asks.NewReplayWave(ctx, caller.Launch(queue, "decision"))
 	var items []asks.ParagraphItem
 	for _, o := range []asks.Outcome{asks.Answered, asks.Defaulted, asks.Failed} {
 		items = append(items, asks.ParagraphItem{Paragraph: string(o), Text: "The paragraph " + string(o) + "."})
 	}
-	if err := batch.AskGroup(asks.Paragraph, "leaf", asks.ParagraphAsks("leaf.md", "The leaf.", items)); err != nil {
+	if err := wave.AskGroup(asks.Paragraph, "leaf", asks.ParagraphAsks("leaf.md", "The leaf.", items)); err != nil {
 		t.Fatal(err)
 	}
-	recs, err := batch.Wait()
+	recs, err := wave.Wait()
 	if err != nil {
 		t.Fatal(err)
 	}

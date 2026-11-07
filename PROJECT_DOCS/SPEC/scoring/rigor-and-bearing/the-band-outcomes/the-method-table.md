@@ -5,7 +5,7 @@ The method table reaches the same eight values.
 | charges | method rigor | band it would read, when rigor is what binds |
 |---|---|---|
 | `none` | `1.00` | ok to build on |
-| one finding — a gap, an overreach, a contradiction, a respect unaddressed | `0.85` | ok to build on — exactly at the cut |
+| one finding — a gap, an overreach, a contradiction, a respect unaddressed | `0.85` | ok to build on — exactly at the threshold |
 | two findings | `0.70` | ok to build on, see caveats |
 | three findings | `0.55` | use as input only |
 | four findings | `0.40` | do not build on, rework needed |

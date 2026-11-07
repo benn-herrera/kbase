@@ -1,51 +1,16 @@
 #### The ledger and resume
 
-A run's records stand under `<state-dir>/score/<run>/`: `run.yaml`,
-`items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole
-run), `ledger.jsonl`, `captures.jsonl` and, while a walk runs, one result file per answered item, which
-the walk's end folds into the ledger. A real run's id is `run-<id>`; the runs kept are [§6](../../6-build-state-ledger-and-monitoring/index.md)'s.
-`run.yaml` holds the run, its KB root, the ledger's format, the set it walks
-(one pass, or `all`), `rescore_manual` (`true` where the run re-judges manually scored values,
-absent otherwise), `backend` (`provider`, which a header written under an earlier release may
-read `environment`; absent under `--dry-run`, which resolves no role because it asks nothing), the
-provider, the model, `ask_sha256` and the start. **It is
-written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header
-states the first invocation's back end and model, and each ledger line states its own item's pass and
-what answered it.
+A run's records are kept under `<state-dir>/score/<run>/`: `run.yaml`, `items.jsonl` (the set the run enumerated, one pending line per item, so a reader counts the whole run), `ledger.jsonl`, `captures.jsonl`, `result.yaml` (the run's stored result, written when the run ends) and, while the item loop runs, one answer file per answered item, which the loop's end merges into the ledger. A real run's id is `run-<id>`; which runs are kept is defined in [§6](../../6-build-state-ledger-and-monitoring/index.md). `run.yaml` holds the run, its KB root, the ledger's format, the set it covers (one pass, or `all`), `rescore_manual` (`true` where the run re-judges manually scored values, absent otherwise), `backend` (`provider`; absent under `--dry-run`, which resolves no role because it makes no model calls), the provider, the model, `ask_sha256` and the start. **It is written once, at the run's creation, and no resume rewrites it**: a resumed or mixed run's header states the first invocation's back end and model, and each ledger line states its own item's pass and what answered it.
 
-What `--resume` continues and when it is refused are [page §3.5 `score`](../../../../NEW_MCP_CLI_DESIGN/3-operations/3.5-runs-and-run-control/score.md)'s. The run it continues
-is the store's newest real run by its `run.yaml` start — a dry run is never one; that run
-finished where no item of it is `failed` or unreached; and a build has started since it where the
-store's progress record names a build invocation that started later. A resume walks the run's own
-`items.jsonl`, the set it enumerated, and asks again each item that is not `done`, under the pass
-and `rescore_manual` its `run.yaml` records.
+**What `--resume` continues.** The run it continues is the state store's newest real run by its `run.yaml` start — a dry run is never one. A resume covers the run's own `items.jsonl`, the set it enumerated, and retries each item that is not `done`, under the pass and `rescore_manual` its `run.yaml` records. A run whose header reads `backend: environment` is resumed on whatever the configuration files now resolve, and its new lines record that.
 
-`ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the value the KB
-carried before the attempt (`before`, absent where the record held none), the reply, `faults`
-(the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge
-lines a reply recorded beside a retired `flt-pending`), `backend` (as the header's; a line written
-under an earlier release may read `environment`), the model, the prompt's digest, `remedy` (on a
-failed attempt whose call the provider refused for its key, the command that stores one, [§9](../../9-configuration/index.md);
-absent otherwise, and absent from every line written before the field, which reads under the same
-ledger format), `note` (beside a `remedy`, the note on how the key reaches the store, [§9](../../9-configuration/index.md); absent
-otherwise), `judged` (the judged hash of the item's text as the call was composed, [page §2.9](../../../../NEW_MCP_CLI_DESIGN/2-conventions/2.9-manually-scored-and-judged-hash.md);
-absent from every line written before the field) and the attempt's bounds —
-appended after the item's write and its validation, never before. A resume re-prices only a line
-that records `judged`; one written before the field stands as it is. A run writes its captures and then
-its ledger lines once, in the set's order, when its walk ends — on completion, on cancellation and
-on a failure that stops it. `faults` is `[]` for one reply
-alone, the word `none`; a failed attempt carries neither `faults` nor text. The state directory is
-`build`'s:
-`$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
+**When `--resume` is refused**, with `check: usage` at `--resume`, the remedy a fresh `score`, which scores only what is stale:
+- no score run exists in the state store;
+- the most recent run finished: no item of it is `failed` or unreached;
+- a build has started since that run;
+- `--pass`, `--node`, `--edge`, `--rescore-manual` or `--dry-run` is given beside it.
 
-`captures.jsonl` is one JSON object per call made — the item, its class (`statement`, `method` or
-`bearing`), the closed text whole with the line each number names, the prompt sent and its digest,
-the reply the call returned (`""` where the call failed), the error that failed the attempt where
-one did — the call's, the parse's or the write's — the model, the back end and the call's bounds.
-Every attempt that makes a call has one, whatever its outcome: a landing, a refused reply, a failed
-call or a refused write. A failed attempt's reply therefore stands whole there, where its ledger
-line keeps no text of it. An item the guard refuses makes no call and has no capture, and a call
-cancelled in flight leaves no capture and no ledger line. A run's captures are appended before its
-ledger lines, at the walk's end, and a resume appends to the same file, and a capture that cannot be written fails the run
-as a ledger line that cannot be does.
+`ledger.jsonl` is one JSON object per attempt — the item, its status, the value, the value the KB had before the attempt (`before`, absent where the record held none), the reply, `faults` (the parsed charges: `id`, `passage`, `lines`, `citation`, `offset`, in the order written), `moot` (the charge lines a reply recorded beside a retired `flt-pending`), `backend` (as the header's), the model, the prompt's digest, `remedy` (on a failed attempt whose call the provider refused for its key, the command that stores one, [§9](../../9-configuration/index.md); absent otherwise), `note` (beside a `remedy`, the note on how the key reaches the store, [§9](../../9-configuration/index.md); absent otherwise), `judged` (the judged hash of the item's text as the call was composed, [§10](../../10-metadata-format-version/provenance-and-the-judged-hash.md)) and the attempt's bounds — appended after the item's write and its validation, never before. A line without `remedy` or `judged` is valid under the same ledger format. A resume recomputes values only for a line that records `judged`; a line without it stays as it is. A run writes its captures and then its ledger lines once, in the set's order, when its item loop ends — on completion, on cancellation and on a failure that stops it. `faults` is `[]` for one reply alone, the word `none`; a failed attempt has neither `faults` nor text. An item re-asked after a refused reply ([A refused reply: one re-ask, then failed](a-refused-reply-one-re-ask-then-failed.md)) has two lines in the invocation, in call order: the refused attempt's `failed` line, with its reason, its own bounds and its own prompt digest, then the re-ask's line, with the re-ask prompt's digest. An item's state is its last line. The state directory is `build`'s: `$XDG_STATE_HOME/kbase/<key>/`, or `--state-dir`, and one inside `kb-root/` is refused.
+
+`captures.jsonl` is one JSON object per call made — the item, its class (`statement`, `method` or `bearing`), the item text whole with the line each number names, the prompt sent and its digest, the reply the call returned (`""` where the call failed), the error that failed the attempt where one did — the call's, the parse's or the write's — the model, the back end and the call's bounds. A re-ask's capture also holds `correction`, what its correction was rendered from: `case`, the refusal's case; `values`, the line numbers and the id the case names, keyed by what each is (`reply-line`, `other-reply-line`, `id`, `cited-from`, `cited-to`), `{}` where it names none; and `quoted`, the reply lines it quotes, `[]` where it quotes none; a first ask's capture has no `correction`. Every attempt that makes a call has one, whatever its outcome: a written value, a refused reply, a failed call or a refused write. A failed attempt's reply therefore appears whole there, where its ledger line keeps no text of it. An item the input guard refuses makes no call and has no capture, and a call cancelled in flight leaves no capture and no ledger line. A run's captures are appended before its ledger lines, at the item loop's end, and a resume appends to the same file, and a capture that cannot be written fails the run as a ledger line that cannot be does.
 

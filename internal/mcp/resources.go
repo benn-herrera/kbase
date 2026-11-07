@@ -100,7 +100,7 @@ func (modelHintsResource) List() ([]protocol.Resource, error) {
 	return []protocol.Resource{{URI: ModelHintsURI, Name: "Model hints", MimeType: "text/markdown"}}, nil
 }
 
-// Read returns the whole guidance: it is one document, and List offers no
+// Read returns the whole guidance: it is one Markdown page, and List offers no
 // other resource of this family.
 func (modelHintsResource) Read(protocol.Resource) (string, error) {
 	return config.ModelHintsMarkdown(), nil

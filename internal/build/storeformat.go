@@ -52,5 +52,5 @@ func upgradeStore(steps map[int]func(dir string) error, dir string, from, to int
 }
 
 func writeStoreFormat(dir string, v int) error {
-	return atomicfile.Write(filepath.Join(dir, buildstore.StoreFormatFile), []byte(strconv.Itoa(v)+"\n"), nil)
+	return atomicfile.Write(filepath.Join(dir, buildstore.StoreFormatFile), []byte(strconv.Itoa(v)+"\n"))
 }

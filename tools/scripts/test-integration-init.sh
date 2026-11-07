@@ -35,7 +35,7 @@ status=0
 fail() { printf '  fail: %s\n' "$*"; status=1; }
 # run <verb-for-keys> <outcome> <args...>: one invocation of the
 # delivered binary from the repository, its result parsed against the
-# verb's documented keys; LAST names the result document it captured.
+# verb's documented keys; LAST names the result it captured.
 # Arguments reach the repository absolute: the tool runs in a subshell.
 n=0
 run() {
@@ -46,7 +46,7 @@ run() {
     set +e
     ( cd "${repo}" && "${kbase}" "$@" ) > "${stem}.out" 2> "${stem}.log"
     printf '%s\n' "$?" > "${stem}.exit"
-    go test -count=1 -run '^TestResultDocument$' ./cmd -args -result.doc="${stem}.out" -result.verb="${verb}" \
+    go test -count=1 -run '^TestResult$' ./cmd -args -result.file="${stem}.out" -result.verb="${verb}" \
         -result.outcome="${want}" > "${stem}.keys.log" 2>&1
     local rc=$?
     set -e
@@ -104,7 +104,7 @@ ln -s "$(command -v git)" "${out}/gitonly/git"
 grep -q 'outcome: "done"' "${docs}/init-nodot.out" || fail "the no-dot birth did not reach done: $(cat "${docs}/init-nodot.out")"
 grep -q 'no Graphviz dot on PATH' "${docs}/init-nodot.log" || fail "the no-dot lack is not said on stderr"
 grep -q 'no Graphviz dot on PATH' "${nodot}/kb-root/claim-graph.svg" || fail "claim-graph.svg is not the placeholder"
-OUT_DIR="${out}" RECIPE="test-integration-init" INVOCATION="git init repo/ (identity fixed in the environment, global config quarantined to gitconfig); kb-root/ committed (git add -A kb-root; git commit) before update-format\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir, whose run tree is copied to outside/; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
+OUT_DIR="${out}" RECIPE="test-integration-init" INVOCATION="git init repo/ (identity fixed in the environment, global config quarantined to gitconfig); kb-root/ committed (git add -A kb-root; git commit) before update-format\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResult\$' ./cmd -args -result.file=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\noutside a worktree: invocation 01-init run from a mktemp dir, whose run tree is copied to outside/; state/: the refused build's quarantined store\ndocs/init-nodot.{out,log}: init run from repo-nodot/ with PATH holding git alone\ninit.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its result" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-init): a birth check failed — see init.tsv\n'

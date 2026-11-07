@@ -17,8 +17,10 @@ import (
 // documentedKeys is each subcommand's own result keys, in their documented
 // order: the contract a model reading a result relies on.
 var documentedKeys = map[string][]string{
-	"build":               {"state-dir", "roles", "through", "no-inference", "resumed", "restored", "stages", "resume"},
+	"build":               {"state-dir", "roles", "through", "no-inference", "resumed", "reset", "stages", "resume", "warnings"},
 	"status":              {"state-dir", "state", "pid", "started", "updated", "ended", "no-inference", "stages", "current", "recent-refusals", "recent-fallbacks", "cache-entries", "cache-bytes", "resume"},
+	"score-status":        {"state-dir", "state", "pid", "started", "run", "pass", "counts", "scored", "failed-items", "resume"},
+	"launch":              {"state", "state-dir", "pid", "run", "ledger", "resume", "wait", "warnings"},
 	"cancel":              {"state-dir", "pid", "resume"},
 	"build-trail":         {"state-dir", "head", "boundaries", "started-at", "dirty"},
 	"init":                {"written", "removed"},
@@ -31,9 +33,9 @@ var documentedKeys = map[string][]string{
 	"configure-providers": {"provider", "layer", "written", "models", "next", "warnings"},
 	"configure-models":    {"models", "written", "warnings"},
 	"show-config":         {"layers", "providers", "config", "selection", "roles", "diagnostics"},
-	"probe":               {"provider", "provider-rule", "provider-layer", "selection", "model", "temperature", "thinking", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage"},
+	"probe":               {"provider", "provider-rule", "provider-layer", "probed", "model", "temperature", "thinking", "first-token-ms", "wall-ms", "finish-reason", "reply", "usage", "warnings"},
 	"export-latex":        {"written", "volumes", "report"},
-	"score":               {"state-dir", "pass", "roles", "run", "ledger", "counts", "ask", "skip", "scored", "resume"},
+	"score":               {"state-dir", "pass", "roles", "run", "ledger", "counts", "ask", "skip", "scored", "resume", "warnings"},
 	"auth add":            {"provider"},
 	"auth remove":         {"provider"},
 	"auth list":           {"providers"},
@@ -45,8 +47,8 @@ var documentedSubKeys = map[string][]string{
 	"status.stages":               {"done", "not-done", "rewind"},
 	"build-trail.boundaries":      {"stage", "commit", "subject", "command"},
 	"build-trail.started-at":      {"commit", "command"},
-	"status.current":              {"stage", "units-done", "units-total"},
-	"write-op.entries":            {"entry", "operation", "outcome", "document", "line", "id", "heading", "link", "source", "target", "relation", "restored", "removed-edges"},
+	"status.current":              {"stage", "done", "total"},
+	"write-op.entries":            {"entry", "operation", "outcome", "document", "line", "id", "heading", "rewritten", "link", "source", "target", "relation", "restored", "removed-edges"},
 	"write-op.commits":            {"commit", "label", "paths"},
 	"update-format.commits":       {"commit", "label", "paths"},
 	"update-format.ids":           {"from", "to"},
@@ -55,11 +57,12 @@ var documentedSubKeys = map[string][]string{
 	"update-format.strengthen-by": {"id", "text"},
 	"configure-models.models":     {"decision", "text", "scoring"},
 	"score.counts":                {"total", "done", "failed", "skipped", "remaining"},
+	"score-status.counts":         {"total", "done", "failed", "skipped", "remaining"},
 	"probe.usage":                 {"reported", "prompt-tokens", "completion-tokens", "reasoning-tokens", "cached-tokens"},
-	"show-config.layers":          {"path", "source", "exists", "providers-exists", "config-exists"},
-	"show-config.providers":       {"name", "base-url", "api", "decisions-flavor", "key", "key-file", "upgrade", "layer", "usable", "fault"},
+	"show-config.layers":          {"path", "layer", "exists", "providers-exists", "config-exists"},
+	"show-config.providers":       {"name", "base-url", "api", "decision-api", "key-source", "key-file", "upgrade", "layer", "usable", "fault"},
 	"show-config.config":          {"models", "sampling"},
-	"show-config.selection":       {"provider", "rule", "detail"},
+	"show-config.selection":       {"provider", "provider-rule", "detail"},
 	"build.roles":                 {"role", "provider", "provider-rule", "provider-layer", "model"},
 	"score.roles":                 {"role", "provider", "provider-rule", "provider-layer", "model"},
 	"show-config.roles":           {"role", "provider", "provider-rule", "provider-layer", "model", "base-url", "sources", "temperature", "thinking", "detail"},
@@ -69,16 +72,22 @@ var documentedSubKeys = map[string][]string{
 	"item":                        {"check", "path", "entry", "key", "line", "column", "allowed", "remedy", "detail"},
 }
 
-// keysFor is the documented-keys entry a subcommand's result is read
-// against.
-func keysFor(verb string) string {
+// keysFor is the documented-keys entry a subcommand's result, whose top-level
+// keys are keys, is read against. Only a score run's results carry run.
+func keysFor(verb string, keys []string) string {
+	scoreRun := slices.Contains(keys, "run")
 	switch {
 	case slices.Contains(write.Ops(), verb) || verb == write.Batch:
 		return "write-op"
 	case verb == "show" || verb == "stats":
 		return "mapping-query"
+	case verb == "status" && scoreRun:
+		return "score-status"
+	case verb == "wait" && scoreRun:
+		// wait on a score run prints the run's stored result.
+		return "score"
 	case verb == "wait":
-		// wait prints the status document for the store it waited on.
+		// wait prints the status result for the store it waited on.
 		return "status"
 	case slices.Contains([]string{"find", "citations-of", "edges", "trace"}, verb):
 		return "complete-query"
@@ -86,9 +95,9 @@ func keysFor(verb string) string {
 	return verb
 }
 
-// resultDoc is one parsed result document: its outcome, its keys in order,
+// parsedResult is one parsed result: its outcome, its keys in order,
 // and its values.
-type resultDoc struct {
+type parsedResult struct {
 	Outcome string
 	Keys    []string
 	Values  map[string]any
@@ -96,7 +105,7 @@ type resultDoc struct {
 }
 
 // items is the items under key, each as a mapping.
-func (d resultDoc) items(key string) []map[string]any {
+func (d parsedResult) items(key string) []map[string]any {
 	var out []map[string]any
 	list, _ := d.Values[key].([]any)
 	for _, v := range list {
@@ -108,7 +117,7 @@ func (d resultDoc) items(key string) []map[string]any {
 
 // entryIDs is the id each of a write batch's entries reports, in entry order:
 // the node an insert entered or adopted.
-func (d resultDoc) entryIDs() []string {
+func (d parsedResult) entryIDs() []string {
 	var ids []string
 	for _, e := range d.items("entries") {
 		if id, ok := e["id"].(string); ok {
@@ -118,13 +127,13 @@ func (d resultDoc) entryIDs() []string {
 	return ids
 }
 
-func parseResult(t *testing.T, stdout string) resultDoc {
+func parseResult(t *testing.T, stdout string) parsedResult {
 	t.Helper()
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(stdout), &root); err != nil || len(root.Content) != 1 || root.Content[0].Kind != yaml.MappingNode {
 		t.Fatalf("stdout is not one YAML mapping: %v\n%s", err, stdout)
 	}
-	d := resultDoc{Values: map[string]any{}, Nodes: map[string]*yaml.Node{}}
+	d := parsedResult{Values: map[string]any{}, Nodes: map[string]*yaml.Node{}}
 	m := root.Content[0]
 	for i := 0; i < len(m.Content); i += 2 {
 		k := m.Content[i].Value
@@ -165,14 +174,14 @@ func inOrder(keys, documented []string) string {
 	return ""
 }
 
-// checkDocument fails t unless stdout parses as verb's result: outcome first,
+// checkResult fails t unless stdout parses as verb's result: outcome first,
 // kb-root next on every subcommand that resolves a KB, the subcommand's own
 // keys in documented order, and the key its outcome closes on, each nested
 // mapping and item in its documented order.
-func checkDocument(t *testing.T, verb, stdout string) resultDoc {
+func checkResult(t *testing.T, verb, stdout string) parsedResult {
 	t.Helper()
 	d := parseResult(t, stdout)
-	entry := keysFor(verb)
+	entry := keysFor(verb, d.Keys)
 	own, ok := documentedKeys[entry]
 	if !ok {
 		t.Fatalf("%s documents no result keys", verb)
@@ -185,17 +194,17 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 	if !slices.Contains([]string{"models", "configure-providers", "configure-models", "show-config", "probe", "auth add", "auth remove", "auth list"}, verb) && len(keys) > 0 && keys[0] == "kb-root" {
 		keys = keys[1:]
 		// A migrated KB's record is conditional: present after kb-root and
-		// nowhere else, so a document carrying one is checked without it.
+		// nowhere else, so a result carrying one is checked without it.
 		if len(keys) > 0 && keys[0] == "migration" {
 			keys = keys[1:]
 		}
 	} else if verb == "init" {
-		// A kb-root refusal names a standing kb-root/, so the document must
+		// A kb-root refusal names a standing kb-root/, so the result must
 		// carry the key; one that names none — the usage refusal, the
 		// worktree refusal, the lock retry — carries none.
 		for _, item := range d.items(toolresult.RefusalsKey) {
 			if item["check"] == checkKBRoot {
-				t.Fatalf("%s: a refusal names a standing kb-root; the document carries no kb-root key: %q", verb, d.Keys)
+				t.Fatalf("%s: a refusal names a standing kb-root; the result carries no kb-root key: %q", verb, d.Keys)
 			}
 		}
 	}
@@ -239,12 +248,12 @@ func checkDocument(t *testing.T, verb, stdout string) resultDoc {
 			}
 		}
 	}
-	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "recent-refusals", "recent-fallbacks", "findings", "warnings"} {
+	for _, key := range []string{toolresult.RefusalsKey, toolresult.FailuresKey, "failed-items", "recent-refusals", "recent-fallbacks", "findings", "warnings"} {
 		nested(key, "item")
 	}
 	nested("migration", "migration")
 	// Every record the table nests under this verb's result is checked, in the
-	// table's own names: a record naming a key the table does not document, or
+	// table's own names: a record naming a key the table does not name, or
 	// stating its keys out of order, fails here, and a nested record added to
 	// the table needs nothing else to be checked. `cancelled` is documented per
 	// verb — a build names the stage and unit it stopped at, a score run the
@@ -270,22 +279,22 @@ func checkItem(t *testing.T, verb string, m *yaml.Node) {
 }
 
 var (
-	resultDocument = flag.String("result.doc", "", "a result document ./bin/kbase wrote")
-	resultVerb     = flag.String("result.verb", "", "the subcommand that wrote it")
-	resultOutcome  = flag.String("result.outcome", "", "the outcome it must report")
+	resultFile    = flag.String("result.file", "", "a result ./bin/kbase wrote")
+	resultVerb    = flag.String("result.verb", "", "the subcommand that wrote it")
+	resultOutcome = flag.String("result.outcome", "", "the outcome it must report")
 )
 
-// TestResultDocument parses a result document ./bin/kbase wrote against its
+// TestResult parses a result ./bin/kbase wrote against its
 // subcommand's documented keys; the integration recipes supply both.
-func TestResultDocument(t *testing.T) {
-	if *resultDocument == "" {
-		t.Skip("no result document named; the integration recipes supply one")
+func TestResult(t *testing.T) {
+	if *resultFile == "" {
+		t.Skip("no result named; the integration recipes supply one")
 	}
-	b, err := os.ReadFile(*resultDocument)
+	b, err := os.ReadFile(*resultFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := checkDocument(t, *resultVerb, string(b))
+	d := checkResult(t, *resultVerb, string(b))
 	if *resultOutcome != "" && d.Outcome != *resultOutcome {
 		t.Errorf("outcome %q, want %q", d.Outcome, *resultOutcome)
 	}

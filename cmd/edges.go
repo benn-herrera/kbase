@@ -20,8 +20,8 @@ func edgesCommand() *cobra.Command {
 		Short: "the edge records, of the named relations or at one node, in a fixed order",
 		Long: `edges lists edge records, ordered by relation, source and target. Each row is
 the edge's source, target, relation, bearing (as the record holds it; null
-where the relation carries none), context (null for none), manually_scored
-(null where the relation carries no mark) and replaced_relation (null except
+where the relation carries none), context (null for none), manually-scored
+(null where the relation carries no mark) and replaced-relation (null except
 on a demoted row: an edge the build set aside to break a cycle, kept whole in
 the replaced edge's direction; it bears on no strength until restore-demoted,
 or an add-edge of that edge, puts it back).

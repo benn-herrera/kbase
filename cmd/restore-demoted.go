@@ -24,5 +24,7 @@ a "relation" of demoted removes the record; to put the edge back with new
 values, add-edge writes it and deletes the record.
 
 The result gives each entry's "source", "target" and "relation", and
-"restored", the relations put back.`)
+"restored", the relations put back.
+
+`+edgeRowCopyHelp)
 }

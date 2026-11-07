@@ -36,14 +36,14 @@ type ConfiguredModels struct {
 // that is no reference, and a provider the pool in does not hold, are refused,
 // every one at once, before anything is dialled; so is a run naming no role.
 // The refusal of a provider the pool does not hold gives the configure-providers
-// call that adds it, carrying locationFlag, the location flag of the call
-// being answered ("" for none). The provider part folds to lowercase, as the
+// call that adds it, carrying layer, the `--layer` of the call being answered
+// ("" for none). The provider part folds to lowercase, as the
 // pool's names are, and is written so. Each provider named is listed once,
 // through catalogue: a model its catalogue omits is a miss, not a failure,
 // since catalogues rotate; a listing that fails is returned, nothing written.
-func ConfigureModels(in Inputs, locationFlag string, given map[Role]string, catalogue CatalogueFunc) (ConfiguredModels, error) {
+func ConfigureModels(in Inputs, layer string, given map[Role]string, catalogue CatalogueFunc) (ConfiguredModels, error) {
 	var run ConfiguredModels
-	refs, err := givenReferences(in, locationFlag, given)
+	refs, err := givenReferences(in, layer, given)
 	if err != nil {
 		return run, err
 	}
@@ -89,7 +89,7 @@ func ConfigureModels(in Inputs, locationFlag string, given map[Role]string, cata
 
 // givenReferences is each role given a value for, as the reference it names
 // at the pool entry that supplies it.
-func givenReferences(in Inputs, locationFlag string, given map[Role]string) (map[Role]Reference, error) {
+func givenReferences(in Inputs, layer string, given map[Role]string) (map[Role]Reference, error) {
 	refs := map[Role]Reference{}
 	var refusal result.Refusal
 	for _, role := range Roles {
@@ -126,8 +126,8 @@ func givenReferences(in Inputs, locationFlag string, given map[Role]string) (map
 			if item.Remedy != "" {
 				item.Detail = fmt.Sprintf("%s names provider `%s`, which no providers.toml this call reads holds", argmark.Flag(string(role)), ref.Provider)
 				args := map[string]any{"provider": ref.Provider, "base-url": "<url>"}
-				if locationFlag != "" {
-					args[locationFlag] = true
+				if layer != "" {
+					args["layer"] = layer
 				}
 				item.Remedy = argmark.Call("configure-providers", args)
 			}
@@ -153,12 +153,12 @@ func RolesNaming(cfg Config, provider string) []RoleReference {
 }
 
 // ProviderEntryRefusals is the refusal of a configure-providers entry: name
-// must keep the provider-name rule; baseURL, api and flavor, where given, must
+// must keep the provider-name rule; baseURL, api and decisionAPI, where given, must
 // be an absolute http or https URL carrying no credentials and values the pool
 // loads. Each fault is an item keyed by the argument that carries it, every one
 // at once; none where the entry is one to write. No item names any part of
 // baseURL, which may hold a key.
-func ProviderEntryRefusals(name, baseURL, api, flavor string) result.Refusal {
+func ProviderEntryRefusals(name, baseURL, api, decisionAPI string) result.Refusal {
 	var refusal result.Refusal
 	if !providerName.MatchString(name) {
 		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Positional("provider"),
@@ -177,8 +177,8 @@ func ProviderEntryRefusals(name, baseURL, api, flavor string) result.Refusal {
 		flag, value string
 		allowed     []string
 	}{
-		{"api", api, []string{ProviderAPIAnthropic, ProviderAPIOpenAI}},
-		{"decisions-flavor", flavor, []string{FlavorSystemOne, FlavorDecisions}},
+		{"api", api, ProviderAPIs},
+		{"decision-api", decisionAPI, DecisionAPIs},
 	} {
 		if c.value != "" && !slices.Contains(c.allowed, c.value) {
 			refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: argmark.Flag(c.flag), Allowed: c.allowed,

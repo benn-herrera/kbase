@@ -54,10 +54,10 @@ func TestAskConcurrencyTakesTheFlagThenTheKeyThenTheDefault(t *testing.T) {
 }
 
 // TestBuildAndScoreRefuseAnAskConcurrencyUnderOne: each verb refuses the flag
-// under 1 in its result document, naming the flag, before it reaches anything;
+// under 1 in its result, naming the flag, before it reaches anything;
 // build's refusal names no state-dir and leaves the state store uncreated.
 func TestBuildAndScoreRefuseAnAskConcurrencyUnderOne(t *testing.T) {
-	refusedKey := func(t *testing.T, doc resultDoc) {
+	refusedKey := func(t *testing.T, doc parsedResult) {
 		t.Helper()
 		items := doc.items(toolresult.RefusalsKey)
 		if doc.Outcome != toolresult.Refused || len(items) != 1 || items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--ask-concurrency" {
@@ -75,7 +75,7 @@ func TestBuildAndScoreRefuseAnAskConcurrencyUnderOne(t *testing.T) {
 			StateDir: state, AskConcurrency: new(0), Stdout: &stdout, Stderr: &stderr, Logger: log.Discard()}); err != nil {
 			t.Fatal(err)
 		}
-		doc := checkDocument(t, "build", stdout.String())
+		doc := checkResult(t, "build", stdout.String())
 		refusedKey(t, doc)
 		if _, ok := doc.Values["state-dir"]; ok {
 			t.Errorf("the refusal carries state-dir: %v", doc.Values["state-dir"])

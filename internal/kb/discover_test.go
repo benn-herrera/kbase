@@ -37,6 +37,31 @@ func TestBearing(t *testing.T) {
 	}
 }
 
+// TestDocumentsExcludesOnlyTheNamedClasses: every Markdown document under
+// kb-root is discovered, those in session/ and tools/ and an invariants.md
+// included, except one under .index/ and the summary page, axioms.md and the
+// maintained-block documents, which are no leaves.
+func TestDocumentsExcludesOnlyTheNamedClasses(t *testing.T) {
+	root := filepath.Join(t.TempDir(), KBDir)
+	for _, rel := range []string{
+		"session/notes.md", "tools/claim-quality.md", InvariantsFile, "v/a.md",
+		IndexDir + "/stray.md", RegisterFile, "v/" + RegisterFile, AxiomsFile,
+		AgentsFile, AgentsRedirectFile, ConventionsFile, "README.md",
+	} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("# A document\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{InvariantsFile, "session/notes.md", "tools/claim-quality.md", "v/a.md"}
+	if docs, err := Documents(OnDisk(root)); err != nil || !slices.Equal(docs, want) {
+		t.Fatalf("Documents = %q, %v; want %q", docs, err, want)
+	}
+}
+
 // TestDocumentsRefusesASymlinkedDocument: a document that is a symbolic link
 // is refused, naming the path, rather than read through it; a tree of regular
 // documents lists.

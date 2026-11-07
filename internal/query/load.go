@@ -1,6 +1,6 @@
 // Package query answers questions over a KB's derived index: the rows
 // index.Derive yields from the KB's sources, and each query's payload shaped
-// for its result document.
+// for its result.
 package query
 
 import (

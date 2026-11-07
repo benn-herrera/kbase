@@ -1,29 +1,29 @@
 package kb
 
-import "kbase/internal/formats/format400"
+import "kbase/internal/formats/format40"
 
 // IndexFileExt is the extension of every file under .index/.
-const IndexFileExt = format400.IndexFileExt
+const IndexFileExt = format40.IndexFileExt
 
 // The rows index.Derive yields from the KB's records, one type per row set.
 
 // NodeRow is one node's row. Which fields a row carries is its kind's.
 type NodeRow struct {
-	NodeType           string   `json:"node_type"`
-	ID                 string   `json:"id"`
-	Title              string   `json:"title"`
-	Label              string   `json:"label"`
-	CanonicalPath      string   `json:"canonical_path"`
-	CanonicalAnchor    string   `json:"canonical_anchor"`
-	Status             string   `json:"status"`
-	Rigor              *float64 `json:"rigor"`
-	DerivationStrength *float64 `json:"derivation_strength"`
-	Strength           *float64 `json:"strength"`
-	BuildStatus        *string  `json:"build_status"`
-	StrengthBand       string   `json:"strength_band"`
-	Rationale          string   `json:"rationale"`
-	PremiseCount       int      `json:"premise_count"`
-	CitationCount      int      `json:"citation_count"`
+	NodeType           string
+	ID                 string
+	Title              string
+	Label              string
+	CanonicalPath      string
+	CanonicalAnchor    string
+	Status             string
+	Rigor              *float64
+	DerivationStrength *float64
+	Strength           *float64
+	BuildStatus        *string
+	StrengthBand       string
+	Rationale          string
+	PremiseCount       int
+	CitationCount      int
 }
 
 // EdgeRow is one edge's row. Bearing is a number in [0, 1], the
@@ -31,18 +31,18 @@ type NodeRow struct {
 // record's manually-scored flag, nil where its type carries none.
 // ReplacedRelation is a demoted record's, "" on every other.
 type EdgeRow struct {
-	Source           string  `json:"source"`
-	Target           string  `json:"target"`
-	Relation         string  `json:"relation"`
-	TargetKind       string  `json:"target_kind"`
-	Bearing          any     `json:"bearing"`
-	Context          *string `json:"context"`
-	ManuallyScored   *bool   `json:"manually_scored"`
-	ReplacedRelation string  `json:"replaced_relation"`
+	Source           string
+	Target           string
+	Relation         string
+	TargetKind       string
+	Bearing          any
+	Context          *string
+	ManuallyScored   *bool
+	ReplacedRelation string
 }
 
 // CiteRow is one citation's row.
 type CiteRow struct {
-	ClaimID  string `json:"claim_id"`
-	LeafPath string `json:"leaf_path"`
+	ClaimID  string
+	LeafPath string
 }

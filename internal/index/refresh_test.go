@@ -608,8 +608,9 @@ func TestRefreshRendersPagesAndSheetsOverTheSheetFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries = slices.DeleteFunc(entries, func(e os.DirEntry) bool { return e.Name() == filepath.Base(kb.TempDir) })
 	if len(entries) != len(records) {
-		t.Errorf(".index/ holds %d files after refresh, want the %d records alone", len(entries), len(records))
+		t.Errorf(".index/ holds %d files after refresh beside kbase's scratch, want the %d records alone", len(entries), len(records))
 	}
 	for rel, want := range records {
 		if got := read(t, filepath.Join(root, filepath.FromSlash(rel))); got != want {

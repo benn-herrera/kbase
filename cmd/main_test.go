@@ -126,15 +126,15 @@ func TestRootLoggingFlagFailures(t *testing.T) {
 }
 
 // TestExitStatus: an error no verb wrote a result for — a usage error among
-// them — is refused with its own result document; a verb's own exit code
+// them — is refused with its own result; a verb's own exit code
 // passes through with nothing more written.
 func TestExitStatus(t *testing.T) {
 	_, _, usage := executeRoot(t, "build", "--no-such-flag")
 	for _, tc := range []struct {
-		name     string
-		err      error
-		code     int
-		document bool
+		name   string
+		err    error
+		code   int
+		result bool
 	}{
 		{"success", nil, 0, false},
 		{"a verb's own exit", exitCode(3), 3, false},
@@ -145,16 +145,16 @@ func TestExitStatus(t *testing.T) {
 			if got := exitStatus(tc.err, &stdout, &stderr); got != tc.code {
 				t.Errorf("exit = %d, want %d", got, tc.code)
 			}
-			if !tc.document {
+			if !tc.result {
 				if stdout.Len() != 0 {
 					t.Errorf("stdout = %q, want nothing", stdout.String())
 				}
 				return
 			}
-			doc := checkDocument(t, "build", stdout.String())
+			doc := checkResult(t, "build", stdout.String())
 			items := doc.items("refusals")
 			if doc.Outcome != "refused" || len(items) != 1 || items[0]["check"] != "usage" || items[0]["detail"] != tc.err.Error() {
-				t.Errorf("document = %+v, want one usage refusal naming %q", doc.Values, tc.err)
+				t.Errorf("result = %+v, want one usage refusal naming %q", doc.Values, tc.err)
 			}
 		})
 	}

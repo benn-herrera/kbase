@@ -12,13 +12,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"kbase/internal/argmark"
-	"kbase/internal/atomicfile"
 	"kbase/internal/buildstore"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/kbdocs"
 	"kbase/internal/kbload"
+	"kbase/internal/kbwrite"
 	"kbase/internal/log"
+	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
 )
 
@@ -88,7 +89,7 @@ func initKB(opts initOptions) (string, []toolresult.Field) {
 	if len(usage) > 0 {
 		return refused(nil, usage...)
 	}
-	release, outcome, items, err := holdKB(kbRoot, "re-run "+argmark.Call("init", nil))
+	release, outcome, items, err := holdKB(kbRoot, "re-run "+argmark.Call("init", nil), opts.Logger)
 	if err != nil {
 		return failed(nil, err)
 	}
@@ -145,7 +146,7 @@ func skeleton(opts initOptions, repo, kbRoot string) ([]string, error) {
 		data []byte
 	}{{kb.EntryPointFile, []byte("# " + title + "\n")}, {kb.FormatFile, kb.EncodeFormatStamp(kb.FormatVersion)},
 		{kb.GraphNodesFile, kb.EncodeNodes(kb.Graph{})}, {kb.GraphEdgesFile, kb.EncodeEdges(kb.Graph{})}} {
-		if err := atomicfile.Write(filepath.Join(kbRoot, f.rel), f.data, nil); err != nil {
+		if err := kbwrite.Inside(kbRoot, filepath.Join(kbRoot, f.rel), f.data); err != nil {
 			return written, err
 		}
 		written = append(written, f.rel)
@@ -170,7 +171,7 @@ func initCommand() *cobra.Command {
 	var title string
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "create a KB empty — no LaTeX, no build",
+		Short: "create an empty KB and commit it — no LaTeX, no build",
 		Long: `init creates a knowledge base at kb-root/ in the git worktree root — the
 equivalent of git init for a KB: no LaTeX, no build,
 nothing distilled. It refuses outside a git worktree (check: worktree; remedy:
@@ -207,5 +208,5 @@ kb-root/ that exists (check: kb-root).`,
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "the KB's title, as its entry point's heading (default: the repository's directory name)")
-	return cmd
+	return mcp.Brief(cmd, "title", "the KB's title")
 }

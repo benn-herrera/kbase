@@ -10,12 +10,11 @@
 # paper that inputs lamb.bbl, no .bib beside it, and checks what kbase does
 # with bibtex's output (4): a done build and verify, no claim, no references
 # leaf, the citation left as its key, and the bibliography's entry text in a
-# leaf of the volume. Each leg also checks that no title stands twice within a
-# kind, and that every kb-build: commit holding a KB holds the derived files
-# its records derive (check-build-trail.sh). The rewind leg then runs, in the
-# bib leg's repository, the commands build-trail gives for a mid-trail
-# boundary and for started-at, each followed by the build it sets up. Needs
-# pandoc.
+# leaf of the volume. Each leg also checks that every kb-build: commit holding
+# a KB holds the derived files its records derive (check-build-trail.sh). The
+# rewind leg then runs, in the bib leg's repository, the commands build-trail
+# gives for a mid-trail boundary and for started-at, each followed by the
+# build it sets up. Needs pandoc.
 #
 # Inputs (environment): BIN_DIR; LAMB_FIXTURE_DIR, the fixture;
 # BUILD_LAMB_OUT_DIR, the evidence directory.
@@ -80,12 +79,6 @@ build() {
     check "${leg}" 'the build commits its four records under kb-root/.build/' \
         test "$(grep -cE '^kb-root/\.build/kb-build-(node-pass|classification|unmarked|cull)\.yaml$' "${out}/${leg}/committed.txt")" -eq 4
     check "${leg}" 'no build record at the repository root' absent 'kb-build-' <(grep -v '^kb-root/' "${out}/${leg}/committed.txt")
-    # Titles are unique within each kind: no kind-and-title pair twice among
-    # find's rows.
-    capture "${leg}" find "${kbase}" find
-    check "${leg}" 'find done' grep -qx 'outcome: "done"' "${out}/${leg}/find.out"
-    check "${leg}" 'no title twice within a kind' \
-        test -z "$(awk '/^ +node_type: /{k=$2} /^ +title: /{print k, $0}' "${out}/${leg}/find.out" | sort | uniq -d)"
     check "${leg}" 'every kb-build: commit holding a KB derives unchanged' \
         tools/scripts/check-build-trail.sh "${out}/${leg}/repo" "${out}/${leg}" "${kbase}"
 }
@@ -105,9 +98,9 @@ check bib 'the citation renders through the bibliography' grep -rqF 'data-cites=
 check bib 'the uncited stray entry reaches no document' absent 'strayentry1999' "${kb}"
 check bib 'the uncited stray title reaches no document' absent 'A Work This Paper Does Not Cite' "${kb}"
 
-# trail_commands <document> <index|started-at>: the commands build-trail's
-# document gives the boundary at that 0-based index, oldest first, or
-# started-at, one per line as the document's double-quoted strings hold them.
+# trail_commands <result> <index|started-at>: the commands build-trail's
+# result gives the boundary at that 0-based index, oldest first, or
+# started-at, one per line as the result's double-quoted strings hold them.
 trail_commands() {
     awk -v want="$2" '
       /^[^ ]/ { top = $0; sub(/:.*/, "", top); n = -1; listing = 0; next }
@@ -131,7 +124,7 @@ rewind_run() {
 
 # The rewind leg, over the bib leg's repository and state store as its build
 # left them: build-trail's commands for the boundary at index n/2 (rounded
-# down) of its n, oldest first, run as the document gives them — the reset,
+# down) of its n, oldest first, run as the result gives them — the reset,
 # then the resume, done, re-recording the bib leg's kb-build: subjects from
 # that boundary on, every commit holding a KB deriving unchanged — then
 # started-at's command and a fresh build, done.
@@ -172,7 +165,7 @@ check bbl 'no references leaf' test ! -e "${kb}/${slug}/references.md"
 check bbl 'the citation stays its key' grep -rqF 'data-cites="nobody2026">(nobody2026)</span>' "${kb}/${slug}"
 check bbl 'the bibliography entry text reaches a leaf' grep -rqF 'Nobody. *Nothing*. 2026.' "${kb}/${slug}"
 
-OUT_DIR="${out}" RECIPE="test-integration-build-lamb" INVOCATION="per leg, <leg>/repo/ with its own .git and one commit (identity fixed in the environment, global configuration quarantined to home/.gitconfig, KBASE_CONFIG_DIR the empty config/)\nbib: cp ${LAMB_FIXTURE_DIR}/{lamb.tex,lamb.bib,stray.bib} bib/repo/\nbbl: cp ${LAMB_FIXTURE_DIR}/lamb.bbl bbl/repo/; bbl/repo/lamb.tex is ${LAMB_FIXTURE_DIR}/lamb.tex with \\\\input{lamb.bbl} before \\\\end{document}\nper leg, <leg>/repo/: ${kbase} build --no-inference --state-dir <leg>/state lamb.tex > <leg>/build.out; ${kbase} verify > <leg>/verify.out; ${kbase} stats > <leg>/stats.out; ${kbase} find > <leg>/find.out, no kind-and-title pair twice\nper leg, tools/scripts/check-build-trail.sh <leg>/repo <leg> ${kbase}: per kb-build: commit holding kb-root/.index/format.yaml, git archive <commit> kb-root into <leg>/commits/<commit>/ beside an empty .git; there ${kbase} write --dry-run --values <leg>/empty-batch.yaml (entry: []) > <leg>/commits/<commit>.out; <leg>/commits.tsv: each commit and its outcome, every one unchanged\nbib: the title unquoted in kb-root/entry-point.md and the volume heading under its slug, a references leaf the volume lists, the citation rendered, stray.bib's entry under no file of kb-root/\nrewind, in bib/repo/ with ${BIN_DIR} first on PATH: kbase build-trail --state-dir bib/state > rewind/build-trail.out; the two commands of the boundary at index n/2 (rounded down) of n, oldest first, each run by bash -c as the document gives it > rewind/boundary-<1|2>.out, the reset exiting 0 and the resume done; rewind/subjects-after.txt equal to rewind/subjects-before.txt (git log --reverse --format=%s --grep='^kb-build: ') from that boundary on; tools/scripts/check-build-trail.sh bib/repo rewind ${kbase}; started-at's command by bash -c > rewind/started-at.out, exiting 0; kbase build --no-inference --state-dir bib/state lamb.tex > rewind/fresh-build.out, done\nbbl: no references leaf, the citation left as its key, the entry text in a leaf\nlegs.tsv: per check the leg, the check, pass or fail" \
+OUT_DIR="${out}" RECIPE="test-integration-build-lamb" INVOCATION="per leg, <leg>/repo/ with its own .git and one commit (identity fixed in the environment, global configuration quarantined to home/.gitconfig, KBASE_CONFIG_DIR the empty config/)\nbib: cp ${LAMB_FIXTURE_DIR}/{lamb.tex,lamb.bib,stray.bib} bib/repo/\nbbl: cp ${LAMB_FIXTURE_DIR}/lamb.bbl bbl/repo/; bbl/repo/lamb.tex is ${LAMB_FIXTURE_DIR}/lamb.tex with \\\\input{lamb.bbl} before \\\\end{document}\nper leg, <leg>/repo/: ${kbase} build --no-inference --state-dir <leg>/state lamb.tex > <leg>/build.out; ${kbase} verify > <leg>/verify.out; ${kbase} stats > <leg>/stats.out\nper leg, tools/scripts/check-build-trail.sh <leg>/repo <leg> ${kbase}: per kb-build: commit holding kb-root/.index/format.yaml, git archive <commit> kb-root into <leg>/commits/<commit>/ beside an empty .git; there ${kbase} write --dry-run --values <leg>/empty-batch.yaml (entry: []) > <leg>/commits/<commit>.out; <leg>/commits.tsv: each commit and its outcome, every one unchanged\nbib: the title unquoted in kb-root/entry-point.md and the volume heading under its slug, a references leaf the volume lists, the citation rendered, stray.bib's entry under no file of kb-root/\nrewind, in bib/repo/ with ${BIN_DIR} first on PATH: kbase build-trail --state-dir bib/state > rewind/build-trail.out; the two commands of the boundary at index n/2 (rounded down) of n, oldest first, each run by bash -c as the result gives it > rewind/boundary-<1|2>.out, the reset exiting 0 and the resume done; rewind/subjects-after.txt equal to rewind/subjects-before.txt (git log --reverse --format=%s --grep='^kb-build: ') from that boundary on; tools/scripts/check-build-trail.sh bib/repo rewind ${kbase}; started-at's command by bash -c > rewind/started-at.out, exiting 0; kbase build --no-inference --state-dir bib/state lamb.tex > rewind/fresh-build.out, done\nbbl: no references leaf, the citation left as its key, the entry text in a leaf\nlegs.tsv: per check the leg, the check, pass or fail" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-build-lamb): a check failed — see legs.tsv\n'

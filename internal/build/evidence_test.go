@@ -12,18 +12,18 @@ import (
 )
 
 var (
-	statusDocument = flag.String("build.status", "", "a status result document kbase wrote")
-	statusWant     = flag.String("build.state", "", "the state that document must report")
+	statusResult = flag.String("build.status", "", "a status result kbase wrote")
+	statusWant   = flag.String("build.state", "", "the state that result must report")
 )
 
-// TestStatusDocument parses a status document ./bin/kbase wrote and checks it
+// TestStatusResult parses a status result ./bin/kbase wrote and checks it
 // against the state the build was left in; test-integration-build-arxiv
 // supplies both.
-func TestStatusDocument(t *testing.T) {
-	if *statusDocument == "" {
-		t.Skip("no status document named; test-integration-build-arxiv supplies one")
+func TestStatusResult(t *testing.T) {
+	if *statusResult == "" {
+		t.Skip("no status result named; test-integration-build-arxiv supplies one")
 	}
-	b, err := os.ReadFile(*statusDocument)
+	b, err := os.ReadFile(*statusResult)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +39,14 @@ func TestStatusDocument(t *testing.T) {
 			Rewind  string   `yaml:"rewind"`
 		} `yaml:"stages"`
 		Current *struct {
-			Stage      string `yaml:"stage"`
-			UnitsDone  int    `yaml:"units-done"`
-			UnitsTotal int    `yaml:"units-total"`
+			Stage string `yaml:"stage"`
+			Done  int    `yaml:"done"`
+			Total int    `yaml:"total"`
 		} `yaml:"current"`
 		Resume *string `yaml:"resume"`
 	}
 	if err := yaml.Unmarshal(b, &doc); err != nil {
-		t.Fatalf("%s does not parse: %v", *statusDocument, err)
+		t.Fatalf("%s does not parse: %v", *statusResult, err)
 	}
 	if doc.Outcome != result.Done || doc.State != *statusWant {
 		t.Errorf("outcome %q, state %q; want done, %s", doc.Outcome, doc.State, *statusWant)
@@ -72,5 +72,8 @@ func TestStatusDocument(t *testing.T) {
 		t.Errorf("a finished build reports current %+v and resume %v", doc.Current, doc.Resume)
 	case unrecorded != "" && (doc.Current == nil || doc.Current.Stage != unrecorded || doc.Resume == nil):
 		t.Errorf("current %+v and resume %v, want %s and a resume command", doc.Current, doc.Resume, unrecorded)
+	}
+	if doc.Current != nil && (doc.Current.Total <= 0 || doc.Current.Done < 0 || doc.Current.Done > doc.Current.Total) {
+		t.Errorf("current %+v, want a positive total and done between 0 and it", doc.Current)
 	}
 }

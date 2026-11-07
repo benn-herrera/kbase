@@ -123,7 +123,7 @@ var askingStages = []askingStage{
 	}, Depends},
 }
 
-// TestAStoppedStageLeavesItsGroupRecords: each stage whose batch stops on a
+// TestAStoppedStageLeavesItsGroupRecords: each stage whose wave stops on a
 // call that never completes reports the stop, and leaves its group records
 // with that ask recorded failed; where they cannot be written, the stage
 // reports the stop and fails on the write.

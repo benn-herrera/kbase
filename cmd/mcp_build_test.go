@@ -76,7 +76,7 @@ func (p *buildProbe) answer(t *testing.T, method string, params any) probeFrame 
 	return f
 }
 
-// call is one tools/call's structured document, and whether the result is an
+// call is one tools/call's structured result, and whether the result is an
 // error.
 func (p *buildProbe) call(t *testing.T, name string, args map[string]any) (map[string]any, bool) {
 	t.Helper()
@@ -106,7 +106,7 @@ func probeDeadline(t *testing.T) time.Time {
 }
 
 // followed polls status until it reports a run that is not running and that
-// ran stands for, and returns that document; past deadline, unless it is the
+// ran stands for, and returns that result; past deadline, unless it is the
 // zero time, the test fails naming the run still going.
 func (p *buildProbe) followed(t *testing.T, deadline time.Time, ran func(pid float64) bool) map[string]any {
 	t.Helper()
@@ -173,7 +173,7 @@ func TestMCPBuildFollowedByStatus(t *testing.T) {
 	}
 
 	// The resume walks no stage, so it may exit before the call returns,
-	// answering with its own document; either way status follows it.
+	// answering with its own result; either way status follows it.
 	if again, isError := p.call(t, "build", map[string]any{"resume": true, "no-inference": true, "state-dir": *probeState}); isError {
 		t.Fatalf("the resume answered %v", again)
 	}

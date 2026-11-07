@@ -19,6 +19,6 @@ Unscored relations:
 | `references` | claim → claim | — | not scored |
 | `demoted` | claim → claim (at build time only, for breaking cycles) | — | not scored |
 
-An axiom premise is a `founds` edge from an axiom; it carries its bearing like every scoring edge,
+An axiom premise is a `founds` edge from an axiom; it has its bearing like every scoring edge,
 and the axiom's `rigor` of `1.00` by rule leaves its contribution the bearing alone.
 

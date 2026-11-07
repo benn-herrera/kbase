@@ -9,20 +9,23 @@ import (
 	"path/filepath"
 
 	"kbase/internal/argmark"
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 // Names the KB's readers key on.
 const (
 	KBDir          = "kb-root"
 	EntryPointFile = "entry-point.md"
-	IndexFile      = format400.IndexFile
+	IndexFile      = format40.IndexFile
 	UplinkMarker   = "↑"
 	// OwnProseTitle heads the leaf a container's own prose is lifted into.
 	OwnProseTitle = "Overview"
 
 	// IndexDir is the index's directory inside kb-root.
-	IndexDir = format400.IndexDir
+	IndexDir = format40.IndexDir
+	// TempDir is kbase's scratch inside kb-root: where every atomic write
+	// under kb-root makes its temp file, never read and never committed.
+	TempDir = IndexDir + "/kb-temp"
 	// ClaimGraphFile is the claim-graph sheet, inside kb-root and each
 	// volume; ClaimGraphDigestFile is the volume digest, inside kb-root.
 	ClaimGraphFile       = "claim-graph.svg"
@@ -33,8 +36,8 @@ const (
 	AgentsRedirect     = "@" + AgentsFile
 	ConventionsFile    = "CONVENTIONS.md"
 	// AxiomsFile is the declaration document axioms are stated in;
-	// InvariantsFile is the superseded name a converted KB may still carry,
-	// which leaf discovery skips.
+	// InvariantsFile is its superseded name, which the conversion from 1.0.0
+	// reads axioms from; in a current KB it is a leaf like any other.
 	AxiomsFile     = "axioms.md"
 	InvariantsFile = "invariants.md"
 )
@@ -113,12 +116,13 @@ func ResolvePath(p string) string {
 }
 
 // ExcludeDirs are directories leaf discovery never descends into, and
-// ExcludeNames files it never reads as a document.
+// ExcludeNames files it never reads as a document: the non-leaf documents
+// whose name alone decides their class.
 var (
-	ExcludeDirs  = map[string]bool{"session": true, IndexDir: true, "tools": true}
+	ExcludeDirs  = map[string]bool{IndexDir: true}
 	ExcludeNames = map[string]bool{
-		RegisterFile: true, "claim-quality-closure-roadmap.md": true, AgentsFile: true,
-		AgentsRedirectFile: true, ConventionsFile: true, "README.md": true, AxiomsFile: true, InvariantsFile: true,
+		RegisterFile: true, AgentsFile: true, AgentsRedirectFile: true,
+		ConventionsFile: true, "README.md": true, AxiomsFile: true,
 	}
 )
 

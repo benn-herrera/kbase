@@ -10,8 +10,9 @@ import (
 )
 
 // CleartextWarning is the one line saying a configured key travels in
-// cleartext — the base URL is http:// to a host other than loopback — and ""
-// otherwise. It names the host, never the key.
+// cleartext — the base URL is http:// to a host off the local network — and ""
+// otherwise. A local-network host is localhost, a *.local name, or a loopback,
+// private or link-local IP literal. It names the host, never the key.
 func CleartextWarning(baseURL string, apiKey secret.Key) string {
 	if apiKey.IsZero() {
 		return ""
@@ -21,11 +22,12 @@ func CleartextWarning(baseURL string, apiKey secret.Key) string {
 		return ""
 	}
 	host := u.Hostname()
-	if strings.EqualFold(host, "localhost") {
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	if h == "localhost" || strings.HasSuffix(h, ".local") {
 		return ""
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
 		return ""
 	}
-	return fmt.Sprintf("warning: the API key travels in cleartext to %s (http://, not a loopback host)", host)
+	return fmt.Sprintf("warning: the API key travels in cleartext to %s (http://, not a local-network host)", host)
 }

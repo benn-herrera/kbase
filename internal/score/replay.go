@@ -162,8 +162,9 @@ type capturedCall struct {
 	closed closedText
 }
 
-// readLastCaptures is, per item, the last call the captures.jsonl in the run
-// directory runDir records, keyed as the ledger keys an item. The file is read to
+// readLastCaptures is, per item, the last first ask — a call with no
+// correction — the captures.jsonl in the run directory runDir records, keyed as
+// the ledger keys an item; a re-ask is read and checked, and not kept. The file is read to
 // its last complete line, so a run still appending is read as far as it has
 // landed. A complete line that does not read as a capture, names no class, or
 // numbers bytes its text does not hold is an error: the record is what a reply
@@ -190,6 +191,9 @@ func readLastCaptures(runDir string) (map[string]capturedCall, error) {
 		closed, err := rec.closedText()
 		if err != nil {
 			return nil, fmt.Errorf("%s line %d: %w", path, i+1, err)
+		}
+		if rec.Correction != nil {
+			continue
 		}
 		out[rec.lineKey()] = capturedCall{captureRecord: rec, class: cl, closed: closed}
 	}
@@ -290,7 +294,7 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader, lg lo
 	if err := os.Mkdir(rp.dir, 0o777); err != nil {
 		return ReplayResult{}, fmt.Errorf("start replay %s: %w", rp.id, err)
 	}
-	if err := atomicfile.Write(filepath.Join(rp.dir, replayFile), b, nil); err != nil {
+	if err := atomicfile.Write(filepath.Join(rp.dir, replayFile), b); err != nil {
 		return ReplayResult{}, err
 	}
 	if err := buildstore.PruneByStart(filepath.Dir(rp.dir), replayFile, rp.id, buildstore.KeptRuns, func(n string) bool { return runKind(n) == runKind(rp.id) }); err != nil {
@@ -309,8 +313,7 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader, lg lo
 	// Each call's place in the selection is its result cell, so the files take
 	// their records in item order whatever order the answers came in; a cell
 	// left nil was not answered.
-	answers := make([]*Entry, len(rp.calls))
-	calls := make([]*call, len(rp.calls))
+	answers := make([][]sentCall, len(rp.calls))
 	cut := make([]bool, len(rp.calls))
 	var (
 		wg      sync.WaitGroup
@@ -320,21 +323,20 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader, lg lo
 	progress := buildstore.StartReplayProgress(lg, len(rp.calls))
 	defer progress.End()
 	for i, captured := range rp.calls {
-		c := &call{class: captured.class, closed: captured.closed}
-		if c.prompt, err = c.class.render(c.closed); err != nil {
+		c := call{class: captured.class, closed: captured.closed}
+		if c.prompt, err = c.class.render(c.closed, nil); err != nil {
 			walkErr = err
 			break
 		}
-		calls[i] = c
 		e := Entry{Model: h.Model, PromptSHA256: digestOf(c.prompt)}
 		if err := launch(ctx, &wg, func(ask Ask) func() {
-			answered, interrupted := c.attempt(ctx, ask, e)
+			sent, interrupted := c.attempt(ctx, ask, e)
 			if interrupted {
 				cut[i] = true
 				return nil
 			}
-			answers[i] = &answered
-			if replayedDone(answered) {
+			answers[i] = sent
+			if replayedDone(sent[len(sent)-1].entry) {
 				progress.Done()
 			} else {
 				progress.Failed()
@@ -351,22 +353,26 @@ func (rp *Replay) Walk(ctx context.Context, launch Launch, h ReplayHeader, lg lo
 	}
 	var recorded []attempt
 	var captures, compared []any
-	for i, answered := range answers {
+	for i, sent := range answers {
 		captured := rp.calls[i]
 		it := captured.asItem()
-		if answered == nil {
+		if sent == nil {
 			if res.Outcome == result.Cancelled && res.Stopped == "" {
 				res.Stopped = ItemName(it)
 			}
 			continue
 		}
-		e, c := *answered, calls[i]
-		captures = append(captures, l.captureOf(it, e, *c))
-		recorded = append(recorded, l.line(it, e))
+		for _, s := range sent {
+			captures = append(captures, l.captureOf(it, s.entry, s.call))
+			recorded = append(recorded, l.line(it, s.entry))
+		}
+		// The outcome is the final call's; the prompt compared is the first
+		// ask's, against the captured first ask.
+		e := sent[len(sent)-1].entry
 		originalLine, hasLine := rp.original[captured.lineKey()]
 		original := originalLine.entry()
 		compared = append(compared, comparisonLine{Item: ItemName(it), Before: original.Before, Original: judgementOf(original),
-			Replay: judgementOf(e), PromptChanged: e.PromptSHA256 != captured.PromptSHA256})
+			Replay: judgementOf(e), PromptChanged: sent[0].entry.PromptSHA256 != captured.PromptSHA256})
 		if replayedDone(e) {
 			res.Counts.Done++
 		} else {

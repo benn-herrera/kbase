@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 // Derived-field placeholders: the identity value of each field refresh
@@ -58,8 +58,8 @@ func BandFor(strength *float64) *StrengthBand {
 
 // The id body's alphabet and length, as IDBody spells them.
 const (
-	HashAlphabet = format400.IDBodyAlphabet
-	HashLen      = format400.IDBodyLen
+	HashAlphabet = format40.IDBodyAlphabet
+	HashLen      = format40.IDBodyLen
 )
 
 // IDPlaceholders are authored placeholder ids, never real nodes: each minted
@@ -97,11 +97,11 @@ func MintID(kind string, taken func(id string) bool) string {
 // LabelName is the name a labelled block's label line carries — letters, in
 // words single-spaced — as a pattern fragment: a label line is read only where
 // its name is this.
-const LabelName = format400.LabelName
+const LabelName = format40.LabelName
 
 // LabelLine is the name line carries where it is a labelled block's label
 // line as it is read; ok false for any other line.
-func LabelLine(line string) (name string, ok bool) { return format400.LabelLine(line) }
+func LabelLine(line string) (name string, ok bool) { return format40.LabelLine(line) }
 
 // The document kinds a frontmatter block's kind: names, by path shape alone:
 // the entry point, a document with children, one without.
@@ -132,15 +132,15 @@ const AxiomRigor = 1.0
 
 // EquationLabel is the \label an equation node's title carries, or "" with
 // ok false for any other title.
-func EquationLabel(title string) (string, bool) { return format400.EquationLabel(title) }
+func EquationLabel(title string) (string, bool) { return format40.EquationLabel(title) }
 
 // EquationLocator is the text that locates the line inside an equation's
 // display-maths fence carrying its label, where the equation's statement
 // marker goes.
-func EquationLocator(label string) string { return format400.EquationLocator(label) }
+func EquationLocator(label string) string { return format40.EquationLocator(label) }
 
 // DisplayMathInfo is the info string of a displayed equation's fence.
-const DisplayMathInfo = format400.DisplayMathInfo
+const DisplayMathInfo = format40.DisplayMathInfo
 
 // SheetDigestDrawn is whether a KB whose node rows are these holds the volume
 // digest sheet and the per-volume sheets: two or more volumes hold nodes, a

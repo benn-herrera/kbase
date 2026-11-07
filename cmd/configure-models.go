@@ -22,8 +22,9 @@ import (
 type configureModelsOptions struct {
 	providerOptions
 
-	Models        map[config.Role]string
-	Global, Local bool
+	Models map[config.Role]string
+	// Layer is the --layer flag, "" where it names none.
+	Layer string
 
 	// WorkDir is where the repository search started; the worktree refusal
 	// names it.
@@ -45,7 +46,7 @@ func runConfigureModels(ctx context.Context, opts configureModelsOptions) (int, 
 // provider's catalogue under its own --timeout deadline, and against the pool
 // of the stack it writes into: the layer written and the layers beneath it.
 func configureModels(ctx context.Context, opts configureModelsOptions) (string, []toolresult.Field) {
-	dir, layer, items, err := configureLocation(opts.providerOptions, opts.Global, opts.Local, opts.WorkDir)
+	dir, layer, items, err := configureLocation(opts.providerOptions, opts.Layer, opts.WorkDir)
 	if err != nil {
 		return failed(nil, err)
 	}
@@ -63,7 +64,7 @@ func configureModels(ctx context.Context, opts configureModelsOptions) (string, 
 	if timeout <= 0 {
 		timeout = defaultListTimeout
 	}
-	run, err := config.ConfigureModels(stack.inputs(), locationFlag(opts.Global, opts.Local), opts.Models, func(entry config.Provider) ([]string, error) {
+	run, err := config.ConfigureModels(stack.inputs(), opts.Layer, opts.Models, func(entry config.Provider) ([]string, error) {
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		return reg.Catalogue(callCtx, entry)
@@ -77,7 +78,8 @@ func configureModels(ctx context.Context, opts configureModelsOptions) (string, 
 	}
 	warnings := warningsField(warned)
 	if err != nil {
-		return refusedOrFailed([]toolresult.Field{warnings}, err)
+		outcome, fields := refusedOrFailed(nil, err)
+		return outcome, toolresult.WithWarnings(fields, warnings)
 	}
 	fields := []toolresult.Field{
 		{Key: "models", Value: toolresult.Record{
@@ -85,12 +87,12 @@ func configureModels(ctx context.Context, opts configureModelsOptions) (string, 
 			{Key: string(config.RoleText), Value: stringOrNull(run.Models.Text)},
 			{Key: string(config.RoleScoring), Value: stringOrNull(run.Models.Scoring)}}},
 		{Key: "written", Value: nonNil(run.Written)},
-		warnings,
 	}
+	outcome := toolresult.Done
 	if len(run.Written) == 0 {
-		return toolresult.Unchanged, fields
+		outcome = toolresult.Unchanged
 	}
-	return toolresult.Done, fields
+	return outcome, toolresult.WithWarnings(fields, warnings)
 }
 
 var (
@@ -98,14 +100,13 @@ var (
 	configureModelsFlagText     string
 	configureModelsFlagScoring  string
 	configureModelsFlagTimeout  time.Duration
-	configureModelsFlagGlobal   bool
-	configureModelsFlagLocal    bool
+	configureModelsFlagLayer    string
 )
 
 func configureModelsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "configure-models",
-		Short: "assign a model reference to each role given in config.toml",
+		Short: "write a model reference into config.toml for each role given",
 		Long: `Assign a model reference, <provider>/<model>, to each role given — ` + argmark.Flag(string(config.RoleDecision)) + `,
 ` + argmark.Flag(string(config.RoleText)) + ` and ` + argmark.Flag(string(config.RoleScoring)) + `, at least one — in config.toml's [models] table,
 creating the file where it is absent. The roles not given stand as they are:
@@ -116,9 +117,9 @@ A reference names a provider, then the model it serves, split at the first /.
 Its provider part is folded to lowercase and matches a provider whatever its
 case. A value that is not a reference is refused, and so is a provider that no
 providers.toml this call reads defines: the one in the directory it writes
-into and, under ` + argmark.Flag("local") + `, the global one (check: provider; path: the first of
+into and, under ` + argmark.FlagValue("layer", config.LayerSourceRepository) + `, the global one (check: provider; path: the first of
 these; remedy: ` + argmark.Call("configure-providers", map[string]any{"provider": "<provider>", "base-url": "<url>"}) + ` with this call's
-` + argmark.Flag("global") + ` or ` + argmark.Flag("local") + `). A refusal writes nothing. Each provider named is
+` + argmark.Flag("layer") + `). A refusal writes nothing. Each provider named is
 dialled once, ` + argmark.Flag("timeout") + ` bounding the request, and each reference is checked
 against its catalogue: a model missing from its catalogue is a warning, not a
 failure, since catalogues rotate. A catalogue that cannot be listed fails the
@@ -132,8 +133,8 @@ directory it is against, "detail" what is wrong; then one per model missing
 from its catalogue, "key" the role (` + argmark.Flag(string(config.RoleDecision)) + `, ` + argmark.Flag(string(config.RoleText)) + ` or ` + argmark.Flag(string(config.RoleScoring)) + `), "detail" the
 reference missing.
 "warnings" is empty where there are none. It is carried on every outcome once
-the configuration has loaded, refusals and failures included; a refusal of the
-location arguments, or a configuration that does not load, carries none. A run
+the configuration has loaded, refusals and failures included; a refusal of
+` + argmark.Flag("layer") + `, or a configuration that does not load, carries none. A run
 that writes nothing is unchanged.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -150,8 +151,7 @@ that writes nothing is unchanged.`,
 				providerOptions: opts,
 				Models: map[config.Role]string{config.RoleDecision: configureModelsFlagDecision,
 					config.RoleText: configureModelsFlagText, config.RoleScoring: configureModelsFlagScoring},
-				Global:  configureModelsFlagGlobal,
-				Local:   configureModelsFlagLocal,
+				Layer:   configureModelsFlagLayer,
 				WorkDir: wd,
 				Stdout:  cmd.OutOrStdout(),
 				Logger:  processLog.logger,
@@ -174,8 +174,9 @@ that writes nothing is unchanged.`,
 		{&configureModelsFlagScoring, config.RoleScoring},
 	} {
 		cmd.Flags().StringVar(f.value, string(f.role), "", "the "+string(f.role)+" role's model reference, <provider>/<model>")
+		mcp.Brief(cmd, string(f.role), string(f.role)+" role's model, provider/model")
 	}
-	registerTimeoutFlag(cmd, &configureModelsFlagTimeout, "deadline for one catalogue request")
-	registerLocationFlags(cmd, &configureModelsFlagGlobal, &configureModelsFlagLocal)
+	registerTimeoutFlag(cmd, &configureModelsFlagTimeout, catalogueTimeoutUsage, catalogueTimeoutBrief)
+	registerLayerFlag(cmd, &configureModelsFlagLayer)
 	return mcp.Notes(cmd, configureMCPNote, "")
 }

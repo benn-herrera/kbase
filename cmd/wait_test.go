@@ -24,7 +24,7 @@ func TestWaitRefusesAnAbsentOrNonPositivePid(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, code := kbase(t, t.TempDir(), append([]string{"wait"}, args...)...)
-			doc := checkDocument(t, "wait", out)
+			doc := checkResult(t, "wait", out)
 			items := doc.items(toolresult.RefusalsKey)
 			if doc.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || len(items) != 1 ||
 				items[0]["check"] != toolresult.CheckUsage || items[0]["key"] != "--pid" {
@@ -35,7 +35,7 @@ func TestWaitRefusesAnAbsentOrNonPositivePid(t *testing.T) {
 }
 
 // TestWaitReportsTheStoreItLocated: given no --state-dir, wait reads the store
-// the operation lock names, and its final document is that store's although
+// the operation lock names, and its final result is that store's although
 // the run removed the lock on its way out.
 func TestWaitReportsTheStoreItLocated(t *testing.T) {
 	base := t.TempDir()
@@ -57,7 +57,7 @@ func TestWaitReportsTheStoreItLocated(t *testing.T) {
 	if err := <-released; err != nil {
 		t.Fatalf("release the store: %v", err)
 	}
-	if doc := checkDocument(t, "wait", out); doc.Values["state-dir"] != other {
+	if doc := checkResult(t, "wait", out); doc.Values["state-dir"] != other {
 		t.Errorf("wait reports state-dir %v, want the store the operation lock named, %s\n%s", doc.Values["state-dir"], other, out)
 	}
 }

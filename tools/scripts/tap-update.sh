@@ -35,7 +35,7 @@ sha="$(curl -fsSL "${url}" | shasum -a 256 | cut -d' ' -f1)"
 f="${TAP_DIR}/Formula/kbase.rb"
 tools/scripts/tap-formula-set.sh "${f}" "${url}" "${sha}"
 if ! git -C "${TAP_DIR}" diff --quiet HEAD -- Formula/kbase.rb; then
-    git -C "${TAP_DIR}" commit -m "kbase ${ver}" -- Formula/kbase.rb
+    git -C "${TAP_DIR}" commit -S -m "kbase ${ver}" -- Formula/kbase.rb
 fi
 
 current="$(sed -n 's/^go \([0-9.][0-9.]*\)$/\1/p' go.mod)"

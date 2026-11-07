@@ -121,39 +121,50 @@ func Mentions(text, id string) bool {
 	return false
 }
 
-// refuseMentions refuses a removal of id while a citation of it, outside code
-// in any document but the summary pages, or a prose field of a record still
-// mentions it; each is named, a citation by path and line, a field by record
-// and field. A removed work's label, "" for any other kind, refuses it too
-// where a citation span carries it as a key and no reference-list entry has
-// that key: the work record is the span's only bibliography entry. Each such
-// span is named by path and line.
+// refuseMentions refuses a removal of id while a citation of it or the id
+// standing bare (kb.TextBareIDs), outside code in any document but the summary
+// pages, or a prose field of a record still mentions it; each is named, a
+// line mentioning it once by path and line however many forms it takes there,
+// a field by record and field. A removed work's label, "" for any other kind,
+// refuses it too where a citation span carries it as a key and no
+// reference-list entry has that key: the work record is the span's only
+// bibliography entry. Each such span is named by path and line.
 func (b *recordBatch) refuseMentions(id, label string) error {
 	var refusals, spans result.Refusal
 	entry := false
+	distinct := func(lines []int) []int { return slices.Compact(slices.Sorted(slices.Values(lines))) }
 	err := b.eachDocument(func(rel string, l *leafEdit, _ bool) error {
-		last := 0
+		var mentioned []int
 		for _, c := range kb.TextCitations(l.text) {
-			if n := c.Line + 1; c.Title == id && n != last {
-				last = n
-				refusals = append(refusals, result.Item{Key: editID.name, Path: rel, Line: n,
-					Remedy: fmt.Sprintf("edit the prose at %s:%d so it no longer cites %s, then re-run", rel, n, id),
-					Detail: fmt.Sprintf("%s:%d cites %s, and a citation of a removed node points nowhere", rel, n, id)})
+			if c.Title == id {
+				mentioned = append(mentioned, c.Line+1)
 			}
+		}
+		for _, t := range kb.TextBareIDs(l.text) {
+			if t.ID == id {
+				mentioned = append(mentioned, t.Line+1)
+			}
+		}
+		for _, n := range distinct(mentioned) {
+			refusals = append(refusals, result.Item{Key: editID.name, Path: rel, Line: n,
+				Remedy: fmt.Sprintf("edit the prose at %s:%d so it no longer cites or names %s, then re-run", rel, n, id),
+				Detail: fmt.Sprintf("%s:%d cites %s or holds it bare, and a removal leaves no node for it to name", rel, n, id)})
 		}
 		if label == "" {
 			return nil
 		}
-		last = 0
+		var spanned []int
 		for _, r := range kb.CitationKeyRefs(l.text) {
 			entry = entry || (r.Key == label && r.Use == kb.KeyInEntry)
-			if n := r.Line + 1; r.Key == label && r.Use == kb.KeyInSpan && n != last {
-				last = n
-				spans = append(spans, result.Item{Key: editID.name, Path: rel, Line: n,
-					Remedy: fmt.Sprintf("edit the prose at %s:%d so it no longer cites %s, then re-run", rel, n, label),
-					Detail: fmt.Sprintf("%s:%d holds a citation span carrying %s, %s's label, which no reference-list entry has as its key, "+
-						"so without the work record the export prints the span as plain text", rel, n, label, id)})
+			if r.Key == label && r.Use == kb.KeyInSpan {
+				spanned = append(spanned, r.Line+1)
 			}
+		}
+		for _, n := range distinct(spanned) {
+			spans = append(spans, result.Item{Key: editID.name, Path: rel, Line: n,
+				Remedy: fmt.Sprintf("edit the prose at %s:%d so it no longer cites %s, then re-run", rel, n, label),
+				Detail: fmt.Sprintf("%s:%d holds a citation span carrying %s, %s's label, which no reference-list entry has as its key, "+
+					"so without the work record the export prints the span as plain text", rel, n, label, id)})
 		}
 		return nil
 	})

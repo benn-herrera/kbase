@@ -89,4 +89,4 @@ or statement.
 takes nothing from. `flt-transfer`'s missing bridge and `flt-conditional`'s unstated condition are
 absences, and their site is the target's own words.
 
-@!score-answer-close!@
+@!score-answer-close!@@!correction-head!@@!refusal-case!@@!correction-quote!@@!correction-close!@

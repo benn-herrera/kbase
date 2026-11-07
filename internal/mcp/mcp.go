@@ -67,6 +67,32 @@ func Notes(cmd *cobra.Command, mcpNote, cliNote string) *cobra.Command {
 	return cmd
 }
 
+// noteEveryCallAnnotation marks a command whose MCP note every call of its
+// tool needs, so the tool description carries the note as well as the help.
+const noteEveryCallAnnotation = "kbase.help.mcp.everyCall"
+
+// NoteEveryCall declares that every call of cmd's tool needs its MCP note.
+func NoteEveryCall(cmd *cobra.Command) *cobra.Command {
+	return annotate(cmd, noteEveryCallAnnotation, "true")
+}
+
+// briefAnnotationPrefix leads the annotation holding an argument's brief, the
+// argument's name, a flag's or a positional's, following it.
+const briefAnnotationPrefix = "kbase.mcp.brief."
+
+// Brief declares the brief of cmd's argument name: the few words naming what
+// its value is, which the served schema describes the argument by. The help's
+// argument list keeps the argument's full description.
+func Brief(cmd *cobra.Command, name, brief string) *cobra.Command {
+	return annotate(cmd, briefAnnotationPrefix+name, brief)
+}
+
+// BriefOf is the brief cmd declares for its argument name, its markers
+// unspelled; "" where it declares none.
+func BriefOf(cmd *cobra.Command, name string) string {
+	return cmd.Annotations[briefAnnotationPrefix+name]
+}
+
 // Bind declares cmd bound: a tool binds it.
 func Bind(cmd *cobra.Command) *cobra.Command { return annotate(cmd, BindingAnnotation, Bound) }
 
@@ -94,14 +120,45 @@ func ExcludeFlag(f *pflag.Flag) {
 // in the order the command line joins their values with commas.
 const MappingAnnotation = "kbase.mcp.mapping"
 
+// mappingEnumAnnotationPrefix leads the annotation holding the values a
+// mapping key admits, the key's name following it.
+const mappingEnumAnnotationPrefix = MappingAnnotation + ".enum."
+
+// MappingKey is one key of a mapping argument: its name and, where its values
+// are a fixed set, that set.
+type MappingKey struct {
+	Name string
+	Enum []string
+}
+
 // MappingFlag declares that f's tool argument is a mapping of keys, each a
-// string and each required, which the command line takes as the values
-// joined by commas in keys' order.
-func MappingFlag(f *pflag.Flag, keys ...string) {
+// string and each required, a key with an Enum admitting only those values,
+// which the command line takes as the values joined by commas in keys' order.
+func MappingFlag(f *pflag.Flag, keys ...MappingKey) {
 	if f.Annotations == nil {
 		f.Annotations = map[string][]string{}
 	}
-	f.Annotations[MappingAnnotation] = keys
+	names := make([]string, len(keys))
+	for i, k := range keys {
+		names[i] = k.Name
+		if k.Enum != nil {
+			f.Annotations[mappingEnumAnnotationPrefix+k.Name] = k.Enum
+		}
+	}
+	f.Annotations[MappingAnnotation] = names
+}
+
+// enumAnnotation holds the values a string flag's tool argument admits.
+const enumAnnotation = "kbase.mcp.enum"
+
+// EnumFlag declares that f's tool argument admits only values, which its
+// schema property carries as its enum. The command line is left to the
+// command's own check.
+func EnumFlag(f *pflag.Flag, values ...string) {
+	if f.Annotations == nil {
+		f.Annotations = map[string][]string{}
+	}
+	f.Annotations[enumAnnotation] = values
 }
 
 // Mappings is each of cmd's mapping flags, by name, and its keys; none for a
@@ -310,10 +367,10 @@ type ProjectTool struct {
 // Calls is what a tool call reaches beyond the command tree, supplied by the
 // caller of Tools.
 type Calls struct {
-	// WriteOp runs op over the values document values in the project at dir,
-	// writing its result document on out: write.Batch's batch.
+	// WriteOp runs op over the batch values in the project at dir, writing its
+	// result on out: write.Batch's batch.
 	WriteOp func(dir, op string, values []byte, out io.Writer) error
-	// RenderError writes on out the result document for err, an error a
+	// RenderError writes on out the result for err, an error a
 	// command's RunE returned without writing one, and on stderr its line.
 	RenderError func(err error, out, stderr io.Writer)
 	// Detached is the tool of each command it keys, in place of one that runs
@@ -336,7 +393,9 @@ type Calls struct {
 // bound command is named for is that command's: its members are served by
 // that command's tool, and have none of their own. A member naming a family
 // neither calls.Families nor a bound command holds, or a family no member
-// names, is an error.
+// names, is an error. The schema of a tool a command alone binds, write's
+// aside, describes each argument by its brief (Brief); an argument without one,
+// or a brief naming no argument of the tool, is an error.
 func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) ([]protocol.Tool, error) {
 	var tools []protocol.Tool
 	calls.spelling = Spelling(root, true)
@@ -353,6 +412,11 @@ func Tools(root *cobra.Command, located Located, stderr io.Writer, calls Calls) 
 			tool, err := operationTool(cmd, stderr, calls)
 			if err != nil {
 				return nil, err
+			}
+			if cmd.Name() != write.Batch {
+				if tool.Tool.InputSchema, err = briefedSchema(cmd, tool.Tool.InputSchema, calls.spelling); err != nil {
+					return nil, err
+				}
 			}
 			tool.Tool.Description = toolDescription(cmd)
 			tool.Tool.ReadOnly = readOnly(cmd)
@@ -399,6 +463,31 @@ func familyMembers(bound []*cobra.Command, family string) []*cobra.Command {
 }
 
 func readOnly(cmd *cobra.Command) bool { return cmd.Annotations[ReadOnlyAnnotation] == "true" }
+
+// briefedSchema is schema with each property described by the brief cmd
+// declares for it (Brief), spelled by sp. A property cmd declares no brief for,
+// or a brief cmd declares for no property, is an error naming it.
+func briefedSchema(cmd *cobra.Command, schema protocol.Schema, sp argmark.Spelling) (protocol.Schema, error) {
+	for _, key := range slices.Sorted(maps.Keys(cmd.Annotations)) {
+		if name, ok := strings.CutPrefix(key, briefAnnotationPrefix); ok {
+			if _, taken := schema.Properties[name]; !taken {
+				return protocol.Schema{}, fmt.Errorf("%s: a brief for %s, which its tool does not take", cmd.Name(), name)
+			}
+		}
+	}
+	properties := make(map[string]protocol.Property, len(schema.Properties))
+	for _, name := range slices.Sorted(maps.Keys(schema.Properties)) {
+		brief := BriefOf(cmd, name)
+		if brief == "" {
+			return protocol.Schema{}, fmt.Errorf("%s: its argument %s declares no brief", cmd.Name(), name)
+		}
+		property := schema.Properties[name]
+		property.Description = sp.Spell(brief)
+		properties[name] = property
+	}
+	schema.Properties = properties
+	return schema, nil
+}
 
 // operationTool is cmd run as its own tool would run it, with no description
 // or read-only hint: the write batch, a detached launch, or its RunE over
@@ -455,7 +544,7 @@ func familyTool(root *cobra.Command, f Family, members []*cobra.Command, stderr 
 			arguments = map[string]any{}
 		}
 		if refusal := argumentRefusal(op.Tool, arguments); refusal != nil {
-			doc, err := refusalDocument(refusal, calls.spelling)
+			doc, err := refusalResult(refusal, calls.spelling)
 			if err != nil {
 				return "", nil, false, err
 			}
@@ -471,24 +560,17 @@ func familyTool(root *cobra.Command, f Family, members []*cobra.Command, stderr 
 }
 
 // argumentRefusal is the usage refusal of each way arguments fail op's own
-// schema, each item naming its argument and every argument op takes, and its
-// remedy pointing at op's full help for the rest; nil where they fit it.
+// schema, each item naming its argument at its dotted path and every key of
+// the object it lies in — op's arguments, or a mapping argument's keys — and
+// its remedy pointing at op's full help for the rest; nil where they fit it.
 func argumentRefusal(op protocol.Tool, arguments map[string]any) result.Refusal {
 	faults := op.InputSchema.Faults(arguments)
 	if faults == nil {
 		return nil
 	}
-	allowed := slices.Sorted(maps.Keys(op.InputSchema.Properties))
 	refusal := make(result.Refusal, 0, len(faults))
 	for _, f := range faults {
-		detail := fmt.Sprintf("%s's argument %q must be of type %s", op.Name, f.Key, f.Want.Type)
-		switch {
-		case f.Missing:
-			detail = fmt.Sprintf("%s requires the argument %q", op.Name, f.Key)
-		case f.Unknown:
-			detail = fmt.Sprintf("%q is no argument of %s", f.Key, op.Name)
-		}
-		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: f.Key, Allowed: allowed, Detail: detail,
+		refusal = append(refusal, result.Item{Check: result.CheckUsage, Key: f.Key, Allowed: f.Allowed, Detail: op.Name + ": " + f.Detail(),
 			Remedy: "allowed names every argument it takes; its full help, " + helpURI(op.Name) +
 				", says what it does"})
 	}
@@ -501,13 +583,11 @@ const projectDirProperty = "project-dir"
 
 // projectDirMeaning is what the project-dir property names, whatever the
 // server's mode.
-const projectDirMeaning = "Absolute path of the project this call acts on: its git worktree root, " +
-	"the directory holding .git, where kb-root/ is or will be. Never kb-root/ itself or a subdirectory."
+const projectDirMeaning = "Absolute path of the project's git worktree root, not kb-root/"
 
 // projectDirDescription is the project-dir property's description on a
 // server that located a project of its own.
-const projectDirDescription = projectDirMeaning + " Omit it for this server's own project, the one " +
-	"its instructions locate, and name it only for another project."
+const projectDirDescription = projectDirMeaning + "; omit it for this server's own project"
 
 // inProject is t as the server serves it: its schema carries project-dir,
 // optional where the server located a project of its own and required where
@@ -529,7 +609,7 @@ func inProject(t ProjectTool, located Located, calls Calls) protocol.Tool {
 		p, err := callProject(args, located)
 		var refusal result.Refusal
 		if errors.As(err, &refusal) {
-			doc, err := refusalDocument(refusal, calls.spelling)
+			doc, err := refusalResult(refusal, calls.spelling)
 			if err != nil {
 				return "", nil, false, err
 			}
@@ -594,9 +674,8 @@ func noProject() result.Refusal {
 		Remedy: "name the project with project-dir: the absolute path of its git worktree root"}}
 }
 
-// refusalDocument is the refused result document carrying refusal, spelled
-// by sp.
-func refusalDocument(refusal result.Refusal, sp argmark.Spelling) (string, error) {
+// refusalResult is the refused result carrying refusal, spelled by sp.
+func refusalResult(refusal result.Refusal, sp argmark.Spelling) (string, error) {
 	var out bytes.Buffer
 	if err := result.Emit(result.Spelled(&out, sp), result.Refused, result.Field{Key: result.RefusalsKey, Value: []result.Item(refusal)}); err != nil {
 		return "", fmt.Errorf("rendering the refusal: %w", err)
@@ -626,7 +705,7 @@ func batchSchema() protocol.Schema {
 }
 
 // batchTool is the write batch: the arguments are the batch, run through run
-// as write.Batch's values document, its result spelled by sp.
+// as write.Batch's batch, its result spelled by sp.
 func batchTool(run func(dir, op string, values []byte, out io.Writer) error, sp argmark.Spelling) ProjectTool {
 	schema := batchSchema()
 	call := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
@@ -699,8 +778,9 @@ func commandArguments(cmd *cobra.Command) ([]Positional, protocol.Schema, error)
 // flagProperties is a property for each flag of flags, command's, but help:
 // those not excluded from MCP, or where excluded is true those excluded. Each
 // is typed by flagSchemaTypes, a mapping flag as an object of its keys, and
-// described by flagDescription. A flag of a type no tool argument carries is
-// an error.
+// described by flagDescription; a flag and a mapping key declaring a fixed set
+// (EnumFlag, MappingFlag) carry it as their enum. A flag of a type no tool
+// argument carries is an error.
 func flagProperties(command string, flags *pflag.FlagSet, excluded bool) (map[string]protocol.Property, error) {
 	properties := map[string]protocol.Property{}
 	var err error
@@ -717,9 +797,10 @@ func flagProperties(command string, flags *pflag.FlagSet, excluded bool) (map[st
 			closed := false
 			property = protocol.Property{Type: "object", Properties: map[string]protocol.Property{}, Required: keys, AdditionalProperties: &closed}
 			for _, key := range keys {
-				property.Properties[key] = protocol.Property{Type: "string"}
+				property.Properties[key] = protocol.Property{Type: "string", Enum: f.Annotations[mappingEnumAnnotationPrefix+key]}
 			}
 		}
+		property.Enum = f.Annotations[enumAnnotation]
 		property.Description = flagDescription(f)
 		properties[f.Name] = property
 	})
@@ -743,7 +824,7 @@ func commandTool(cmd *cobra.Command, stderr io.Writer, renderError func(err erro
 	return ProjectTool{Tool: protocol.Tool{Name: cmd.Name(), InputSchema: schema}, Run: call}, nil
 }
 
-// runCommandTool runs cmd over args from dir, its result document on out,
+// runCommandTool runs cmd over args from dir, its result on out,
 // and leaves cmd's streams and context as it found them and its flags at
 // their defaults.
 func runCommandTool(cmd *cobra.Command, positionals []Positional, args map[string]any, dir string, out, stderr io.Writer, renderError func(err error, out, stderr io.Writer)) error {
@@ -826,12 +907,12 @@ func argumentTexts(v any) []string {
 	return []string{fmt.Sprint(v)}
 }
 
-// ToolResult is a result document as an MCP tool's result: the document,
-// the document decoded, and whether its outcome is an error.
+// ToolResult is a kbase result as an MCP tool's result: its text, its decoded
+// mapping, and whether its outcome is an error.
 func ToolResult(doc []byte) (string, map[string]any, bool, error) {
 	var structured map[string]any
 	if err := yaml.Unmarshal(doc, &structured); err != nil {
-		return "", nil, false, fmt.Errorf("decoding the result document: %w", err)
+		return "", nil, false, fmt.Errorf("decoding the result: %w", err)
 	}
 	outcome, _ := structured["outcome"].(string)
 	return string(doc), structured, result.IsError(outcome), nil

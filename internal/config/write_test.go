@@ -422,8 +422,8 @@ func TestSetProvider(t *testing.T) {
 apiKeyFile = "lab.key"`, `baseUrl = "http://new:8000/v1"  # moved in May
 apiKeyFile = "lab.key"
 api = "openai"`, 1)},
-		{"a new entry", Provider{Name: "edge", BaseURL: "http://edge/v1", DecisionsFlavor: "decisions"},
-			handProviders + "\n[edge]\nbaseUrl = \"http://edge/v1\"\ndecisionsFlavor = \"decisions\"\n"},
+		{"a new entry", Provider{Name: "edge", BaseURL: "http://edge/v1", DecisionAPI: "decisions"},
+			handProviders + "\n[edge]\nbaseUrl = \"http://edge/v1\"\ndecisionApi = \"decisions\"\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeProviders(t, t.TempDir(), handProviders)

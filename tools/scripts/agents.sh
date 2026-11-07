@@ -10,9 +10,9 @@ cd "${script_dir}/../.." || exit 1
 
 : "${AGENTS_DIR:?AGENTS_DIR is not set: the sibling adjagent clone}"
 
-if [[ ! -f "${AGENTS_DIR}/justfile" ]]; then
-    printf 'agents: no justfile at %s/justfile — kbase is developed in tandem with adjagent, so AGENTS_DIR must name a sibling clone\n' "${AGENTS_DIR}" >&2
+if [[ ! -f "${AGENTS_DIR}/adjagent/__init__.py" ]]; then
+    printf 'agents: no python module at %s/adjagent — kbase is developed in tandem with adjagent, so AGENTS_DIR must name a sibling clone\n' "${AGENTS_DIR}" >&2
     exit 1
 fi
-just --justfile "${AGENTS_DIR}/justfile" install-with-kb "$(pwd)" --harness=claude
-just --justfile "${AGENTS_DIR}/justfile" install-with-kb "$(pwd)" --harness=opencode --model-tier-map=default
+PYTHONPATH="${AGENTS_DIR}" python -m adjagent install . --harness=claude
+PYTHONPATH="${AGENTS_DIR}" python -m adjagent install . --harness=opencode

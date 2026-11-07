@@ -6,13 +6,8 @@ Must-see:
 
 - No user-facing behaviors or outcomes are designed here, that belongs to SPEC
 - No project mechanisms or code structure are put forth, that belongs to ARCHITECTURE
-- Edit PROJECT_DOCS/ leaves, never the root pointer files ([Project Documents](project-documents.md))
-- Coding
-  - When accepting dispatched-agent work, follow [CONVENTIONS, Coordinator Policy](coordinator-policy/index.md)
-  - Audit the diff, not the report, before commit
-- Briefing a seat
-  - A brief adds the task's facts to the seat's definition; it never widens or replaces the seat's question
-  - Before briefing a seat whose definition you have not read this session, read it
+- Edit PROJECT_DOCS/ leaves, never the root pointer files ([Project Documents](project-documents/index.md))
+- Process is the `dev-process` skill's; kbase's additions: [Plan & Execute Process](plan-execute-process/index.md)
 
 Contents:
 
@@ -20,6 +15,7 @@ Contents:
 - [Build and Run](build-and-run/index.md)
   - [No built binaries live in the repo](build-and-run/no-built-binaries-live-in-the-repo.md)
   - [Test data layout](build-and-run/test-data-layout.md)
+  - [A recipe's script lives in `tools/scripts/`](build-and-run/a-recipe-s-script-lives-in-tools-scripts.md)
 - [Module Structure](module-structure.md)
 - [Key Architecture Constraints](key-architecture-constraints.md)
 - [House Rules](house-rules/index.md)
@@ -28,29 +24,37 @@ Contents:
   - [Superseded format parsers](house-rules/superseded-format-parsers.md)
   - [`kb-format` patch bumps](house-rules/kb-format-patch-bumps.md)
   - [Reads through `kb.Source`](house-rules/reads-through-kb-source.md)
-  - [A result field's integer is `int`, never `int64`](house-rules/a-result-field-s-integer-is-int-never-int64.md)
   - [`just fmt` is the sanctioned formatter](house-rules/just-fmt-is-the-sanctioned-formatter.md)
+  - [A move is `git mv`, a deletion `git rm`](house-rules/a-move-is-git-mv-a-deletion-git-rm.md)
+  - [An MCP tool is a subcommand, never hand-listed](house-rules/an-mcp-tool-is-a-subcommand-never-hand-listed.md)
+  - [A dev-only diagnostic is `kbasedev`-tagged](house-rules/a-dev-only-diagnostic-is-kbasedev-tagged.md)
+  - [A command's starting directory is `invocationDir(cmd)`](house-rules/a-command-s-starting-directory-is-invocationdir-cmd.md)
+  - [Never enumerate a field kbase does not fill](house-rules/never-enumerate-a-field-kbase-does-not-fill.md)
   - [Never spell the node-kind list](house-rules/never-spell-the-node-kind-list.md)
   - [Never spell a relation](house-rules/never-spell-a-relation.md)
+  - [Records go through the loader and the encoder](house-rules/records-go-through-the-loader-and-the-encoder.md)
+  - [Never spell an op's key vocabulary](house-rules/never-spell-an-op-s-key-vocabulary.md)
   - [A file kbase generates is regenerated whole](house-rules/a-file-kbase-generates-is-regenerated-whole.md)
-  - [No stage exits on a model's opinion](house-rules/no-stage-exits-on-a-model-s-opinion.md)
+  - [A model call runs inside its queue item](house-rules/a-model-call-runs-inside-its-queue-item.md)
   - [No test asserts a prompt's prose](house-rules/no-test-asserts-a-prompt-s-prose.md)
   - [A scoring-model fact lives once, in `internal/kb`](house-rules/a-scoring-model-fact-lives-once-in-internal-kb.md)
+  - [The parse locates a citation; it never validates one](house-rules/the-parse-locates-a-citation-it-never-validates-one.md)
   - [A scoring value is derived in integer hundredths](house-rules/a-scoring-value-is-derived-in-integer-hundredths.md)
   - [Name the producer before you write the refusal](house-rules/name-the-producer-before-you-write-the-refusal.md)
   - [Compare a label in the page's spelling](house-rules/compare-a-label-in-the-page-s-spelling.md)
+  - [A Lua filter walks what it returns](house-rules/a-lua-filter-walks-what-it-returns.md)
+  - [Write whitespace in a bracket as `PyWhitespace`](house-rules/write-whitespace-in-a-bracket-as-pywhitespace.md)
+  - [A ranking sum is `pySum`](house-rules/a-ranking-sum-is-pysum.md)
+  - [Stamped KB documents get prompt-engineer review](house-rules/stamped-kb-documents-get-prompt-engineer-review.md)
   - [Name a tool argument through the marker](house-rules/name-a-tool-argument-through-the-marker.md)
 - [Plan & Execute Process](plan-execute-process/index.md)
-  - [Surface audit, every third retired plan](plan-execute-process/surface-audit-every-third-retired-plan.md)
-  - [Plan work rating and dispatch](plan-execute-process/plan-work-rating-and-dispatch.md)
-  - [Plan dispatchability](plan-execute-process/plan-dispatchability.md)
+  - [Surface audit, every third surface-changing sprint](plan-execute-process/surface-audit-every-third-surface-changing-sprint.md)
 - [Coordinator Policy](coordinator-policy/index.md)
-  - [Audit the diff, not the report](coordinator-policy/audit-the-diff-not-the-report.md)
+  - [Design fixes](coordinator-policy/design-fixes.md)
 - [Testing](testing/index.md)
-  - [No verification is a one-off](testing/no-verification-is-a-one-off.md)
   - [Integration tests invoke the app binary](testing/integration-tests-invoke-the-app-binary.md)
   - [Results are part of the test](testing/results-are-part-of-the-test.md)
 - [Dependency Policy](dependency-policy.md)
 - [Logging](logging.md)
-- [Project Documents](project-documents.md)
-- [Section and Rule Heading Brevity](section-and-rule-heading-brevity.md)
+- [Project Documents](project-documents/index.md)
+  - [Section and rule heading brevity](project-documents/section-and-rule-heading-brevity.md)

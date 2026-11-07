@@ -98,12 +98,7 @@ func (p Property) admits(v any) bool {
 		if !ok || p.Properties == nil {
 			return ok
 		}
-		for key, value := range m {
-			if inner, declared := p.Properties[key]; !declared || !inner.admits(value) {
-				return false
-			}
-		}
-		return !slices.ContainsFunc(p.Required, func(key string) bool { _, given := m[key]; return !given })
+		return p.objectFaults("", m) == nil
 	case "boolean":
 		_, ok := v.(bool)
 		return ok
@@ -123,31 +118,70 @@ func (p Property) admits(v any) bool {
 	return false
 }
 
-// Fault is one argument failing a schema: Missing where the schema requires
-// it and the arguments lack it, Unknown where the schema has no property of
-// its name, and otherwise a value Want does not admit.
+// Fault is one argument failing a schema, Key its dotted path where it lies
+// inside an object argument (edge.relation): Missing where the object
+// requires it and lacks it, Unknown where the object has no property of its
+// name — Want then being that object — and otherwise a value Want does not
+// admit. Allowed is every key of the object Key lies in, sorted; nil where it
+// declares none.
 type Fault struct {
 	Key              string
 	Missing, Unknown bool
 	Want             Property
+	Allowed          []string
+}
+
+// Detail is f in words, naming its argument by its path.
+func (f Fault) Detail() string {
+	switch {
+	case f.Missing:
+		return fmt.Sprintf("argument %q is required", f.Key)
+	case f.Unknown:
+		allowed := "none"
+		if len(f.Allowed) > 0 {
+			allowed = strings.Join(f.Allowed, ", ")
+		}
+		return fmt.Sprintf("argument %q is unknown (allowed: %s)", f.Key, allowed)
+	case f.Want.Enum != nil:
+		return fmt.Sprintf("argument %q must be one of %s", f.Key, strings.Join(f.Want.Enum, ", "))
+	}
+	return fmt.Sprintf("argument %q must be of type %s", f.Key, f.Want.Type)
 }
 
 // Faults is every way args fail s: each required key missing, in s's order,
-// then each argument s has no property for or does not admit, in key order.
+// then each argument s has no property for or does not admit, in key order;
+// an object argument declaring properties is descended into, its faults
+// reported the same way at their dotted paths.
 func (s Schema) Faults(args map[string]any) []Fault {
+	return Property{Type: "object", Properties: s.Properties, Required: s.Required}.objectFaults("", args)
+}
+
+// objectFaults is Faults over m, an object p declares the properties of,
+// each key's path prefixed by path.
+func (p Property) objectFaults(path string, m map[string]any) []Fault {
+	at := func(key string) string {
+		if path == "" {
+			return key
+		}
+		return path + "." + key
+	}
+	allowed := slices.Sorted(maps.Keys(p.Properties))
 	var faults []Fault
-	for _, key := range s.Required {
-		if _, ok := args[key]; !ok {
-			faults = append(faults, Fault{Key: key, Missing: true})
+	for _, key := range p.Required {
+		if _, ok := m[key]; !ok {
+			faults = append(faults, Fault{Key: at(key), Missing: true, Want: p, Allowed: allowed})
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(args)) {
-		p, ok := s.Properties[key]
+	for _, key := range slices.Sorted(maps.Keys(m)) {
+		inner, ok := p.Properties[key]
+		object, isMap := m[key].(map[string]any)
 		switch {
 		case !ok:
-			faults = append(faults, Fault{Key: key, Unknown: true})
-		case !p.admits(args[key]):
-			faults = append(faults, Fault{Key: key, Want: p})
+			faults = append(faults, Fault{Key: at(key), Unknown: true, Want: p, Allowed: allowed})
+		case inner.Type == "object" && inner.Properties != nil && isMap:
+			faults = append(faults, inner.objectFaults(at(key), object)...)
+		case !inner.admits(m[key]):
+			faults = append(faults, Fault{Key: at(key), Want: inner, Allowed: allowed})
 		}
 	}
 	return faults
@@ -157,17 +191,7 @@ func (s Schema) Faults(args map[string]any) []Fault {
 func (s Schema) check(args map[string]any) string {
 	var faults []string
 	for _, f := range s.Faults(args) {
-		switch {
-		case f.Missing:
-			faults = append(faults, fmt.Sprintf("argument %q is required", f.Key))
-		case f.Unknown:
-			allowed := slices.Sorted(maps.Keys(s.Properties))
-			faults = append(faults, fmt.Sprintf("argument %q is not one this tool takes (it takes %s)", f.Key, strings.Join(allowed, ", ")))
-		case f.Want.Enum != nil:
-			faults = append(faults, fmt.Sprintf("argument %q must be one of %s", f.Key, strings.Join(f.Want.Enum, ", ")))
-		default:
-			faults = append(faults, fmt.Sprintf("argument %q must be of type %s", f.Key, f.Want.Type))
-		}
+		faults = append(faults, f.Detail())
 	}
 	return strings.Join(faults, "; ")
 }

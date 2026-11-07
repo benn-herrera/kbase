@@ -11,7 +11,9 @@ import (
 const pathDecisions = "decisions"
 
 // encodeDecisionsRequest serializes a DecisionRequest to the Decisions wire
-// format: model, input and one named question per — nothing else.
+// format: model, input and one named question per — nothing else. A
+// correction ends each question's instructions, a predicate's guidance
+// included.
 func encodeDecisionsRequest(req DecisionRequest) ([]byte, error) {
 	w := wireDecisionsRequest{
 		Model:     req.Model,
@@ -29,6 +31,7 @@ func encodeDecisionsRequest(req DecisionRequest) ([]byte, error) {
 		} else {
 			wq.Choices = decisionsChoices(q.Criteria)
 		}
+		wq.Instructions += req.Correction
 		w.Questions = append(w.Questions, wq)
 	}
 	return json.Marshal(w)
@@ -115,6 +118,8 @@ func decisionAnswer(a wireDecisionsAnswer) DecisionAnswer {
 		return answer
 	case "score":
 		return DecisionAnswer{Key: a.Name, Type: "score", Score: a.Score}
+	case DecisionRefusal:
+		return DecisionAnswer{Key: a.Name, Type: DecisionRefusal}
 	default:
 		return DecisionAnswer{Key: a.Name, Type: a.Type}
 	}

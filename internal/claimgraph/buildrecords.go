@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"kbase/internal/atomicfile"
 	"kbase/internal/buildrecords"
 	"kbase/internal/kb"
+	"kbase/internal/kbwrite"
 )
 
 // A leaf's read state: no reading has reached it; its whole outcome is in the
@@ -126,7 +126,7 @@ func writeRecord(repoRoot, rel string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	return atomicfile.Write(p, b, nil)
+	return kbwrite.Inside(filepath.Join(repoRoot, kb.KBDir), p, b)
 }
 
 // WriteNodePass lands the node-pass record whole in kb-root/.build/.

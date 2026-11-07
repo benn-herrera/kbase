@@ -58,8 +58,8 @@ func providersTemplate() string {
 # type = "inference"  # optional; the only kind kbase can use
 # api = "anthropic"   # optional; the chat protocol: "anthropic" (the default),
 #                     # the Messages API, or "openai"
-# decisionsFlavor = "systemone"  # optional; which decision surface this server
-#                                # speaks: "systemone" (the default) or
-#                                # "decisions"
+# decisionApi = "systemone"  # optional; which decision API this server
+#                            # speaks: "systemone" (the default) or
+#                            # "decisions"
 `
 }

@@ -32,7 +32,7 @@ func TestRecordedItemsReproduceTheAskedState(t *testing.T) {
 	for _, kind := range Kinds {
 		t.Run(string(kind), func(t *testing.T) {
 			h := &heard{}
-			rec, err := askedBatch(t, NewBatch, readerLaunch(h.read), kind, itemsOf(t, kind))
+			rec, err := askedWave(t, NewWave, readerLaunch(h.read), kind, itemsOf(t, kind))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,12 +53,12 @@ func TestRecordedItemsReproduceTheAskedState(t *testing.T) {
 	}
 }
 
-// TestAReplayBatchCarriesOnPastAFailedItem: one item at a time, the second's
-// call never completing. A replay's batch records the second failed with its
+// TestAReplayWaveCarriesOnPastAFailedItem: one item at a time, the second's
+// call never completing. A replay's wave records the second failed with its
 // inputs and digest and no call, and carries on to answer the third.
-func TestAReplayBatchCarriesOnPastAFailedItem(t *testing.T) {
+func TestAReplayWaveCarriesOnPastAFailedItem(t *testing.T) {
 	h := &heard{scripted: scripted{replies: map[string][]string{"S1": {LetterClaim}, "S3": {LetterClaim}}}}
-	rec, err := askedBatch(t, NewReplayBatch, serialLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
+	rec, err := askedWave(t, NewReplayWave, serialLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
 	var incomplete IncompleteError
 	if errors.As(err, &incomplete) {
 		t.Fatalf("Wait = %v; want no stop", err)

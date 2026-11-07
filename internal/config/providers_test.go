@@ -290,8 +290,7 @@ func TestLoadProvidersUnusableEntries(t *testing.T) {
 		{"no baseUrl", "apiKeyFile = \"never-read.key\"\n", "no baseUrl declared"},
 		{"unknown type", "baseUrl = \"http://x/v1\"\ntype = \"telepathy\"\n", "unknown type"},
 		{"unknown api", "baseUrl = \"http://x/v1\"\napi = \"exa\"\n", "not valid for a inference provider"},
-		{"unknown decisionsFlavor", "baseUrl = \"http://x/v1\"\ndecisionsFlavor = \"systemtwo\"\n", "known surfaces: systemone, decisions"},
-	} {
+		{"unknown decisionApi", "baseUrl = \"http://x/v1\"\ndecisionApi = \"systemtwo\"\n", "unknown decisionApi \"systemtwo\" (known decision APIs: systemone, decisions)"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := writeProviders(t, dir,
@@ -346,29 +345,29 @@ func TestLoadProvidersCredentialsInBaseURL(t *testing.T) {
 	}
 }
 
-// TestProviderValidateDefaults: type, api and decisionsFlavor are optional
+// TestProviderValidateDefaults: type, api and decisionApi are optional
 // compatibility fields; absent, mixed-case and space-padded spellings of the
-// one legal pairing all validate, and Kind/Protocol/Flavor report the
+// one legal pairing all validate, and Kind/Protocol/EffectiveDecisionAPI report the
 // normalized value so call sites can compare against the constants.
 func TestProviderValidateDefaults(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		provider   Provider
-		wantOK     bool
-		wantAPI    string
-		wantFlavor string
+		name            string
+		provider        Provider
+		wantOK          bool
+		wantAPI         string
+		wantDecisionAPI string
 	}{
 		{"both absent", Provider{BaseURL: "http://x/v1"}, true, "", ""},
 		{"both explicit", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference, API: ProviderAPIOpenAI}, true, ProviderAPIOpenAI, ""},
 		{"type only", Provider{BaseURL: "http://x/v1", Type: ProviderTypeInference}, true, "", ""},
 		{"api only", Provider{BaseURL: "http://x/v1", API: ProviderAPIOpenAI}, true, ProviderAPIOpenAI, ""},
 		{"normalized spelling", Provider{BaseURL: "http://x/v1", Type: " Inference ", API: "OpenAI"}, true, ProviderAPIOpenAI, ""},
-		{"decisions flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorDecisions}, true, "", FlavorDecisions},
-		{"flavour, normalized spelling", Provider{BaseURL: "http://x/v1", DecisionsFlavor: " Decisions "}, true, "", FlavorDecisions},
-		{"systemone flavour", Provider{BaseURL: "http://x/v1", DecisionsFlavor: FlavorSystemOne}, true, "", FlavorSystemOne},
+		{"decisions API", Provider{BaseURL: "http://x/v1", DecisionAPI: DecisionAPIDecisions}, true, "", DecisionAPIDecisions},
+		{"decision API, normalized spelling", Provider{BaseURL: "http://x/v1", DecisionAPI: " Decisions "}, true, "", DecisionAPIDecisions},
+		{"systemone API", Provider{BaseURL: "http://x/v1", DecisionAPI: DecisionAPISystemOne}, true, "", DecisionAPISystemOne},
 		{"wrong type", Provider{BaseURL: "http://x/v1", Type: "search"}, false, "", ""},
 		{"wrong api", Provider{BaseURL: "http://x/v1", API: "exa"}, false, "", ""},
-		{"unknown decisionsFlavor", Provider{BaseURL: "http://x/v1", DecisionsFlavor: "systemtwo"}, false, "", ""},
+		{"unknown decisionApi", Provider{BaseURL: "http://x/v1", DecisionAPI: "systemtwo"}, false, "", ""},
 		{"no baseUrl", Provider{Type: ProviderTypeInference}, false, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -390,13 +389,13 @@ func TestProviderValidateDefaults(t *testing.T) {
 			if a := tc.provider.Protocol(); a != wantAPI {
 				t.Errorf("Protocol() = %q, want %q", a, wantAPI)
 			}
-			// An entry silent on the flavour speaks the SystemOne surface.
-			wantFlavor := tc.wantFlavor
-			if wantFlavor == "" {
-				wantFlavor = FlavorSystemOne
+			// An entry silent on the decision API speaks the SystemOne one.
+			wantDecisionAPI := tc.wantDecisionAPI
+			if wantDecisionAPI == "" {
+				wantDecisionAPI = DecisionAPISystemOne
 			}
-			if f := tc.provider.Flavor(); f != wantFlavor {
-				t.Errorf("Flavor() = %q, want %q", f, wantFlavor)
+			if f := tc.provider.EffectiveDecisionAPI(); f != wantDecisionAPI {
+				t.Errorf("EffectiveDecisionAPI() = %q, want %q", f, wantDecisionAPI)
 			}
 		})
 	}

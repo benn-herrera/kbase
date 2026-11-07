@@ -37,9 +37,18 @@ var dependencyRules = []dependencyRule{{
 	forbidden: []string{"internal/claimgraph"},
 	why:       "docgraph knows nothing of claims; the record schema both read lives in internal/records",
 }, {
+	from:      []string{"internal/docgraph"},
+	forbidden: []string{"internal/index"},
+	why:       "docgraph writes the tree through kbwrite and reads no derived view",
+}, {
 	from:    []string{"internal/records"},
 	allowed: []string{"internal/atomicfile"},
 	why:     "the record schema imports nothing of kbase but atomicfile, to write its files",
+}, {
+	from:    []string{"internal/kbwrite"},
+	allowed: []string{"internal/atomicfile", "internal/kb", "internal/result"},
+	direct:  true,
+	why:     "the write under kb-root/ imports no kbase package but atomicfile, kb and result, so every writer there can import it",
 }, {
 	from:    []string{"internal/buildrecords"},
 	allowed: []string{"internal/kb"},
@@ -64,8 +73,8 @@ var dependencyRules = []dependencyRule{{
 	why:       "the maintenance packages stand below the build",
 }, {
 	from:    []string{"internal/kb"},
-	allowed: []string{"internal/log", "internal/formats/format400", "internal/argmark"},
-	why:     "kb imports no other kbase package but log, format400, the live format it re-exports, and argmark, to mark the arguments its refusals name",
+	allowed: []string{"internal/log", "internal/formats/format40", "internal/argmark"},
+	why:     "kb imports no other kbase package but log, format40, the live format it re-exports, and argmark, to mark the arguments its refusals name",
 }, {
 	from:    []string{"internal/argmark"},
 	allowed: []string{},
@@ -130,7 +139,7 @@ var dependencyRules = []dependencyRule{{
 	direct:    true,
 	why:       "outside the formats tree only the loader and kb import it: an older KB is converted where it is opened, and nowhere else, kb re-exports the live format, and no other package reaches a format (I8)",
 }, {
-	from:    []string{"internal/formats/format400"},
+	from:    []string{"internal/formats/format40"},
 	allowed: []string{},
 	why:     "the live format imports no kbase package, common included, and restates any declaration it shares with an earlier format",
 }, {
@@ -386,9 +395,9 @@ func TestDependencyRules(t *testing.T) {
 
 // TestFormatsTreeRules: over a synthetic graph, the formats tree importing
 // within itself, the loader importing its root and kb, and kb importing
-// format400 pass the rules; kb importing another format, a live package
-// importing format400, the loader importing format400 or format200 directly,
-// format400 importing common, and a tree package importing internal/kb each
+// format40 pass the rules; kb importing another format, a live package
+// importing format40, the loader importing format40 or format20 directly,
+// format40 importing common, and a tree package importing internal/kb each
 // fail them, at exactly the packages named. Within the tree, a format
 // importing itself or a later format, a non-root package importing a
 // converter, common importing a format, a converter importing a format past
@@ -396,14 +405,14 @@ func TestDependencyRules(t *testing.T) {
 // break the tree's order.
 func TestFormatsTreeRules(t *testing.T) {
 	base := map[string][]string{
-		"internal/kbload":               {"internal/formats", "internal/kb"},
-		"internal/formats":              {"internal/formats/common", "internal/formats/format100", "internal/formats/format200", "internal/formats/from100to200"},
-		"internal/formats/common":       nil,
-		"internal/formats/format100":    {"internal/formats/common"},
-		"internal/formats/format200":    {"internal/formats/common"},
-		"internal/formats/from100to200": {"internal/formats/common", "internal/formats/format100", "internal/formats/format200"},
-		"internal/formats/format400":    nil,
-		"internal/kb":                   {"internal/formats/format400"},
+		"internal/kbload":             {"internal/formats", "internal/kb"},
+		"internal/formats":            {"internal/formats/common", "internal/formats/format10", "internal/formats/format20", "internal/formats/from10to20"},
+		"internal/formats/common":     nil,
+		"internal/formats/format10":   {"internal/formats/common"},
+		"internal/formats/format20":   {"internal/formats/common"},
+		"internal/formats/from10to20": {"internal/formats/common", "internal/formats/format10", "internal/formats/format20"},
+		"internal/formats/format40":   nil,
+		"internal/kb":                 {"internal/formats/format40"},
 	}
 	if got := dependencyViolations(base, dependencyRules); len(got) != 0 {
 		t.Errorf("the base graph breaks %v, want no rule broken", got)
@@ -412,27 +421,27 @@ func TestFormatsTreeRules(t *testing.T) {
 		pkg, dep string
 		want     []string
 	}{
-		{"internal/kb", "internal/formats/format200", []string{
+		{"internal/kb", "internal/formats/format20", []string{
 			"internal/kb → internal/formats/common",
-			"internal/kb → internal/formats/format200",
+			"internal/kb → internal/formats/format20",
 		}},
-		{"internal/index", "internal/formats/format400", []string{
-			"internal/index → internal/formats/format400",
+		{"internal/index", "internal/formats/format40", []string{
+			"internal/index → internal/formats/format40",
 		}},
-		{"internal/kbload", "internal/formats/format400", []string{
-			"internal/kbload → internal/formats/format400",
+		{"internal/kbload", "internal/formats/format40", []string{
+			"internal/kbload → internal/formats/format40",
 		}},
-		{"internal/formats/format100", "internal/kb", []string{
+		{"internal/formats/format10", "internal/kb", []string{
 			"internal/formats → internal/kb",
-			"internal/formats/format100 → internal/kb",
-			"internal/formats/from100to200 → internal/kb",
+			"internal/formats/format10 → internal/kb",
+			"internal/formats/from10to20 → internal/kb",
 		}},
-		{"internal/kbload", "internal/formats/format200", []string{
-			"internal/kbload → internal/formats/format200",
+		{"internal/kbload", "internal/formats/format20", []string{
+			"internal/kbload → internal/formats/format20",
 		}},
-		{"internal/formats/format400", "internal/formats/common", []string{
+		{"internal/formats/format40", "internal/formats/common", []string{
 			"internal/kb → internal/formats/common",
-			"internal/formats/format400 → internal/formats/common",
+			"internal/formats/format40 → internal/formats/common",
 		}},
 	} {
 		graph := withImport(base, tc.pkg, tc.dep)
@@ -448,12 +457,12 @@ func TestFormatsTreeRules(t *testing.T) {
 		t.Errorf("the base graph breaks the tree's order: %q", got)
 	}
 	for _, tc := range []struct{ pkg, dep, want string }{
-		{"internal/formats/format200", "internal/formats/format300", "a format imports only earlier formats"},
-		{"internal/formats/format200", "internal/formats/format200", "a format imports only earlier formats"},
-		{"internal/formats/format200", "internal/formats/from100to200", "no package but the root imports a converter"},
-		{"internal/formats/common", "internal/formats/format100", "common imports nothing of the tree"},
-		{"internal/formats/from100to200", "internal/formats/format300", "a converter imports no format later than its target"},
-		{"internal/formats/format100", "internal/formats", "nothing in the tree imports its root"},
+		{"internal/formats/format20", "internal/formats/format30", "a format imports only earlier formats"},
+		{"internal/formats/format20", "internal/formats/format20", "a format imports only earlier formats"},
+		{"internal/formats/format20", "internal/formats/from10to20", "no package but the root imports a converter"},
+		{"internal/formats/common", "internal/formats/format10", "common imports nothing of the tree"},
+		{"internal/formats/from10to20", "internal/formats/format30", "a converter imports no format later than its target"},
+		{"internal/formats/format10", "internal/formats", "nothing in the tree imports its root"},
 	} {
 		want := []string{tc.pkg + " → " + tc.dep + " — " + tc.want}
 		if got := formatsTreeViolations(withImport(base, tc.pkg, tc.dep)); !slices.Equal(got, want) {

@@ -2,10 +2,10 @@
 
 The two scoring passes ask a model about one item each: `rigor` on one node, `bearing` on one
 scoring edge. The answer is a list of **charged occurrences** — one fault id and one citation per
-line — and kbase prices the list into the one value the register holds.
-[SPEC.md](../../entry-point.md) §8 carries the `score` pass, its answer and its ledger, §10 the register's
-spelling, and [STRENGTH_SCORING_SCHEME.md](../strength/entry-point.md) the three quantities and the
-walk's arithmetic; that page is the authority for the arithmetic, and this page says of it only what a
+line — and kbase prices the list into the one value the register contains.
+[SPEC.md](../../entry-point.md) §8 contains the `score` pass, its answer and its ledger, §10 the register's
+format, and [STRENGTH_SCORING_SCHEME.md](../strength/entry-point.md) the three quantities and the
+arithmetic of strength propagation; that page is the authority for the arithmetic, and this page says of it only what a
 `rigor` value needs, under
 [Strength is computed](strength-is-computed.md).
 
@@ -34,7 +34,7 @@ Contents:
   - [What the check does, and does not do](the-answer/what-the-check-does-and-does-not-do.md)
   - [Duplicates, overlaps and shared lines](the-answer/duplicates-overlaps-and-shared-lines.md)
   - [Malformed replies](the-answer/malformed-replies.md)
-- [One ask per item](one-ask-per-item.md)
+- [One instruction per item](one-instruction-per-item.md)
 - [The ledger](the-ledger.md)
 - [Frozen rules](frozen-rules.md)
 - [Not settled](not-settled.md)

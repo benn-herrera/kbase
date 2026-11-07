@@ -9,26 +9,33 @@ import (
 	toolresult "kbase/internal/result"
 )
 
-// TestStatsCountsTheBottomRungUnderItsLabel: the ladder's last rung reads
-// `unsubstantiated`, and stats counts a bottom-rung claim under that label.
-func TestStatsCountsTheBottomRungUnderItsLabel(t *testing.T) {
+// TestStatsKeysABandBySlugNotLabel: stats counts a claim under its band's
+// slug, never its label, on the do-not-build rung, whose slug and label differ.
+// The claim rests fully on a fully judged work, so its strength is its rigor:
+// a claim nothing carries reads 0, the bottom rung, whatever its rigor.
+func TestStatsKeysABandBySlugNotLabel(t *testing.T) {
 	repo := t.TempDir()
-	rigor := 0.1
+	rigor, whole := 0.3, 1.0
 	files := map[string]string{
 		".git/HEAD":              "ref: refs/heads/main\n",
 		"kb-root/entry-point.md": maintenanceEntryPoint,
 		maintenanceStampFile:     maintenanceFormatStamp,
-		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n# A\n\nAn assertion nothing carries.<!-- kbase-id: clm-aaaaaa -->\n",
+		"kb-root/a.md":           "[↑ KB](entry-point.md)\n\n# A\n\nAn assertion a work carries.<!-- kbase-id: clm-aaaaaa -->\n",
 	}
-	maps.Copy(files, recordFiles(kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A Claim", Rigor: &rigor, Rationale: "Shown."}}}))
+	maps.Copy(files, recordFiles(kb.Graph{
+		Claims: []kb.ClaimNode{{ID: "clm-aaaaaa", Title: "A Claim", Rigor: &rigor, Rationale: "Shown."}},
+		Works:  []kb.WorkNode{{ID: "wrk-aaaaaa", Label: "Work2020", Title: "A Work", Rigor: &whole, Rationale: "Cited."}},
+		Founds: []kb.BearingEdge{{Source: "wrk-aaaaaa", Target: "clm-aaaaaa", Bearing: kb.Bearing{Value: whole}}},
+	}))
 	writeRepo(t, repo, files)
 	updateFormatKB(t, repo)
 
-	stats := checkDocument(t, "stats", mustRun(t, repo, "done", "stats"))
+	stats := checkResult(t, "stats", mustRun(t, repo, "done", "stats"))
 	results, _ := stats.Values["results"].(map[string]any)
-	bands, _ := results["strength_bands"].(map[string]any)
-	if bands["unsubstantiated"] != 1 {
-		t.Errorf("strength_bands = %v, want the bottom-rung claim counted under unsubstantiated", bands)
+	bands, _ := results["strength-bands"].(map[string]any)
+	rung := kb.StrengthBandLadder[len(kb.StrengthBandLadder)-2]
+	if _, byLabel := bands[rung.Label]; bands[rung.Slug] != 1 || byLabel {
+		t.Errorf("strength-bands = %v, want the claim counted under %q and nothing under %q", bands, rung.Slug, rung.Label)
 	}
 }
 

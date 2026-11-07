@@ -21,7 +21,7 @@ func (f *ClientFuncs) consultStream(ctx context.Context, req Request) (StreamRea
 	return f.Stream(ctx, req)
 }
 
-func (f *ClientFuncs) decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (f *ClientFuncs) decision(ctx context.Context, _ Retry, req DecisionRequest) (DecisionResponse, error) {
 	return f.Decide(ctx, req)
 }
 

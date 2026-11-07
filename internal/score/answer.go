@@ -3,8 +3,10 @@ package score
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"kbase/internal/asks"
 	"kbase/internal/kb"
 )
 
@@ -73,7 +75,7 @@ type charged struct {
 // other line that is not a charge line is refused, so nothing is read out of
 // prose. A refused reply is malformed for this attempt — no charges and no
 // judgement, the reason naming the case and, where it names one, the id and the
-// lines — and the item is asked again on a resume.
+// lines — and is a malformedError naming the reply lines its case names.
 func ParseAnswer(reply string, closed closedText, table kb.FaultTable) (Answer, error) {
 	var (
 		charges []charged
@@ -96,11 +98,11 @@ func ParseAnswer(reply string, closed closedText, table kb.FaultTable) (Answer, 
 				// it shows, so this one carries none.
 				return Answer{}, fieldless(no, id)
 			case id == kb.PendingLiteral || numberRE.MatchString(line):
-				return Answer{}, malformedf("line %d answers with the number %q: a number names no fault id, and a charge is the id and the lines where it shows", no, line)
+				return Answer{}, malformedAt(asks.RefusalBareNumber, atReplyLine(no), []int{no}, "line %d answers with a number: a number names no fault id, and a charge is the id and the line where it shows", no)
 			case faultIDRE.MatchString(id):
 				return Answer{}, notInSet(no, id, table)
 			default:
-				return Answer{}, malformedf("line %d is not a charge line: %q", no, line)
+				return Answer{}, notAChargeLine(no)
 			}
 			continue
 		}
@@ -108,15 +110,22 @@ func ParseAnswer(reply string, closed closedText, table kb.FaultTable) (Answer, 
 			if faultIDRE.MatchString(id) {
 				return Answer{}, notInSet(no, id, table)
 			}
-			return Answer{}, malformedf("line %d is not a charge line: %q", no, line)
+			return Answer{}, notAChargeLine(no)
 		}
 		cited := fieldText(field)
 		if cited == "" {
 			return Answer{}, fieldless(no, id)
 		}
-		site, why := closed.look(cited)
-		if why != "" {
-			return Answer{}, malformedf("line %d: the %s charge's %s", no, id, why)
+		site, fault := closed.look(cited)
+		if fault != nil {
+			values := chargingAt(no, id)
+			if fault.from != "" {
+				values[asks.SlotCitedFrom] = fault.from
+			}
+			if fault.to != "" {
+				values[asks.SlotCitedTo] = fault.to
+			}
+			return Answer{}, malformedAt(fault.refusal, values, []int{no}, "line %d: the %s charge's %s", no, id, fault.why)
 		}
 		charges = append(charges, charged{
 			charge: Charge{ID: id, Passage: site.end, Lines: site.lines, Citation: site.citation, Offset: site.offset},
@@ -125,14 +134,14 @@ func ParseAnswer(reply string, closed closedText, table kb.FaultTable) (Answer, 
 	}
 	switch {
 	case nones > 0 && (nones > 1 || len(charges) > 0):
-		return Answer{}, malformedf("%s stands beside other lines: %s is the whole of an answer, and the parse has no ground to prefer either half", kb.ChargeNone, kb.ChargeNone)
+		return Answer{}, malformedAt(asks.RefusalNoneBesideCharges, nil, nil, "`%s` stands beside other lines: `%s` is the whole of an answer, and the parse has no ground to prefer either half", kb.ChargeNone, kb.ChargeNone)
 	case nones == 1:
 		return Answer{Faults: []Charge{}, Value: table.Price(nil)}, nil
 	case len(charges) == 0:
 		// Nothing at all: an empty reply, or one of blank lines only. It states
 		// no charge and not the answer's word, so it is no answer — silence is
 		// never read as a clean pass.
-		return Answer{}, malformedf("the reply holds no line: it names no charge and no %s", kb.ChargeNone)
+		return Answer{}, malformedAt(asks.RefusalEmptyReply, nil, nil, "the reply holds no line: it names no charge and no `%s`", kb.ChargeNone)
 	}
 	faults, err := settled(charges)
 	if err != nil {
@@ -163,7 +172,9 @@ func settled(charges []charged) ([]Charge, error) {
 				break
 			}
 			if kept.lo <= c.hi && c.lo <= kept.hi {
-				return nil, malformedf("lines %d and %d charge %s over line sets that overlap without coinciding: %s and %s, so the count cannot be read from the reply",
+				values := chargingAt(kept.line, c.charge.ID)
+				values[asks.SlotOtherReplyLine] = strconv.Itoa(c.line)
+				return nil, malformedAt(asks.RefusalOverlappingRanges, values, []int{kept.line, c.line}, "lines %d and %d charge %s over line sets that overlap without coinciding: %s and %s, so the count cannot be read from the reply",
 					kept.line, c.line, c.charge.ID, kept.charge.Lines, c.charge.Lines)
 			}
 		}
@@ -181,21 +192,53 @@ func settled(charges []charged) ([]Charge, error) {
 // notInSet is a line naming an id the call does not accept, its refusal stating
 // the id and the call's own ids as the allowed set.
 func notInSet(line int, id string, table kb.FaultTable) error {
-	return malformedf("line %d names the id %q, which this call does not accept; allowed: %s",
+	return malformedAt(asks.RefusalIDNotOffered, chargingAt(line, id), []int{line}, "line %d names the id %q, which this call does not accept; allowed: %s",
 		line, id, strings.Join(table.IDs(), ", "))
 }
 
 // fieldless is the refusal of a charge naming no line at all: an id with no field,
 // or a field empty or blank.
 func fieldless(line int, id string) error {
-	return malformedf("line %d: %s carries no line, and a charge is the fault id and the line numbers where it shows", line, id)
+	return malformedAt(asks.RefusalIDWithoutLine, chargingAt(line, id), []int{line}, "line %d: %s carries no line, and a charge is the fault id and the line number where it shows", line, id)
 }
 
-// malformedf is a reply the parse refuses: the case, and where the case names
-// one the id and lines the line carried. A caller records the attempt failed with
-// this reason and keeps no text of it.
-func malformedf(format string, args ...any) error {
-	return fmt.Errorf("the reply is no answer: "+format, args...)
+// notAChargeLine is the refusal of a line that is no charge line at all.
+func notAChargeLine(line int) error {
+	return malformedAt(asks.RefusalNotAChargeLine, atReplyLine(line), []int{line}, "line %d is not a charge line", line)
+}
+
+// atReplyLine is the slot values of a case naming the reply line line alone.
+func atReplyLine(line int) map[string]string {
+	return map[string]string{asks.SlotReplyLine: strconv.Itoa(line)}
+}
+
+// chargingAt is the slot values of a case naming the reply line line and the
+// id it charges.
+func chargingAt(line int, id string) map[string]string {
+	values := atReplyLine(line)
+	values[asks.SlotID] = id
+	return values
+}
+
+// malformedError is a reply the parse refuses. Its text is the reason: the
+// case, and where the case names one the id and the lines, and no other text of
+// the reply. A caller records the attempt failed with this reason and keeps no
+// text of the reply. refusal is the case as an asks.Refusal… constant, values
+// the slot values its fragment states it with, by bare slot name, and lines the
+// 1-based numbers of the reply lines the case names, none where it names none.
+type malformedError struct {
+	reason  string
+	refusal string
+	values  map[string]string
+	lines   []int
+}
+
+func (e malformedError) Error() string { return "the reply is no answer: " + e.reason }
+
+// malformedAt is the refusal of a reply under the case refusal, stated with
+// values, naming the reply lines lines, its reason format filled with args.
+func malformedAt(refusal string, values map[string]string, lines []int, format string, args ...any) error {
+	return malformedError{reason: fmt.Sprintf(format, args...), refusal: refusal, values: values, lines: lines}
 }
 
 // fieldText is one field of a charge line as the form's bracket rule leaves it:

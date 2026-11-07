@@ -1,9 +1,14 @@
 package claimgraph
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"kbase/internal/buildrecords"
+	"kbase/internal/kb"
+	"kbase/internal/result"
 )
 
 // TestNodePassWrittenAsReference checks the writer's normalization: leaves by
@@ -21,5 +26,32 @@ func TestNodePassWrittenAsReference(t *testing.T) {
 		"      - line: 9\n        verdict: defaulted\n        cause: no-letter\n"
 	if err != nil || string(got) != want {
 		t.Errorf("nodePassBytes = %s, %v; want %s", got, err, want)
+	}
+}
+
+// TestBuildRecordWriteRefusesASymlink: a build record that is a symbolic link
+// out of kb-root/ is refused at its write, naming it, and the file the link
+// names keeps its bytes.
+func TestBuildRecordWriteRefusesASymlink(t *testing.T) {
+	repo := t.TempDir()
+	link := filepath.Join(repo, filepath.FromSlash(buildrecords.NodePassFile))
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "node-pass.yaml")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteNodePass(repo, buildrecords.NodePassRecord{})
+	var r result.Refusal
+	if !errors.As(err, &r) || len(r) != 1 || r[0].Check != kb.CheckSymlink || r[0].Path != link {
+		t.Fatalf("WriteNodePass over a symlinked record = %v, want one %s refusal naming %s", err, kb.CheckSymlink, link)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside\n" {
+		t.Errorf("%s = %q (%v), want it untouched", outside, data, err)
 	}
 }

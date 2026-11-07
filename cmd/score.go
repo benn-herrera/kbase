@@ -57,11 +57,6 @@ type scoreOptions struct {
 	// DryRun lists what a run would ask and asks nothing.
 	DryRun bool
 
-	// Backoff is the pause before each re-issue of an item's ask, its last
-	// repeating; nil takes scoreBackoff. A test drives the full attempt count
-	// through a short sequence rather than waiting out the real pauses.
-	Backoff []time.Duration
-
 	// ScoringModel is the --scoring-model flag: a reference overriding the
 	// scoring role's model. It overrides a configured role and never
 	// substitutes for one.
@@ -97,11 +92,6 @@ type scoreOptions struct {
 	Logger log.Logger
 }
 
-// scoreBackoff is the pause before each re-issue of an item's ask — the
-// sequence the build's overview call pauses by, and for its reason: a 429 or a
-// 5xx re-issued at once is three attempts inside one outage.
-var scoreBackoff = []time.Duration{5 * time.Second, 30 * time.Second}
-
 // callTimeout is one ask's deadline: the --timeout value, or the shared default
 // where it was zero or negative.
 func (o scoreOptions) callTimeout() time.Duration {
@@ -111,7 +101,7 @@ func (o scoreOptions) callTimeout() time.Duration {
 	return defaultListTimeout
 }
 
-// runScore runs one score run, writes its result document, and returns the exit
+// runScore runs one score run, writes its result, and returns the exit
 // code the outcome maps to.
 func runScore(opts scoreOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "score"); err != nil {
@@ -193,13 +183,26 @@ func scorePass(opts scoreOptions) string {
 }
 
 // scoreRun is the verb's body: the KB, the run's ledger and the walk over its
-// scope. Its result document is written beside the ledger before the run lets
-// go of the store's holder lock, so a waiter reads the same document the verb
-// reported without racing the lock's release.
+// scope. Its result is written beside the ledger before the run lets go of the
+// store's holder lock, so a waiter reads the same stored result the verb
+// reported without racing the lock's release. The configuration's faults are
+// the result's warnings and lines on Stderr.
 func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 	if opts.Logger == nil {
 		opts.Logger = log.Discard()
 	}
+	warnings := warningsField(warnFaults(opts.Stderr, opts.Faults))
+	// The result's fields with the warnings placed, computed once: by the
+	// result saved beside the ledger where the run saves one, and else on
+	// return.
+	var result []toolresult.Field
+	final := func() []toolresult.Field {
+		if result == nil {
+			result = toolresult.WithWarnings(fields, warnings)
+		}
+		return result
+	}
+	defer func() { fields = final() }()
 	edge, usage := scoreUsage(opts)
 	if usage != nil {
 		return refused(nil, usage...)
@@ -307,11 +310,11 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 		inv.BackEnd, inv.Provider, inv.Model = string(config.BackEndProvider), ep.Provider, ep.Model
 		inv.Launch = scoringLaunch(opts, reg, ep, concurrency)
 	}
-	// The document is written beside the ledger once its fields name one, before
-	// the run lets go of its locks.
-	defer func() { persistScoreResult(opts.Logger, fields, outcome) }()
+	// The stored result is written beside the ledger once its fields name one,
+	// before the run lets go of its locks.
+	defer func() { persistScoreResult(opts.Logger, final(), outcome) }()
 	rep, err := score.Invoke(ctx, inv)
-	// The document's roles record names the scoring role's endpoint where the
+	// The result's roles record names the scoring role's endpoint where the
 	// run reached it.
 	if rep.Asked {
 		fields = append(fields, rolesField([]toolresult.Record{roleRecord(ep)}))
@@ -343,12 +346,7 @@ func scoreRun(opts scoreOptions) (outcome string, fields []toolresult.Field) {
 // --scoring-model supplying or overriding the model, nothing falling back to
 // another role.
 func scoringRole(opts scoreOptions) (config.Endpoint, error) {
-	ep, err := config.Resolve(opts.inputs(), config.RoleScoring, opts.ScoringModel)
-	if err != nil {
-		return config.Endpoint{}, err
-	}
-	warnFaults(opts.Stderr, opts.Faults)
-	return ep, nil
+	return config.Resolve(opts.inputs(), config.RoleScoring, opts.ScoringModel)
 }
 
 // scoringLaunch is the launch every scoring call goes through: each item
@@ -363,21 +361,17 @@ func scoringRole(opts scoreOptions) (config.Endpoint, error) {
 // stores one for ep's entry.
 func scoringLaunch(opts scoreOptions, reg *modelclient.Registry, ep config.Endpoint, concurrency int) score.Launch {
 	client := sync.OnceValue(func() model.Client { return reg.Get(ep) })
-	// A key bound for a non-loopback http:// endpoint is said on stderr once
+	// A key bound for an http:// endpoint off the local network is said on stderr once
 	// and the call proceeds, as `build` says it.
 	warnCleartextKey(opts.Stderr, ep)
 	timeout := opts.callTimeout()
-	backoff := opts.Backoff
-	if backoff == nil {
-		backoff = scoreBackoff
-	}
 	queue := model.NewQueue(concurrency)
 	return func(ctx context.Context, wg *sync.WaitGroup, item func(score.Ask) func()) error {
 		return queue.Go(ctx, wg, func(slot *model.Slot) func() {
 			return item(func(ctx context.Context, prompt string) (score.Reply, error) {
 				callCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
-				res, err := slot.Chat(callCtx, client(), model.ChatRequest{Model: ep.Model, Prompt: prompt, Backoff: backoff})
+				res, err := slot.Chat(callCtx, client(), model.ChatRequest{Model: ep.Model, Prompt: prompt})
 				var refused modelclient.KeyRefusedError
 				if err = modelclient.KeyRefused(err, ep.Provider); errors.As(err, &refused) {
 					return score.Reply{}, score.RemedyError{Err: err, Remedy: refused.Remedy, Note: config.RefusedKeyNote}
@@ -407,7 +401,7 @@ func runKeys(fields []toolresult.Field, dir, pass string) []toolresult.Field {
 // run's own answer. A machine with no Graphviz dot draws no sheet, and says
 // so.
 func scoreRefresh(root string, src *kb.Source, fields []toolresult.Field, opts scoreOptions) (outcome string, out []toolresult.Field, stop bool) {
-	release, outcome, items, err := holdWriting(root, "re-run "+argmark.Call("score", nil), false)
+	release, outcome, items, err := holdWriting(root, "re-run "+argmark.Call("score", nil), false, opts.Logger)
 	if err != nil {
 		outcome, out = failed(fields, err)
 		return outcome, out, true
@@ -474,8 +468,10 @@ var (
 var scoreReplay func(cmd *cobra.Command) func(scoreOptions) (int, error)
 
 // scoreLong is score's shared help body.
-var scoreLong = `score asks the scoring model for the KB's rigor and bearing values, one item
-per call, and prices the faults each reply names. When the walk ends — done,
+var scoreLong = `score asks the scoring model for the KB's rigor and bearing values, one ask
+per item; a reply the parse refuses is asked again once, with a correction. A
+reply is a list of fault ids, which kbase converts to the value through
+kbase's fault tables. When the walk ends — done,
 cancelled or failed — the answered values land in one write, with the
 manually-scored mark false, and the derivation follows it as it follows every
 write. A KB whose load fails is refused, naming each fault with its file and
@@ -507,9 +503,9 @@ counts, and under skip the dirty manually scored values it would skip; it asks
 nothing, resolves no scoring role, writes no KB and cannot be resumed.
 
 ` + argmark.Flag("resume") + ` continues the repository's most recent score run with the scope it
-recorded, keeping every value it landed — re-pricing, no model asked, any whose
-recorded charges the running kbase prices differently — and re-asking the
-items that failed or were not reached; it takes no ` + argmark.Flag("pass") + `, ` + argmark.Flag("node") + `,
+recorded, keeping every value it landed — re-converting, no model asked, any
+whose recorded fault ids the running kbase's tables convert differently — and
+re-asking the items that failed or were not reached; it takes no ` + argmark.Flag("pass") + `, ` + argmark.Flag("node") + `,
 ` + argmark.Flag("edge") + ` or ` + argmark.Flag("rescore-manual") + ` beside it. It is refused where that run
 finished or where a build has started since it: a fresh run then asks only
 what is dirty. A run that failed an item or stopped short has a resume field,
@@ -524,12 +520,15 @@ model for one run — a <provider>/<model> reference — supplying the role wher
 the configuration names none and overriding it where it does, and the call
 continuing a run carries it.
 
-Every attempt — the prompt sent, the reply and the value it priced to — is
-recorded under the result's ledger, <state-dir>/score/<run>/.
+Every attempt — the prompt sent, the reply and the value it converted to — is
+recorded in the run's ledger, <state-dir>/score/<run>/,
+which the result's "ledger" names.
 
 A run holds the repository's operation lock and <state-dir> for its length, so
 a second run over the KB — a build or a scoring run — is refused, naming the
-holder and its pid.`
+holder and its pid.
+
+` + configWarningsHelp("the run's own result")
 
 // scoreCLINote is what differs for score at the command line.
 const scoreCLINote = `At the command line score runs in the foreground; SIGINT or SIGTERM (kbase
@@ -537,7 +536,7 @@ cancel) stops it resumably.`
 
 var scoreCmd = mcp.Notes(&cobra.Command{
 	Use:   "score",
-	Short: "ask the scoring model for the KB's rigor and bearing values not yet judged against their current text, one item per call",
+	Short: "ask the scoring model for the KB's rigor and bearing values not yet judged against their current text, one ask per item",
 	Long:  scoreLong,
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -585,21 +584,34 @@ func init() {
 	// This verb bounds one item's call, not a catalogue request; it selects no
 	// pool entry, so it carries no --provider — a scoring-time endpoint is
 	// --scoring-model, which states the provider and the model together.
-	registerTimeoutFlag(scoreCmd, &scoreFlagTimeout, "deadline for one item's call")
+	registerTimeoutFlag(scoreCmd, &scoreFlagTimeout, "deadline for each model call", "deadline per model call, e.g. 30s")
 	scoreCmd.Flags().StringVar(&scoreFlagPass, "pass", "",
 		"the pass a full run walks: "+proseSeries(query.Passes, "or")+" (default: "+query.PassAll+")")
+	mcp.EnumFlag(scoreCmd.Flags().Lookup("pass"), query.Passes...)
+	mcp.Brief(scoreCmd, "pass", "which pass to run; not with "+argmark.Flag("node")+" or "+argmark.Flag("edge"))
 	scoreCmd.Flags().StringVar(&scoreFlagNode, "node", "",
-		"score this node's rigor, dirty or not: a claim, analysis or experiment id")
+		"score this node's rigor, dirty or not: a "+scoredNodeKinds+" id")
+	mcp.Brief(scoreCmd, "node", "id of the "+scoredNodeKinds+" to score")
 	scoreCmd.Flags().StringVar(&scoreFlagEdge, "edge", "",
 		"score this edge's bearing, dirty or not: its source, target and relation")
-	mcp.MappingFlag(scoreCmd.Flags().Lookup("edge"), "source", "target", "relation")
+	mcp.MappingFlag(scoreCmd.Flags().Lookup("edge"), mcp.MappingKey{Name: "source"}, mcp.MappingKey{Name: "target"},
+		mcp.MappingKey{Name: "relation", Enum: kb.BearingWalkRelations})
+	mcp.Brief(scoreCmd, "edge", "the edge to score: its source, target and relation")
 	scoreCmd.Flags().BoolVar(&scoreFlagDryRun, "dry-run", false,
 		"list what a run would ask and the dirty manually scored values it would skip; ask nothing")
+	mcp.Brief(scoreCmd, "dry-run", "list what would be asked; ask nothing")
 	scoreCmd.Flags().StringVar(&scoreFlagScoringModel, "scoring-model", "",
 		"model that judges the KB, overriding models.scoring: <provider>/<model>")
+	mcp.Brief(scoreCmd, "scoring-model", "provider/model overriding models.scoring")
 	scoreCmd.Flags().BoolVar(&scoreFlagResume, "resume", false, "continue the most recent score run with the scope it recorded")
+	mcp.Brief(scoreCmd, "resume", "continue the latest score run")
 	scoreCmd.Flags().BoolVar(&scoreFlagRescore, "rescore-manual", false,
 		"re-judge values a person set too: the run's value replaces each and clears its manually-scored mark; required to name a manually scored node or edge")
-	scoreCmd.Flags().StringVar(&scoreFlagStateDir, "state-dir", "", runStateDirUsage)
+	mcp.Brief(scoreCmd, "rescore-manual", "also re-judge values a person set")
+	registerStateDirFlag(scoreCmd, &scoreFlagStateDir, runStateDirUsage, stateDirBrief)
 	registerAskConcurrencyFlag(scoreCmd, &scoreFlagAskConc)
 }
+
+// scoredNodeKinds is the kinds of node a score run judges the rigor of, as
+// --node's usage and brief name them.
+const scoredNodeKinds = "claim, analysis or experiment"

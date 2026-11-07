@@ -12,11 +12,12 @@ const pathSystemOne = "systemone"
 
 // encodeSystemOneRequest serializes a DecisionRequest to the SystemOne wire
 // format: model, state (a JSON string) and the questions as a keyed object.
-// Nothing else — no temperature, no chat_template_kwargs, no stream fields.
+// Nothing else — no temperature, no chat_template_kwargs, no stream fields. A
+// correction ends the state.
 func encodeSystemOneRequest(req DecisionRequest) ([]byte, error) {
 	w := wireSystemOneRequest{
 		Model:     req.Model,
-		State:     req.State,
+		State:     req.State + req.Correction,
 		Questions: make(map[string]wireSystemOneQuestion, len(req.Questions)),
 	}
 	for _, q := range req.Questions {

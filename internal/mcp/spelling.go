@@ -16,9 +16,9 @@ import (
 	"kbase/internal/write"
 )
 
-// SurfaceEnv tells a run a tool call launched that its result document is
-// read over MCP: Launch.start sets it to SurfaceMCP in the child's
-// environment, and the child spells its document for MCP where it is so set.
+// SurfaceEnv tells a run a tool call launched that its result is read over
+// MCP: Launch.start sets it to SurfaceMCP in the child's environment, and the
+// child spells its result for MCP where it is so set.
 const (
 	SurfaceEnv = "KBASE_RESULT_SURFACE"
 	SurfaceMCP = "mcp"
@@ -93,23 +93,22 @@ func toolCall(cmd *cobra.Command, args map[string]any) (string, bool) {
 // flag in name order, a true bool flag bare — each word quoted where a shell
 // would split or expand it but for a placeholder's angle brackets. A
 // placeholder standing for a repeated positional reads <name>..., as the usage
-// line spells it. A command reading a values document (readsValues) takes
-// every argument but its own flags in that document, piped in on stdin
-// (pipedValues).
+// line spells it. A command reading a batch (readsValues) takes every argument
+// but its own flags in that batch, piped in on stdin (pipedValues).
 func commandLine(cmd *cobra.Command, command string, args map[string]any) string {
-	var document map[string]any
+	var batch map[string]any
 	if readsValues(cmd) {
-		document, args = valuesDocument(cmd, args)
+		batch, args = valuesInput(cmd, args)
 	}
 	line := commandWords(cmd, command, args)
-	if piped, ok := pipedValues(document); ok {
+	if piped, ok := pipedValues(batch); ok {
 		return piped + " | " + line
 	}
 	return line
 }
 
-// readsValues is whether cmd reads a values document on stdin: kbase write's
-// batch, or a write op's.
+// readsValues is whether cmd reads a batch on stdin: kbase write's batch, or
+// a write op's.
 func readsValues(cmd *cobra.Command) bool {
 	if cmd == nil {
 		return false
@@ -118,31 +117,31 @@ func readsValues(cmd *cobra.Command) bool {
 	return values || cmd.Name() == write.Batch
 }
 
-// valuesDocument is args split into the values document — every argument
-// that is not a flag of cmd — and the flags.
-func valuesDocument(cmd *cobra.Command, args map[string]any) (document, flags map[string]any) {
-	document, flags = map[string]any{}, map[string]any{}
+// valuesInput is args split into the batch — every argument that is not a
+// flag of cmd — and the flags.
+func valuesInput(cmd *cobra.Command, args map[string]any) (batch, flags map[string]any) {
+	batch, flags = map[string]any{}, map[string]any{}
 	for name, v := range args {
 		if cmd.Flags().Lookup(name) != nil || cmd.InheritedFlags().Lookup(name) != nil {
 			flags[name] = v
 		} else {
-			document[name] = v
+			batch[name] = v
 		}
 	}
-	return document, flags
+	return batch, flags
 }
 
-// pipedValues is document as YAML piped in by printf, its format escaping %
-// and \ and each line break written \n, the word quoted for the shell; ok is
-// false where document is empty or does not encode.
-func pipedValues(document map[string]any) (string, bool) {
-	if len(document) == 0 {
+// pipedValues is batch as YAML piped in by printf, its format escaping % and
+// \ and each line break written \n, the word quoted for the shell; ok is false
+// where batch is empty or does not encode.
+func pipedValues(batch map[string]any) (string, bool) {
+	if len(batch) == 0 {
 		return "", false
 	}
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
 	enc.SetIndent(2)
-	if err := enc.Encode(document); err != nil {
+	if err := enc.Encode(batch); err != nil {
 		return "", false
 	}
 	if err := enc.Close(); err != nil {
@@ -153,7 +152,7 @@ func pipedValues(document map[string]any) (string, bool) {
 }
 
 // commandWords is the kbase command line of command with args, as
-// commandLine describes it, less any piped values document.
+// commandLine describes it, less any piped batch.
 func commandWords(cmd *cobra.Command, command string, args map[string]any) string {
 	var positionals []Positional
 	if cmd != nil {

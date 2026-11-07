@@ -186,7 +186,7 @@ func TestStatusRefusesWhereGitReadsAnotherRepository(t *testing.T) {
 	}
 }
 
-// recordedCall is the recorded kbase build invocation argv as a document
+// recordedCall is the recorded kbase build invocation argv as a result
 // carries it: the build call, marked for the surface reading it to spell.
 func recordedCall(argv []string) string { return argmark.Recorded(argv[1], argv[2:]) }
 
@@ -388,4 +388,22 @@ func TestWaitState(t *testing.T) {
 			t.Errorf("WaitState for an unheld pid = %+v, %v; want the store's finished run under pid %d", got, err, runPID)
 		}
 	})
+}
+
+// TestStateOf: each outcome a run can end with maps to the state status
+// reports for it, a score run's refused and retry included.
+func TestStateOf(t *testing.T) {
+	for _, tc := range []struct{ outcome, want string }{
+		{result.Done, StateFinished},
+		{result.Unchanged, StateFinished},
+		{result.Bounded, StateBounded},
+		{result.Cancelled, StateCancelled},
+		{result.Failed, StateFailed},
+		{result.Refused, StateFailed},
+		{result.Retry, StateFailed},
+	} {
+		if got := StateOf(tc.outcome); got != tc.want {
+			t.Errorf("outcome %q maps to state %q, want %q", tc.outcome, got, tc.want)
+		}
+	}
 }

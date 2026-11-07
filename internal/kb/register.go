@@ -5,40 +5,40 @@ import (
 	"regexp"
 	"strconv"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 // The name of every summary page, kb-root's and each volume's, its title, and
 // the headings every entry renders under its own title's.
 const (
-	RegisterFile           = format400.SummaryFile
-	SummaryTitle           = format400.SummaryTitle
-	SummaryRigorHeading    = format400.SummaryRigorHeading
-	SummaryStrengthHeading = format400.SummaryStrengthHeading
+	RegisterFile           = format40.SummaryFile
+	SummaryTitle           = format40.SummaryTitle
+	SummaryRigorHeading    = format40.SummaryRigorHeading
+	SummaryStrengthHeading = format40.SummaryStrengthHeading
 )
 
 // Volumes is the volumes among paths, kb-root-relative documents: the
 // top-level directories holding an index.md.
-func Volumes(paths []string) map[string]bool { return format400.Volumes(paths) }
+func Volumes(paths []string) map[string]bool { return format40.Volumes(paths) }
 
 // SummaryPage is the kb-root-relative summary page a node hosted at host has
 // its entry on: the page of the volume host lies in, or the root page where it
 // lies in none.
 func SummaryPage(host string, volumes map[string]bool) string {
-	return format400.SummaryPage(host, volumes)
+	return format40.SummaryPage(host, volumes)
 }
 
 // SummaryPagePositions is every kb-root-relative path a summary page can
 // stand at, sorted: RegisterFile and each volume's page.
 func SummaryPagePositions(volumes map[string]bool) []string {
-	return format400.SummaryPagePositions(volumes)
+	return format40.SummaryPagePositions(volumes)
 }
 
 // SummaryEntryHeadings is the text of every heading a summary page renders
 // for an entry titled title, in order: the title's, its rigor section's and,
 // where its node carries a derived strength, its strength section's.
 func SummaryEntryHeadings(title string, derived bool) []string {
-	return format400.SummaryEntryHeadings(title, derived)
+	return format40.SummaryEntryHeadings(title, derived)
 }
 
 // ListRestsOn is the register list key a claim's or analysis's premises are

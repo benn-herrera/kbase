@@ -39,13 +39,40 @@ type recordBatch struct {
 	valued     []scoredRecord
 }
 
+// newRecordBatch is a batch over g, the records src holds, hosts being each
+// hosted node's leaf.
+func newRecordBatch(src *kb.Source, g kb.Graph, hosts map[string]string) *recordBatch {
+	return &recordBatch{src: src, root: kb.ResolvePath(src.Root()), g: g, hosts: maps.Clone(hosts), leaves: map[string]*leafEdit{}}
+}
+
+// existsError is an add over the item that stands with its identity, which the
+// add writes over: its refusal stands wherever the entry moves a byte or meets
+// another refusal, so that only an identical add applies, unchanged.
+type existsError struct{ refusal result.Refusal }
+
+func (e *existsError) Error() string { return e.refusal.Error() }
+func (e *existsError) Unwrap() error { return e.refusal }
+
+// addedOver ends an add over an item that stands, refusal being its exists
+// refusal and err what the add met: refusal in place of any refusal, err where
+// the add failed otherwise, and else an existsError.
+func addedOver(refusal result.Refusal, err error) error {
+	switch {
+	case err == nil:
+		return &existsError{refusal}
+	case isRefusal(err):
+		return refusal
+	}
+	return err
+}
+
 // entryReport is the node an entry minted or edited: its id; or, of a
 // restore-demoted entry, the relations it put back; or, of a remove-node entry, the edge records it
 // removed; or, of an add-citation entry, the node it cites, the citing
 // document and 1-based line, and the link written there. An add-axiom entry's
 // Heading is how its heading came to stand, and an edit-work entry's
-// Rewritten the lines its label change rewrote. The zero value is an entry
-// that named no node.
+// Rewritten the lines its label change rewrote; a cite-bare-ids entry's Cited
+// is each bare id it cited. The zero value is an entry that named no node.
 type entryReport struct {
 	ID           string
 	Heading      string
@@ -55,6 +82,7 @@ type entryReport struct {
 	Line         int
 	Link         string
 	Rewritten    []Rewritten
+	Cited        []Cited
 }
 
 // leafEdit is one document the batch edits — a leaf it marks, or axioms.md:
@@ -116,8 +144,7 @@ func applyEntries(src *kb.Source, entries []entry, provenance Provenance, hosts 
 	if err != nil {
 		return applied{}, err
 	}
-	b := &recordBatch{src: src, root: kb.ResolvePath(src.Root()), g: g, hosts: maps.Clone(hosts),
-		leaves: map[string]*leafEdit{}}
+	b := newRecordBatch(src, g, hosts)
 	before := recordFiles(g)
 	prev, prevLeaves := before, map[string]string{}
 	var out applied
@@ -128,8 +155,20 @@ func applyEntries(src *kb.Source, entries []entry, provenance Provenance, hosts 
 			b.provenance = ProvenanceMachine
 		}
 		err := edit.apply(b, e)
+		var exists *existsError
+		if errors.As(err, &exists) {
+			err = nil
+		}
 		if err == nil {
 			err = b.hashValuesSet()
+		}
+		cur, moved := recordFiles(b.g), false
+		if err == nil {
+			leaves := leavesMoved(b, prevLeaves)
+			moved = leaves || !sameFiles(prev, cur)
+		}
+		if exists != nil && (moved || isRefusal(err)) {
+			err = exists.refusal
 		}
 		if err != nil {
 			if items, refused := entryRefusal(err, e.Index); refused {
@@ -137,14 +176,13 @@ func applyEntries(src *kb.Source, entries []entry, provenance Provenance, hosts 
 			}
 			return applied{}, err
 		}
-		cur := recordFiles(b.g)
 		outcome := result.Unchanged
-		if !sameFiles(prev, cur) || leavesMoved(b, prevLeaves) {
+		if moved {
 			outcome = result.Done
 		}
 		out.entries = append(out.entries, EntryResult{Entry: e.Index, Operation: e.Op, Outcome: outcome, ID: b.report.ID, Heading: b.report.Heading,
 			Restored: b.report.Restored, RemovedEdges: b.report.RemovedEdges, Document: b.report.Document, Line: b.report.Line, Link: b.report.Link,
-			Rewritten: b.report.Rewritten})
+			Rewritten: b.report.Rewritten, Cited: b.report.Cited})
 		prev = cur
 	}
 	if err := readBackMarkers(b); err != nil {
@@ -218,12 +256,28 @@ func entryRefusal(err error, index int) (result.Refusal, bool) {
 	return items, true
 }
 
+// isRefusal is whether err is a refusal.
+func isRefusal(err error) bool {
+	var refused result.Refusal
+	return errors.As(err, &refused)
+}
+
 // record is the first of records match holds, nil where none does.
 func record[T any](records []T, match func(T) bool) *T {
 	if i := slices.IndexFunc(records, match); i >= 0 {
 		return &records[i]
 	}
 	return nil
+}
+
+// put is records with n in place of the first record match holds, or with n
+// appended where none does.
+func put[T any](records []T, n T, match func(T) bool) []T {
+	if r := record(records, match); r != nil {
+		*r = n
+		return records
+	}
+	return append(records, n)
 }
 
 // noRecord refuses a node id no record of the kinds an op writes carries;

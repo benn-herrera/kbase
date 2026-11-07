@@ -1,4 +1,4 @@
-### 5. Only a node's own rigor makes it pending
+### 5. Only own rigor makes a node pending
 
 The three states below are the Pending section's, in arithmetic. Two of them are the pair a reader
 conflates — a node whose own judgement is missing, and a node one of whose edges is.

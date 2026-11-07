@@ -2,8 +2,9 @@
 # LIVE: ./bin/kbase build without --no-inference over the Slice-1 paper
 # BUILD_ARXIV_SPECIAL_ID names, in a fresh fixture repository, asking the
 # provider the resolved configuration names; then a layered-configuration
-# proof naming no configuration directory (configure-models --local, then
-# show-config), and a score run configured by --config-dir.
+# proof naming no configuration directory (configure-models --layer repository, then
+# show-config), and a full score of the KB the build produced, configured by
+# --config-dir.
 # Counts land in comparison.yaml.
 #
 # Inputs (environment): BIN_DIR; ARXIV_DIR, the unpacked corpus;
@@ -55,11 +56,13 @@ check() {
     checks+=("$1"$'\t'"${verdict}"$'\t'"$3"$'\t'"$4")
     printf '  %s %s: %s\n' "${verdict}" "$1" "$3"
 }
+# shellcheck source=tools/scripts/lib-result-keys.sh
+source "${script_dir}/lib-result-keys.sh"
 yaml_str() { local s="${1//\\/\\\\}"; printf '"%s"' "${s//\"/\\\"}"; }
 ok() { "$@" > /dev/null 2>&1 && echo 0 || echo 1; }
 count() { find "$1" -type f -name "$2" 2>/dev/null | wc -l | tr -d ' '; }
 
-# doc_get <document> <section> <key> <value> <field>: <field> of each record in
+# doc_get <result> <section> <key> <value> <field>: <field> of each record in
 # the top-level <section> list whose <key> is <value>, one per line, unquoted
 # (a null prints empty). A record opens on its "    - " line; its fields stand
 # at six spaces.
@@ -101,7 +104,7 @@ volume_root="$(ARXIV_VOLUME_DIR="${repo}" tools/scripts/arxiv-volume-root.sh)"
 printf '%s\n' "${id}"
 
 # The configuration the build will read, as the staged repository resolves it:
-# the legs' values come from this document. The decision role names the
+# the legs' values come from this result. The decision role names the
 # provider, the endpoint and the layer that supplied the provider; that
 # layer's directory is the source the layered leg copies. The text role names
 # the text model, the scoring role the scoring model (a decision model may be
@@ -118,9 +121,9 @@ base_url="$(doc_get "${sc}.out" roles role decision base-url)"
 provider_layer="$(doc_get "${sc}.out" roles role decision provider-layer)"
 [[ -n "${provider}" && -n "${decision}" && -n "${text}" && -n "${base_url}" && -n "${provider_layer}" ]] \
     || refuse "the decision and text roles do not both resolve to a provider and a model"
-source_dir="$(doc_get "${sc}.out" layers source "${provider_layer}" path)"
+source_dir="$(doc_get "${sc}.out" layers layer "${provider_layer}" path)"
 [[ -d "${source_dir}" ]] || refuse "the layer that supplied ${provider} (${provider_layer}) has no directory ('${source_dir}')"
-key_kind="$(doc_get "${sc}.out" providers name "${provider}" key)"
+key_kind="$(doc_get "${sc}.out" providers name "${provider}" key-source)"
 scoring="$(doc_get "${sc}.out" roles role scoring model)"
 [[ -n "${scoring}" ]] || refuse "the scoring role does not resolve to a model"
 source_names=()
@@ -130,7 +133,7 @@ printf 'config: %s from %s (layer %s); decision %s, text %s\n' "${provider}" "${
 
 # The endpoint next: an unreachable role fails here, by name, and no build is
 # started against it.
-capture "${out}/probe-decision" "${repo}" "${kbase}" probe --decision ${cfg[@]+"${cfg[@]}"}
+capture "${out}/probe-decision" "${repo}" "${kbase}" probe --role decision ${cfg[@]+"${cfg[@]}"}
 if [[ "$(rc "${out}/probe-decision")" -ne 0 ]]; then
     printf 'integration(test-integration-build-live-arxiv): the decision role (provider %s) is unreachable — see %s/probe-decision.out\n' \
         "${provider}" "${out}" >&2
@@ -164,7 +167,7 @@ set -e
 # into this leg's own home — a relative apiKeyFile resolves beside the file,
 # so those keys travel with it; keys held in the operator's key store stay
 # there, the store's state base being passed through —
-# and the repository layer is what configure-models --local writes,
+# and the repository layer is what configure-models --layer repository writes,
 # dialing the resolved provider out of that pool and writing a reference for
 # each role — decision, text and scoring from the resolved roles. The provider
 # stands in that global pool, so the leg writes no provider entry.
@@ -199,7 +202,7 @@ state_home="${HOME}/.local/state"
 [[ "${XDG_STATE_HOME:-}" != /* ]] || state_home="${XDG_STATE_HOME}"
 layered_env=(-u KBASE_CONFIG_DIR "HOME=${layered_home}" "XDG_STATE_HOME=${state_home}")
 capture "${ck}/kbase-configure-layered" "${layered_repo}" env "${layered_env[@]}" "${kbase}" configure-models \
-    --local --decision "${provider}/${decision}" --text "${provider}/${text}" --scoring "${provider}/${scoring}"
+    --layer repository --decision "${provider}/${decision}" --text "${provider}/${text}" --scoring "${provider}/${scoring}"
 layered_refs=0
 [[ "$(rc "${ck}/kbase-configure-layered")" -eq 0 ]] || layered_refs=1
 grep -qx 'outcome: "done"' "${ck}/kbase-configure-layered.out" || layered_refs=1
@@ -218,16 +221,16 @@ layered_pool=0
 grep -qx 'outcome: "done"' "${layered_show}.out" || layered_pool=1
 # the two layers, the global one this leg's home — so no other directory
 # was read
-[[ "$(grep -cxF '      source: "global"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
-[[ "$(grep -cxF '      source: "repository"' "${layered_show}.out")" -eq 1 ]] || layered_pool=1
+[[ "$(doc_get "${layered_show}.out" layers layer global path | wc -l | tr -d ' ')" -eq 1 ]] || layered_pool=1
+[[ "$(doc_get "${layered_show}.out" layers layer repository path | wc -l | tr -d ' ')" -eq 1 ]] || layered_pool=1
 grep -qxF "    - path: \"${layered_home}/.config/kbase\"" "${layered_show}.out" || layered_pool=1
 # the merged pool: the source layer's entries out of the global file and no
 # others (the repository layer holds no providers.toml), every entry usable
 pool_size="${#source_names[@]}"
 [[ "$(grep -c '^    - name: ' "${layered_show}.out")" -eq "${pool_size}" ]] || layered_pool=1
 [[ "$(grep -cxF '      usable: true' "${layered_show}.out")" -eq "${pool_size}" ]] || layered_pool=1
-[[ "$(grep -cxF '      layer: "global"' "${layered_show}.out")" -eq "${pool_size}" ]] || layered_pool=1
-[[ "$(grep -cxF '      layer: "repository"' "${layered_show}.out")" -eq 0 ]] || layered_pool=1
+[[ "$(doc_get "${layered_show}.out" providers layer global name | wc -l | tr -d ' ')" -eq "${pool_size}" ]] || layered_pool=1
+[[ "$(doc_get "${layered_show}.out" providers layer repository name | wc -l | tr -d ' ')" -eq 0 ]] || layered_pool=1
 for entry in "${source_names[@]}"; do
     grep -qxF "    - name: \"${entry}\"" "${layered_show}.out" || layered_pool=1
 done
@@ -235,7 +238,7 @@ done
 check layered-pool "${layered_pool}" \
     "${pool_size} pool entries, ${source_names[*]}, all global and usable, none repository, no diagnostics; the global layer is ${layered_home}/.config/kbase" \
     "${layered_show}.out"
-# The repository's config.toml names three references, and the document
+# The repository's config.toml names three references, and the result
 # reports them verbatim; each role's record names the entry it asked, the
 # rule, the layer, and the layer that supplied each field: the endpoint and
 # the key from the key store or the global pool entry's key file, the model
@@ -279,33 +282,71 @@ check layered-sources "${layered_sources}" \
     "three role records, each ${provider} out of the global pool with its model from the repository's file: base-url global, model repository, key ${key_source:-absent}; decision ${decision}, text ${text}, scoring ${scoring}" \
     "${layered_show}.out"
 
-# A score run configured by --config-dir, against the KB the first build
+# A full score configured by --config-dir, against the KB the first build
 # finished: a directory of this leg's own holding the pool of the layer that
 # supplied the provider and a config.toml with the three references, so the
-# operator's layers are not read. One item is asked, --node naming the KB's
-# first claim by id; the scoring role record names the provider, the config
-# rule and the scoring model, and the ledger names that model.
+# operator's layers are not read. A dry run counts the items first (N); the
+# run then asks all N, finishes done with none failed, its scoring role record
+# naming the provider, the config rule and the scoring model, and its ledger
+# naming that model; afterwards every claim's strength is derived, verify finds
+# no fault, and a second run asks nothing. Each result is parsed against its
+# documented keys.
 score_config="${root}/${dir}/score-config"
 copy_pool "${score_config}"
 printf '%s\n' '[models]' "decision = \"${provider}/${decision}\"" "text = \"${provider}/${text}\"" \
     "scoring = \"${provider}/${scoring}\"" > "${score_config}/config.toml"
-capture "${ck}/kbase-find-claim" "${repo}" "${kbase}" find --kind claim --sort id --limit 1
-score_node="$(doc_get "${ck}/kbase-find-claim.out" results node_type claim id | head -n 1)"
-capture "${ck}/kbase-score" "${repo}" "${kbase}" score --node "${score_node}" --config-dir "${score_config}" --state-dir "${root}/${dir}/score-state"
-score_ok=0
-[[ -n "${score_node}" ]] || score_ok=1
-[[ "$(rc "${ck}/kbase-score")" -eq 0 ]] || score_ok=1
-grep -qx 'outcome: "done"' "${ck}/kbase-score.out" || score_ok=1
-[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring provider)" == "${provider}" ]] || score_ok=1
-[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring provider-rule)" == config ]] || score_ok=1
-[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring model)" == "${scoring}" ]] || score_ok=1
-[[ "$(sed -n 's/^    done: //p' "${ck}/kbase-score.out")" -eq 1 ]] || score_ok=1
+score_args=(--config-dir "${score_config}" --state-dir "${root}/${dir}/score-state")
+# map_get <result> <section> <key>: <key>'s value in the mapping <section>, at
+# whatever indent the section stands (top level, or under results:).
+map_get() {
+    awk -v sec="$2" -v key="$3" '
+        { match($0, /^ */); ind = RLENGTH }
+        in_sec && $0 != "" && ind <= base { exit }
+        in_sec { line = substr($0, ind + 1); if (index(line, key ": ") == 1) { print substr(line, length(key) + 3); exit } }
+        !in_sec && substr($0, ind + 1) == sec ":" { in_sec = 1; base = ind }' "$1"
+}
+
+capture "${ck}/kbase-score-dry" "${repo}" "${kbase}" score --dry-run "${score_args[@]}"
+asked="$(map_get "${ck}/kbase-score-dry.out" counts remaining)"
+check score-dry-run "$([[ "$(rc "${ck}/kbase-score-dry")" -eq 0 && "${asked}" =~ ^[0-9]+$ && "${asked}" -gt 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-score-dry.out" && echo 0 || echo 1)" \
+    "exit $(rc "${ck}/kbase-score-dry"), ${asked:-no count} items would be asked" "${ck}/kbase-score-dry.out"
+keys "${ck}/kbase-score-dry" score done
+
+capture "${ck}/kbase-score" "${repo}" "${kbase}" score "${score_args[@]}"
+check score-done "$([[ "$(rc "${ck}/kbase-score")" -eq 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-score.out" && echo 0 || echo 1)" \
+    "exit $(rc "${ck}/kbase-score"), $(grep -m1 '^outcome:' "${ck}/kbase-score.out" || echo 'no outcome')" "${ck}/kbase-score.out"
+score_role=0
+[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring provider)" == "${provider}" ]] || score_role=1
+[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring provider-rule)" == config ]] || score_role=1
+[[ "$(doc_get "${ck}/kbase-score.out" roles role scoring model)" == "${scoring}" ]] || score_role=1
 score_ledger="$(sed -n 's/^ledger: "\(.*\)"$/\1/p' "${ck}/kbase-score.out" | head -n 1)"
-[[ -n "${score_ledger}" && -f "${score_ledger}/ledger.jsonl" ]] || score_ok=1
-grep -qF "\"model\":\"${scoring}\"" "${score_ledger}/ledger.jsonl" || score_ok=1
-check score "${score_ok}" \
-    "a score run configured by --config-dir ${score_config}: one item asked, --node ${score_node}, on ${provider}/${scoring} under the config rule, against ${base_url}" \
-    "${ck}/kbase-score.out"
+[[ -n "${score_ledger}" && -f "${score_ledger}/ledger.jsonl" ]] || score_role=1
+grep -qF "\"model\":\"${scoring}\"" "${score_ledger}/ledger.jsonl" || score_role=1
+check score-role "${score_role}" \
+    "the scoring role record names ${provider}/${scoring} under the config rule, against ${base_url}, and the ledger names the model" "${ck}/kbase-score.out"
+score_done="$(map_get "${ck}/kbase-score.out" counts done)"
+score_failed="$(map_get "${ck}/kbase-score.out" counts failed)"
+check score-all-asked "$([[ "${score_done}" == "${asked}" && "${score_failed}" == 0 ]] && echo 0 || echo 1)" \
+    "${score_done:-no} items done of the ${asked} the dry run counted, ${score_failed:-no} failed" "${ck}/kbase-score.out"
+keys "${ck}/kbase-score" score done
+
+capture "${ck}/kbase-stats" "${repo}" "${kbase}" stats
+unknown_claims="$(map_get "${ck}/kbase-stats.out" strength-bands unknown)"
+check strength-derived "$([[ "$(rc "${ck}/kbase-stats")" -eq 0 && "${unknown_claims}" == 0 ]] && echo 0 || echo 1)" \
+    "strength-bands.unknown is ${unknown_claims:-absent}" "${ck}/kbase-stats.out"
+keys "${ck}/kbase-stats" stats done
+
+capture "${ck}/kbase-verify" "${repo}" "${kbase}" verify
+check verify-clean "$([[ "$(rc "${ck}/kbase-verify")" -eq 0 ]] && echo 0 || echo 1)" \
+    "exit $(rc "${ck}/kbase-verify")" "${ck}/kbase-verify.out"
+keys "${ck}/kbase-verify" verify done
+
+capture "${ck}/kbase-score-again" "${repo}" "${kbase}" score "${score_args[@]}"
+again_done="$(map_get "${ck}/kbase-score-again.out" counts done)"
+again_remaining="$(map_get "${ck}/kbase-score-again.out" counts remaining)"
+check score-again-asks-nothing "$([[ "$(rc "${ck}/kbase-score-again")" -eq 0 && "${again_done}" == 0 && "${again_remaining}" == 0 ]] && grep -qx 'outcome: "done"' "${ck}/kbase-score-again.out" && grep -qx 'scored: \[\]' "${ck}/kbase-score-again.out" && echo 0 || echo 1)" \
+    "exit $(rc "${ck}/kbase-score-again"), ${again_done:-no} done and ${again_remaining:-no} remaining, nothing scored" "${ck}/kbase-score-again.out"
+keys "${ck}/kbase-score-again" score done
 
 {
     printf -- '- id: %s\n  state-dir: %s\n  scratch:\n    captures: %s\n    letter-answers: %s\n    overview-answers: %s\n    ask-records: %s\n  checks:\n' \
@@ -318,7 +359,7 @@ check score "${score_ok}" \
     [[ -f "${dir}/counts.yaml" ]] && sed 's/^/  /' "${dir}/counts.yaml"
 } > "${out}/comparison.yaml"
 
-OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the layered leg, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, the three models, base URL, key kind and source directory the legs use\n(cd <id>/repo && ${kbase} probe --decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR HOME=<id>/layered/home XDG_STATE_HOME=<the operator's absolute XDG_STATE_HOME, else \$HOME/.local/state> ${kbase} configure-models --local --decision <the decision role's provider>/<the decision role's model> --text <provider>/<the text role's model> --scoring <provider>/<the scoring role's model>; ${kbase} show-config) into <id>/checks/kbase-configure-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure-models wrote, the repository layer)\n(cd <id>/repo && ${kbase} find --kind claim --sort id --limit 1) into <id>/checks/kbase-find-claim.*, naming <claim>, the KB's first claim by id\n(cd <id>/repo && ${kbase} score --node <claim> --config-dir <id>/score-config --state-dir <id>/score-state) into <id>/checks/kbase-score.*, <id>/score-config holding the providers.toml and api_keys of the layer that supplied the provider and a config.toml with decision=<provider>/<the decision role's model>, text=<provider>/<the text role's model>, scoring=<provider>/<the scoring role's model>: one item asked, the one --node names, the scoring role record naming the provider, provider-rule config and the scoring model, and the ledger naming it" \
+OUT_DIR="${out}" RECIPE="test-integration-build-live-arxiv" INVOCATION="on ${BUILD_ARXIV_SPECIAL_ID}, staged into <id>/repo (sources, stub Makefile, .gitignore); [--config-dir <config>] is passed to every call below that is not in the layered leg, and only where config is given:\n(cd <id>/repo && ${kbase} show-config [--config-dir <config>]) into show-config-source.*, whose roles, providers and layers give the provider, the three models, base URL, key kind and source directory the legs use\n(cd <id>/repo && ${kbase} probe --role decision [--config-dir <config>]) into probe-decision.*\n(cd <id>/repo && ${kbase} build <volume-root> [--config-dir <config>] --state-dir <id>/state --log-level info) into <id>/checks/kbase-build.*\ngo test -run '^TestLiveBuildCounts\$' ./internal/claimgraph -args -claimgraph.repo=<id>/repo -claimgraph.result=<id>/checks/kbase-build.out -claimgraph.out=<id>\n(cd <id>/layered/repo && env -u KBASE_CONFIG_DIR HOME=<id>/layered/home XDG_STATE_HOME=<the operator's absolute XDG_STATE_HOME, else \$HOME/.local/state> ${kbase} configure-models --layer repository --decision <the decision role's provider>/<the decision role's model> --text <provider>/<the text role's model> --scoring <provider>/<the scoring role's model>; ${kbase} show-config) into <id>/checks/kbase-configure-layered.* and kbase-show-config-layered.*, in <id>/layered/repo below <id>/layered/home/.config/kbase (the providers.toml and api_keys of the layer that supplied the provider, the global layer, over .kbase/ that configure-models wrote, the repository layer)\n(cd <id>/repo && ${kbase} score --dry-run --config-dir <id>/score-config --state-dir <id>/score-state) into <id>/checks/kbase-score-dry.*, <id>/score-config holding the providers.toml and api_keys of the layer that supplied the provider and a config.toml with decision=<provider>/<the decision role's model>, text=<provider>/<the text role's model>, scoring=<provider>/<the scoring role's model>: counts.remaining is N, the items a full run would ask\n(cd <id>/repo && ${kbase} score --config-dir <id>/score-config --state-dir <id>/score-state) into <id>/checks/kbase-score.*: outcome done, counts.done N and counts.failed 0, the scoring role record naming the provider, provider-rule config and the scoring model, and the ledger naming it\n(cd <id>/repo && ${kbase} stats) into <id>/checks/kbase-stats.*: strength-bands.unknown 0\n(cd <id>/repo && ${kbase} verify) into <id>/checks/kbase-verify.*: exit 0, no refusals\n(cd <id>/repo && ${kbase} score --config-dir <id>/score-config --state-dir <id>/score-state) again into <id>/checks/kbase-score-again.*: outcome done, counts.done and counts.remaining 0, scored []\ngo test -count=1 -run '^TestResult\$' ./cmd -args -result.file=<id>/checks/<stem>.out -result.verb=<verb> -result.outcome=done > <id>/checks/<stem>.keys.log, for each of the five results above" \
     tools/scripts/write-evidence.sh
 printf '\nReference: %s\n' "${pandoc_version}" >> "${out}/EVIDENCE.md"
 if [[ "${status}" -ne 0 ]]; then

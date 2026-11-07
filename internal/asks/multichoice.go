@@ -50,8 +50,10 @@ const (
 // MultichoiceQuestion is one ask as a reader receives it: Group and Item name it,
 // State is the composed body, Question the one typed question over the
 // offered letters, and Attempt counts the item's asks from 1. A decision
-// model has no free-text reply to quote back, so a re-ask is the identical
-// question again — the attempt ordinal is what distinguishes it.
+// model has no free-text reply to quote back: Correction is the
+// decision-correction text where the re-ask follows a refusal, and "" on a
+// first ask and on a re-ask of the identical question, which the attempt
+// ordinal alone distinguishes.
 type MultichoiceQuestion struct {
 	Kind        Kind
 	Group, Item string
@@ -59,6 +61,7 @@ type MultichoiceQuestion struct {
 	Question    Question
 	Offered     []string
 	Attempt     int
+	Correction  string
 }
 
 // CallStats is what a reader measured of its own call.
@@ -70,11 +73,13 @@ type CallStats struct {
 }
 
 // Reply is what came back. Confidence is a per-letter distribution, from a
-// reader that has one; Stats is nil where the reader measured no call.
+// reader that has one; Stats is nil where the reader measured no call;
+// Refused is whether the model declined to answer.
 type Reply struct {
 	Text       string
 	Confidence map[string]float64
 	Stats      *CallStats
+	Refused    bool
 }
 
 // MultichoiceReader puts a question to a model. It returns an IncompleteError
@@ -208,7 +213,7 @@ func QuestionParts(q Question) []string {
 	return parts
 }
 
-// Launch starts one item of an ask batch. It blocks until the item may start
+// Launch starts one item of a wave of calls. It blocks until the item may start
 // — where ctx ends first it returns ctx's error and starts nothing — then
 // adds the item to wg and runs it on a goroutine of its own, handing it the
 // reader its calls go through. The after the item returns, where not nil,
@@ -246,41 +251,51 @@ func ask(ctx context.Context, reader MultichoiceReader, q MultichoiceQuestion) (
 	return c, nil
 }
 
-// resolve is an item's calls: the first ask, q, and the one re-ask where it
-// carried no offered letter. The re-ask is the identical question — a
-// deterministic decision model answers it identically and defaults — the
-// attempt ordinal keeping the asks apart in the answer cache.
+// resolve is an item's calls, at most MaxAsks: the first ask, q, then a
+// re-ask while the last reply carried no offered letter. A re-ask after a
+// refusal carries the decision-correction text; any other is the identical
+// question — a deterministic decision model answers it identically and
+// defaults — the attempt ordinal keeping the asks apart in the answer cache.
+// The call that failed, where one did, is last, its askCall empty.
 func resolve(ctx context.Context, reader MultichoiceReader, q MultichoiceQuestion) ([]askCall, error) {
-	first, err := ask(ctx, reader, q)
-	if err != nil || first.letter != nil {
-		return []askCall{first}, err
+	calls := make([]askCall, 0, MaxAsks)
+	for {
+		c, err := ask(ctx, reader, q)
+		calls = append(calls, c)
+		if err != nil || c.letter != nil || len(calls) == MaxAsks {
+			return calls, err
+		}
+		q.Attempt++
+		q.Correction = ""
+		if c.reply.Refused {
+			if q.Correction, err = DecisionCorrection(); err != nil {
+				return calls, err
+			}
+		}
 	}
-	q.Attempt = 2
-	second, err := ask(ctx, reader, q)
-	return []askCall{first, second}, err
 }
 
-// Batch is one ask batch: the groups one stage launches, in order and from
+// Wave is one wave of calls: the groups one stage launches, in order and from
 // the goroutine that runs the stage, before it waits for them all. Its first
 // error by arrival stops it — no further item is launched, and the calls in
 // flight see their context end — and is the error Wait reports, never a
 // sibling's cancellation behind it.
-type Batch struct {
+type Wave struct {
 	ctx    context.Context
 	stop   context.CancelCauseFunc
 	launch Launch
 	wg     sync.WaitGroup
 	groups []*launchedGroup
 	// carryOn is whether a call that never completes leaves its item failed
-	// and the batch running, rather than stopping it.
+	// and the wave running, rather than stopping it.
 	carryOn bool
 
 	started time.Time
 	elapsed time.Duration
 }
 
-// launchedGroup is one group of a batch and its items' result cells, each
-// written by its own item alone and read once the batch has drained.
+// launchedGroup is one group of a wave and its items' result cells, each
+// written by its own item alone and read once the wave has drained.
 type launchedGroup struct {
 	kind    Kind
 	group   string
@@ -299,16 +314,16 @@ type itemResult struct {
 
 func (r itemResult) recorded() bool { return r.failed || len(r.calls) > 0 }
 
-// NewBatch is an empty ask batch whose items launch would start under ctx. A
-// call that never completes stops it. Every batch is ended by its Wait.
-func NewBatch(ctx context.Context, launch Launch) *Batch {
+// NewWave is an empty wave of calls whose items launch would start under ctx.
+// A call that never completes stops it. Every wave is ended by its Wait.
+func NewWave(ctx context.Context, launch Launch) *Wave {
 	bctx, stop := context.WithCancelCause(ctx)
-	return &Batch{ctx: bctx, stop: stop, launch: launch, started: time.Now()}
+	return &Wave{ctx: bctx, stop: stop, launch: launch, started: time.Now()}
 }
 
-// Elapsed is b's time from NewBatch to its Wait's return, zero before Wait
+// Elapsed is b's time from NewWave to its Wait's return, zero before Wait
 // returns.
-func (b *Batch) Elapsed() time.Duration { return b.elapsed }
+func (b *Wave) Elapsed() time.Duration { return b.elapsed }
 
 // AskGroup launches every item of one group into b, in the order given. In a
 // group of more than one, the first goes alone, waited for so the server
@@ -318,7 +333,7 @@ func (b *Batch) Elapsed() time.Duration { return b.elapsed }
 // item launches; its re-ask, where it needs one, runs inside the same item.
 // Where b has stopped it returns b's error, and the stage launches nothing
 // more.
-func (b *Batch) AskGroup(kind Kind, group string, items []MultichoiceItem) error {
+func (b *Wave) AskGroup(kind Kind, group string, items []MultichoiceItem) error {
 	g := &launchedGroup{kind: kind, group: group, items: items, results: make([]itemResult, len(items))}
 	b.groups = append(b.groups, g)
 	for i, entry := range items {
@@ -367,15 +382,15 @@ func (b *Batch) AskGroup(kind Kind, group string, items []MultichoiceItem) error
 	return nil
 }
 
-// written is an item's after: an error writing its files stops the batch.
-func (b *Batch) written(err error) {
+// written is an item's after: an error writing its files stops the wave.
+func (b *Wave) written(err error) {
 	if err != nil {
 		b.stop(err)
 	}
 }
 
 // err is b's first error by arrival, nil while it runs.
-func (b *Batch) err() error {
+func (b *Wave) err() error {
 	if b.ctx.Err() == nil {
 		return nil
 	}
@@ -384,13 +399,13 @@ func (b *Batch) err() error {
 
 // Wait waits for every item b launched, then returns the record of each group
 // in launch order and, where b stopped, its first error by arrival. A finished
-// batch records every group it was given, one launched with no items as a
+// wave records every group it was given, one launched with no items as a
 // record with none. After a stop, a record holds the items that were asked: an
 // item whose call never completed is recorded failed; one cancelled by a
 // sibling's stop or never launched is absent, as is a group with no asked
 // item. It writes no file: the stage writes the records through
 // WriteGroupRecords.
-func (b *Batch) Wait() ([]GroupRecord, error) {
+func (b *Wave) Wait() ([]GroupRecord, error) {
 	b.wg.Wait()
 	b.elapsed = time.Since(b.started)
 	defer b.stop(nil)
@@ -494,7 +509,7 @@ func WriteGroupRecords(dir string, records []GroupRecord) error {
 	if err := enc.Close(); err != nil {
 		return err
 	}
-	return atomicfile.Write(GroupRecordsPath(dir, records[0].Kind), buf.Bytes(), nil)
+	return atomicfile.Write(GroupRecordsPath(dir, records[0].Kind), buf.Bytes())
 }
 
 // AskTotals is what a stage's multichoice asks cost and how they ended. The warm

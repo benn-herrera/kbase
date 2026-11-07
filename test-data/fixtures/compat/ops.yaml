@@ -2,8 +2,7 @@
 # file for the placeholders and how the script is rendered and run.
 steps:
   - name: premise
-    reissue: refused
-    reissue-detail: "node exists: "
+    reissue: unchanged
     values:
       entry:
         - operation: add-claim
@@ -26,8 +25,7 @@ steps:
           line: "{line}"
           snippet: "{snippet}"
   - name: work
-    reissue: refused
-    reissue-detail: "node exists: "
+    reissue: unchanged
     values:
       entry:
         - operation: add-work

@@ -1,6 +1,7 @@
 package write
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -123,6 +124,30 @@ func TestACitationRefusesTheRemoval(t *testing.T) {
 		t.Errorf("refusal = %+v, want other.md line 9 named, entry 1", r)
 	}
 	if after := snapshot(t, root); !maps.Equal(before, after) {
+		t.Error("a refused removal wrote to the KB")
+	}
+}
+
+// TestABareIDRefusesTheRemoval: the node's id standing bare in a document's
+// prose refuses the removal once per line holding it, naming path:line, a
+// link whose whole text is the id included, and a line that also cites it
+// named once; one inside code or only part of a link's text does not; nothing
+// is written.
+func TestABareIDRefusesTheRemoval(t *testing.T) {
+	other := "[↑ Entry](entry-point.md)\n\n# Other\n\n`clm-aaaaaa` and [see clm-aaaaaa](leaf.md) are no mention.\n\n" +
+		"Both clm-aaaaaa and clm-aaaaaa hold.\n\nSo does [clm-aaaaaa](leaf.md).\n\n" +
+		"As [the main result](leaf.md#leaf \"clm-aaaaaa\") shows, clm-aaaaaa holds.\n"
+	root := nodesKB(t, nodesGraph(), other)
+	before := snapshot(t, root)
+	res := run(t, root, "remove-node", "entry:\n- id: clm-aaaaaa\n")
+	var got []string
+	for _, r := range res.Refusals {
+		got = append(got, fmt.Sprintf("%s:%d", r.Path, r.Line))
+	}
+	if want := []string{"other.md:7", "other.md:9", "other.md:11"}; res.Outcome != result.Refused || !slices.Equal(got, want) {
+		t.Fatalf("result = %+v, want refused at %q", res, want)
+	}
+	if !maps.Equal(before, snapshot(t, root)) {
 		t.Error("a refused removal wrote to the KB")
 	}
 }

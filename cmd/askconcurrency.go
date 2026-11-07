@@ -7,6 +7,7 @@ import (
 
 	"kbase/internal/argmark"
 	"kbase/internal/config"
+	"kbase/internal/mcp"
 	toolresult "kbase/internal/result"
 )
 
@@ -17,6 +18,7 @@ const askConcurrencyFlag = "ask-concurrency"
 func registerAskConcurrencyFlag(cmd *cobra.Command, value *int) {
 	cmd.Flags().IntVar(value, askConcurrencyFlag, 0,
 		"model calls in flight at once, across every role; at least 1 (default: [asks] concurrency in config.toml, else "+strconv.Itoa(config.DefaultAskConcurrency)+")")
+	mcp.Brief(cmd, askConcurrencyFlag, "model calls in flight at once")
 }
 
 // givenAskConcurrency is value where the invocation gave --ask-concurrency,

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"kbase/internal/config"
 	"kbase/internal/log"
@@ -58,10 +57,10 @@ func refusingConfig(t *testing.T, baseURL string) string {
 	return dir
 }
 
-// refusedRun is one verb's run against a refusing provider: its document and
+// refusedRun is one verb's run against a refusing provider: its result and
 // both streams.
 type refusedRun struct {
-	doc            resultDoc
+	doc            parsedResult
 	stdout, stderr string
 }
 
@@ -86,7 +85,7 @@ var refusedVerbs = []struct {
 	}},
 	{"score", "solo", func(t *testing.T, _, baseURL string) refusedRun {
 		got := scoreDrive(t, scoreRepo(t), t.TempDir(),
-			scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}, providerOptions: scoreProviderAt(baseURL)},
+			scoreOptions{Pass: query.PassRigor, providerOptions: scoreProviderAt(baseURL)},
 			model.NewClient)
 		return refusedRun{doc: got.doc, stdout: got.stdout, stderr: got.stderr}
 	}},
@@ -104,21 +103,22 @@ func refusedRoot(t *testing.T, args ...string) refusedRun {
 			t.Fatal(err)
 		}
 	}
-	return refusedRun{doc: checkDocument(t, args[0], stdout.String()), stdout: stdout.String(), stderr: stderr.String()}
+	return refusedRun{doc: checkResult(t, args[0], stdout.String()), stdout: stdout.String(), stderr: stderr.String()}
 }
 
 // TestRefusedKeyFailureCarriesTheRemedy: a provider answering 401
 // refused the call's key, a missing one or a wrong one; each verb fails as it
 // does on any refusal, and its failure item carries the command that stores a
-// key for the entry it dialled. A 500 is no refused key and carries none.
+// key for the entry it dialled. A 400 is no refused key and carries none; like
+// a 401, it ends the call on its first attempt, with no re-issue pause.
 func TestRefusedKeyFailureCarriesTheRemedy(t *testing.T) {
-	for _, code := range []int{http.StatusUnauthorized, http.StatusInternalServerError} {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusBadRequest} {
 		for _, verb := range refusedVerbs {
 			t.Run(fmt.Sprintf("%s %d", verb.name, code), func(t *testing.T) {
 				srv, _ := refusingProvider(t, code)
 				got := verb.run(t, refusingConfig(t, srv.URL), srv.URL)
 				want := ""
-				if code != http.StatusInternalServerError {
+				if code != http.StatusBadRequest {
 					want = config.AuthAddRemedy(verb.entry)
 				}
 				// The messages name outcomes and remedies only: a detail could
@@ -135,14 +135,14 @@ func TestRefusedKeyFailureCarriesTheRemedy(t *testing.T) {
 	}
 }
 
-// endsWithNote reports whether a failed document's item's detail ends with the
+// endsWithNote reports whether a failed result's item's detail ends with the
 // refused-key note, then the failed outcome's ask.
 func endsWithNote(item map[string]any) bool {
 	detail, _ := item["detail"].(string)
 	return strings.HasSuffix(detail, "; "+config.RefusedKeyNote+"; "+toolresult.FailedAsk)
 }
 
-// nilIfEmpty is s as a decoded document holds it: an omitted key reads nil.
+// nilIfEmpty is s as a decoded result holds it: an omitted key reads nil.
 func nilIfEmpty(s string) any {
 	if s == "" {
 		return nil
@@ -233,7 +233,7 @@ func TestBuildRefusedKeyNamesTheRolesEntry(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	doc := checkDocument(t, "build", stdout.String())
+	doc := checkResult(t, "build", stdout.String())
 	want := config.AuthAddRemedy("lab")
 	if items := doc.items(toolresult.FailuresKey); doc.Outcome != toolresult.Failed || len(items) != 1 || items[0]["remedy"] != want {
 		t.Errorf("outcome %s, failure remedies %v, want failed with one item whose remedy is %q", doc.Outcome, remedies(items), want)

@@ -63,15 +63,18 @@ func TestScoreRecordNamesWhatAnswered(t *testing.T) {
 	}
 }
 
-// TestScoreFailureReasonIsASummary: what reaches the document's detail — and the
+// TestScoreFailureReasonIsASummary: what reaches the result's detail — and the
 // log line beside it — is bounded and stripped of control characters, while the
 // ledger's line keeps the reason whole. A terminal obeying an escape and a
-// document carrying 64 KiB of one are both what the one channel prevents.
+// result carrying 64 KiB of one are both what the one channel prevents.
 func TestScoreFailureReasonIsASummary(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
-	// The stub's failure is the transport's, so it is re-issued; the pause is
-	// injected short because what this test reads is the reason, not the wait.
-	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor, Backoff: []time.Duration{time.Millisecond}}, func() model.Client {
+	// The stub's failure is the transport's, so it would be re-issued after a
+	// 5 s pause; a deadline under that pause ends the call on its one attempt,
+	// and what this test reads is the reason, not the wait.
+	opts := scoreOptions{Pass: query.PassRigor, providerOptions: scoreProvider()}
+	opts.Timeout = time.Second
+	got := scoreIn(t, repo, state, opts, func() model.Client {
 		m := modeltest.NewScriptedMock(nil, nil)
 		m.SetError(errors.New("the stub refuses\n\x1b[2J\x1b]0;owned\a" + strings.Repeat("x", 2000)))
 		return m.Client()

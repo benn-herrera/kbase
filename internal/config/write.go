@@ -30,9 +30,9 @@ const (
 
 	// The providers.toml keys an entry's write sets; they mirror Provider's
 	// `toml` tags.
-	keyBaseURL         = "baseUrl"
-	keyAPI             = "api"
-	keyDecisionsFlavor = "decisionsFlavor"
+	keyBaseURL     = "baseUrl"
+	keyAPI         = "api"
+	keyDecisionAPI = "decisionApi"
 
 	// commentGap separates a rewritten assignment from the trailing
 	// comment carried over from the line it replaced. The original spacing
@@ -60,7 +60,7 @@ func UpdateConfig(path string, cfg Config) (bool, error) {
 	return editTable(path, freshConfig(Config{}), tableModels, set)
 }
 
-// SetProvider writes p's baseUrl, and its api and decisionsFlavor where p
+// SetProvider writes p's baseUrl, and its api and decisionApi where p
 // states them, into the providers.toml at path: into the table named p.Name,
 // matched whatever its case, or a new one at the end of the file. A missing
 // file is created holding the template's comments and this entry alone. Every
@@ -71,8 +71,8 @@ func SetProvider(path string, p Provider) (bool, error) {
 	if p.API != "" {
 		set = append(set, keyValue{keyAPI, p.API})
 	}
-	if p.DecisionsFlavor != "" {
-		set = append(set, keyValue{keyDecisionsFlavor, p.DecisionsFlavor})
+	if p.DecisionAPI != "" {
+		set = append(set, keyValue{keyDecisionAPI, p.DecisionAPI})
 	}
 	return editTable(path, providersTemplate(), p.Name, set)
 }
@@ -360,7 +360,7 @@ func installConfig(path, content string) error {
 	// A config.toml symlinked into a dotfiles repo is a common setup for
 	// exactly this kind of file; the write follows the link, so the dotfiles
 	// copy is the one rewritten and the link survives.
-	if err := atomicfile.Write(path, []byte(content), nil); err != nil {
+	if err := atomicfile.Write(path, []byte(content)); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil

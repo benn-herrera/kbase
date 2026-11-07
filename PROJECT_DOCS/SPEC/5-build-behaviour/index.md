@@ -7,8 +7,8 @@ kbase build --resume [--no-inference] [--through <stage>] [--state-dir DIR]
             [--ask-concurrency N]
 ```
 
-A value of `--ask-concurrency` under 1 is a usage refusal naming `--ask-concurrency`, and `build`'s
-`resume` carries it.
+A value of `--ask-concurrency` under 1 is a usage refusal naming `--ask-concurrency`, and the
+`resume` call a build returns includes `--ask-concurrency` where it was given.
 
 Contents:
 

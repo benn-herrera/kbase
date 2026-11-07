@@ -352,21 +352,38 @@ func TestRemoveEdge(t *testing.T) {
 	}
 }
 
-// TestARepeatedAddEdgeIsRefused: an add-edge re-issued is refused, edge
-// exists, remedy edit-edge, whatever its values, kb-root/ identical.
-func TestARepeatedAddEdgeIsRefused(t *testing.T) {
+// TestARepeatedAddEdge: an add-edge re-issued differing in its bearing, its
+// context or its bearing's being given is refused, edge exists, remedy
+// edit-edge, kb-root/ left identical (TestIdempotence re-issues one
+// identically). Within one batch an identical second entry is unchanged and a
+// differing one refused at the repeat.
+func TestARepeatedAddEdge(t *testing.T) {
+	add := func(extra ...string) string {
+		return edgeEntry("add-edge", "clm-aaaaaa", "clm-bbbbbb", kb.RelationRefutes, extra...)
+	}
 	root := recordKB(t, edgeOpsGraph())
-	add := edgeEntry("add-edge", "clm-aaaaaa", "clm-bbbbbb", kb.RelationRefutes, "bearing: 0.2")
-	if res := runEdges(t, root, add); res.Outcome != result.Done {
+	if res := runEdges(t, root, add("bearing: 0.2")); res.Outcome != result.Done {
 		t.Fatalf("add: %+v", res)
 	}
 	before := snapshot(t, root)
-	for _, entry := range []string{add, edgeEntry("add-edge", "clm-aaaaaa", "clm-bbbbbb", kb.RelationRefutes, "bearing: 0.9")} {
+	for _, entry := range []string{add("bearing: 0.9"), add("bearing: 0.2", "context: by it"), add()} {
 		res := runEdges(t, root, entry)
 		if len(res.Refusals) != 1 || res.Refusals[0].Detail != "edge exists: "+index.EdgeName(kb.RelationRefutes, "clm-aaaaaa", "clm-bbbbbb") ||
-			res.Refusals[0].Key != "relation" || !strings.Contains(res.Refusals[0].Remedy, "edit-edge") || !maps.Equal(before, snapshot(t, root)) {
-			t.Errorf("a re-issued add: %+v, want edge exists at relation, remedy edit-edge, kb-root/ identical", res)
+			res.Refusals[0].Key != "relation" || !strings.Contains(res.Refusals[0].Remedy, "edit-edge") {
+			t.Errorf("a differing re-issue: %+v, want edge exists at relation, remedy edit-edge", res)
 		}
+	}
+	if !maps.Equal(before, snapshot(t, root)) {
+		t.Error("a re-issued add-edge changed kb-root/")
+	}
+
+	res := runEdges(t, recordKB(t, edgeOpsGraph()), add("bearing: 0.2"), add("bearing: 0.2"))
+	if res.Outcome != result.Done || len(res.Entries) != 2 || res.Entries[1].Outcome != result.Unchanged {
+		t.Errorf("one batch adding twice: %+v, want the repeat unchanged", res)
+	}
+	res = runEdges(t, recordKB(t, edgeOpsGraph()), add("bearing: 0.2"), add("bearing: 0.9"))
+	if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Entry != 2 {
+		t.Errorf("one batch adding a differing repeat: %+v, want refused at entry 2", res)
 	}
 }
 

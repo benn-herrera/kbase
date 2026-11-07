@@ -43,6 +43,8 @@ type buildOptions struct {
 	AskConcurrency, ConfiguredConcurrency *int
 	// WorkDir is where the search for the repository root starts.
 	WorkDir string
+	// Faults are the loaded configuration's faults, the result's warnings.
+	Faults []config.ProviderFault
 	// Provider builds where the build's model calls go, or what the
 	// configuration lacks for them, over the registry the verb opened and
 	// closes when the build returns.
@@ -55,14 +57,16 @@ type buildOptions struct {
 	Logger    log.Logger
 }
 
-// runBuild runs the build, writes its result document, and returns the exit
-// code the outcome maps to.
+// runBuild runs the build, writes its result, and returns the exit
+// code the outcome maps to. The configuration's faults are the result's
+// warnings and lines on Stderr.
 func runBuild(ctx context.Context, opts buildOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "build"); err != nil {
 		return 0, err
 	}
+	warnings := warningsField(warnFaults(opts.Stderr, opts.Faults))
 	outcome, fields := buildRun(ctx, opts)
-	if err := toolresult.Emit(documentOut(opts.Stdout), outcome, fields...); err != nil {
+	if err := toolresult.Emit(resultOut(opts.Stdout), outcome, toolresult.WithWarnings(fields, warnings)...); err != nil {
 		return 0, fmt.Errorf("build: writing the result: %w", err)
 	}
 	return toolresult.ExitCode(outcome), nil
@@ -147,7 +151,7 @@ func failed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
 }
 
 // exitCode carries a non-zero exit out of a verb that has already written
-// its result document.
+// its result.
 type exitCode int
 
 func (c exitCode) Error() string { return fmt.Sprintf("exit %d", int(c)) }
@@ -164,12 +168,11 @@ var (
 // buildProvider is where the build's model calls go: each role resolved from
 // the loaded configuration, its own entry dialled through reg — the multichoice
 // asks on the decision role, the overview passage on the text role — or what
-// it lacks. A key bound for a non-loopback http:// endpoint is said on stderr,
+// it lacks. A key bound for an http:// endpoint off the local network is said on stderr,
 // and the build proceeds.
 func buildProvider(p providerOptions, stderr io.Writer) func(reg *modelclient.Registry) (build.Provider, error) {
 	return func(reg *modelclient.Registry) (build.Provider, error) {
 		s := p.inputs()
-		warnFaults(stderr, p.Faults)
 		var records []toolresult.Record
 		warned := map[string]bool{}
 		role := func(r config.Role) (model.Client, string, string, error) {
@@ -246,13 +249,21 @@ Build state lives in ` + argmark.Flag("state-dir") + `, by default ` + stateStor
 One repository carries one run at a time, a build or a score run: a second is
 refused, naming the holder's verb and pid. A run's own result names each stage
 walked, its boundary commit and its report, and the call that resumes the
-build where it did not finish.`
+build where it did not finish.
+
+` + configWarningsHelp("the run's own result")
 
 // runLaunchMCPNote is what differs for build and score over MCP.
 const runLaunchMCPNote = `The call returns once the run has started, as a detached process that carries
 on without the server. Its result gives "pid", "state-dir" and "wait", a shell
-command line that blocks until the run ends; no tool waits. The status tool
-follows the run and the cancel tool stops it.`
+command line that blocks until the run ends; no tool waits. Its "warnings" is
+the configuration as read at launch; the run's own result carries the run's
+own. The status tool follows the run and the cancel tool stops it.`
+
+// buildMCPNote is what differs for build over MCP.
+var buildMCPNote = runLaunchMCPNote + `
+
+` + argmark.Flag("through") + ` takes a stage id alone; the command line also takes a stage's display name.`
 
 // buildCLINote is what differs for build at the command line.
 const buildCLINote = `build runs in the foreground, and its result is the run's own; SIGINT or
@@ -302,6 +313,7 @@ var buildCmd = mcp.Notes(&cobra.Command{
 			AskConcurrency:        givenAskConcurrency(cmd, flagAskConcurrency),
 			ConfiguredConcurrency: providers.Config.Asks.Concurrency,
 			WorkDir:               wd,
+			Faults:                providers.Faults,
 			Provider:              buildProvider(providers, cmd.ErrOrStderr()),
 			Stdout:                cmd.OutOrStdout(),
 			Stderr:                cmd.ErrOrStderr(),
@@ -315,17 +327,23 @@ var buildCmd = mcp.Notes(&cobra.Command{
 		}
 		return nil
 	},
-}, runLaunchMCPNote, buildCLINote)
+}, buildMCPNote, buildCLINote)
 
 func init() {
 	buildCmd.Flags().StringArrayVar(&flagBibliographies, "bibliography", nil,
 		"a .bib citations resolve against, one per file, read in path order (default: every .bib beside any volume root, sorted)")
+	mcp.Brief(buildCmd, "bibliography", ".bib files citations resolve against")
 	buildCmd.Flags().BoolVar(&flagResume, "resume", false, "continue the build the commit trail records, with the inputs it records")
+	mcp.Brief(buildCmd, "resume", "continue the recorded build; omit "+argmark.Positional("volume-root"))
 	buildCmd.Flags().StringVar(&flagThrough, "through", "", "the last stage to walk, by id — "+
 		proseSeries(buildstore.StageIDs(), "or")+" — or by display name (default: every stage)")
-	buildCmd.Flags().StringVar(&flagStateDir, "state-dir", "", runStateDirUsage)
+	mcp.EnumFlag(buildCmd.Flags().Lookup("through"), buildstore.StageIDs()...)
+	mcp.Brief(buildCmd, "through", "last stage to run")
+	registerStateDirFlag(buildCmd, &flagStateDir, runStateDirUsage, stateDirBrief)
 	buildCmd.Flags().BoolVar(&flagNoInference, "no-inference", false, "skip each step that would spend inference; every stage is still walked")
+	mcp.Brief(buildCmd, "no-inference", "skip every inference step")
 	registerAskConcurrencyFlag(buildCmd, &flagAskConcurrency)
 	mcp.DescribePositional(buildCmd, "volume-root", "each paper's top .tex file, a relative path resolving against the project root; required unless "+
 		argmark.Flag("resume")+", refused with it")
+	mcp.Brief(buildCmd, "volume-root", "each paper's top .tex, project-relative; omit with "+argmark.Flag("resume"))
 }

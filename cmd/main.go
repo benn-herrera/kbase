@@ -132,9 +132,10 @@ MCP tool or an op of the write or query tool.
 
 ` + mcp.EdgeDirection + `
 
-Every subcommand writes one YAML document to stdout, its outcome first, and
-nothing else; stderr is for humans. The exit code follows the outcome: 0 for
-done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4 cancelled.
+Every subcommand writes its result, one YAML document with its outcome first,
+to stdout and nothing else; stderr is for humans. The exit code follows the
+outcome: 0 for done, unchanged or bounded; 1 refused; 2 retry; 3 failed; 4
+cancelled.
 
 ` + queryHelp + `
 
@@ -200,10 +201,10 @@ func main() {
 	os.Exit(exitStatus(err, stdout, os.Stderr))
 }
 
-// documentOut is w as a verb's result document reaches its reader: spelled as
-// the command line takes an argument, unless the call w answers came in over
-// MCP, which settled its spelling where it came in.
-func documentOut(w io.Writer) io.Writer { return cliOut(rootCmd, w) }
+// resultOut is w as a verb's result reaches its reader: spelled as the
+// command line takes an argument, unless the call w answers came in over MCP,
+// which settled its spelling where it came in.
+func resultOut(w io.Writer) io.Writer { return cliOut(rootCmd, w) }
 
 // cliOut is w spelling for the command line, from the tree under root, unless
 // it carries a spelling already.
@@ -212,8 +213,8 @@ func cliOut(root *cobra.Command, w io.Writer) io.Writer {
 }
 
 // exitStatus is the process exit code for what Execute returned. An error no
-// verb wrote a result document for — a usage error among them — is refused
-// with its own document.
+// verb wrote a result for — a usage error among them — is refused with its
+// own result.
 func exitStatus(err error, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 0
@@ -223,16 +224,19 @@ func exitStatus(err error, stdout, stderr io.Writer) int {
 		return int(code)
 	}
 	fmt.Fprintf(stderr, "error: %v\n", err)
-	var refusal toolresult.Refusal
-	var outcome string
-	var fields []toolresult.Field
-	if errors.As(err, &refusal) {
-		outcome, fields = refused(nil, refusal...)
-	} else {
-		outcome, fields = refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Detail: err.Error()})
-	}
-	if eerr := toolresult.Emit(documentOut(stdout), outcome, fields...); eerr != nil {
+	outcome, fields := refused(nil, errorItems(err)...)
+	if eerr := toolresult.Emit(resultOut(stdout), outcome, fields...); eerr != nil {
 		fmt.Fprintf(stderr, "error: writing the result: %v\n", eerr)
 	}
 	return toolresult.ExitCode(outcome)
+}
+
+// errorItems is the items of err, an error no verb wrote a result for: a
+// refusal's own, else one usage item carrying its text.
+func errorItems(err error) []toolresult.Item {
+	var refusal toolresult.Refusal
+	if errors.As(err, &refusal) {
+		return refusal
+	}
+	return []toolresult.Item{{Check: toolresult.CheckUsage, Detail: err.Error()}}
 }

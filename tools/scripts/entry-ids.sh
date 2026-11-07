@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prints the id of each entry of a write result document, entries[].id, one per
+# Prints the id of each entry of a write result, entries[].id, one per
 # line in entry order: those opening with the given prefix, every id where the
 # prefix is empty. The result's layout — entries at the top level, each entry a
 # list item whose keys stand one level under it — is assumed here and in no

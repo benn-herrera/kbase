@@ -29,7 +29,7 @@ func letterRelation(letter string) (Relation, bool) {
 
 // classification is what classification decided and what it writes: every
 // candidate's relation and outcome, the depends edges and references records,
-// and this run's ask records and its ask batch's elapsed time.
+// and this run's ask records and its wave's elapsed time.
 type classification struct {
 	relations map[pair]Relation
 	outcomes  map[pair]string
@@ -48,12 +48,12 @@ func held(e buildrecords.CandidateEntry, ok, asking bool) bool {
 // classify classifies every candidate, one multichoice ask each, grouped by source
 // in ascending id and offered only the letters of its offered relations;
 // where opts cannot ask every candidate takes its draft. The groups are one
-// ask batch; once it has drained, the classification record is written once
+// wave of calls; once it has drained, the classification record is written once
 // with them all, and a resumed run asks only what the record does not hold. A
 // call that never completes stops it with nothing written but the group
 // records of what it asked. A run that asks
 // reports each source's group as a unit of progress, and each candidate
-// defaulted as a fallback, once the batch has drained.
+// defaulted as a fallback, once the wave has drained.
 func classify(ctx context.Context, repoRoot string, candidates []candidate, statement func(ClaimNode) string, opts Options) (classification, error) {
 	asking, progress := opts.asking(), opts.Progress
 	out := classification{relations: map[pair]Relation{}, outcomes: map[pair]string{}}
@@ -86,7 +86,7 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 		if err := progress.units(len(pendingOf)); err != nil {
 			return out, err
 		}
-		batch := opts.batch(ctx)
+		wave := opts.wave(ctx)
 		for _, s := range sources {
 			pending := pendingOf[s]
 			if len(pending) == 0 {
@@ -97,14 +97,14 @@ func classify(ctx context.Context, repoRoot string, candidates []candidate, stat
 				items[i] = asks.ClassifyItem{Target: askClaim(c.target), Statement: statement(c.target), Passages: c.passages, Offered: offeredLetters(c)}
 			}
 			source := pending[0].source
-			if err := batch.AskGroup(asks.Classify, source.ID, asks.ClassifyAsks(askClaim(source), statement(source), items)); err != nil {
+			if err := wave.AskGroup(asks.Classify, source.ID, asks.ClassifyAsks(askClaim(source), statement(source), items)); err != nil {
 				break
 			}
 		}
-		if out.asked, err = batch.Wait(); err != nil {
+		if out.asked, err = wave.Wait(); err != nil {
 			return out, askStopWriting(opts.AskRecords, out.asked, err)
 		}
-		out.wall = batch.Elapsed()
+		out.wall = wave.Elapsed()
 	}
 	asked := 0
 	for _, s := range sources {

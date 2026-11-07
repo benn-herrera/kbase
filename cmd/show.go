@@ -14,7 +14,7 @@ func showCommand() *cobra.Command {
 		Use:   "show <id>",
 		Short: "the full record of one node of any kind",
 		Long: `show returns the record of the node carrying ` + argmark.Positional("id") + `, whatever its kind: its
-host (the leaf stating it, as find's host), host_anchor (the anchor of the
+host (the leaf stating it, as find's host), host-anchor (the anchor of the
 section stating it), each null for a work, an axiom or a node with no
 statement marker, and summary (its entry on a summary page, as
 <page>#<anchor>; null where it has none), then its kind's own fields, which for

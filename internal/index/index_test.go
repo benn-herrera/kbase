@@ -443,10 +443,10 @@ func twoVolumeKB(g kb.Graph) map[string]string {
 }
 
 // TestBareIDFindings: the id of a node of any kind the records carry,
-// standing in prose, is a bare-id fault, link text being prose; one inside a
-// fence, an inline code span, a statement marker, a citation's link title or a
-// link's destination is not, nor a placeholder id, nor an id no record
-// carries, nor one on a register page.
+// standing in prose or as a link's whole text, is a bare-id fault; one that is
+// part of a link's text, or inside a fence, an inline code span, a statement
+// marker, a citation's link title or a link's destination is not, nor a
+// placeholder id, nor an id no record carries, nor one on a register page.
 func TestBareIDFindings(t *testing.T) {
 	g := kb.Graph{Claims: []kb.ClaimNode{{ID: "clm-aa1111", Title: "One"}},
 		Works: []kb.WorkNode{{ID: "wrk-s00000", Label: "smith2020", Title: "Smith 2020"}}, Axioms: []kb.AxiomNode{{ID: "axm-s10000", Label: "S1", Title: "S1"}}}
@@ -461,6 +461,7 @@ func TestBareIDFindings(t *testing.T) {
 		{"bare ids of every kind", map[string]string{ep: "The claim clm-aa1111 rests on wrk-s00000 and axm-s10000.\n"},
 			[]string{"entry-point.md:1 clm-aa1111", "entry-point.md:1 wrk-s00000", "entry-point.md:1 axm-s10000"}},
 		{"an id as a link's text", map[string]string{ep: "See [clm-aa1111](leaf.md).\n"}, []string{"entry-point.md:1 clm-aa1111"}},
+		{"an id part of a link's text", map[string]string{ep: "See [the claim clm-aa1111](leaf.md).\n"}, nil},
 		{"a fenced block", map[string]string{ep: "How:\n\n```\nclm-aa1111\n```\n"}, nil},
 		{"an inline code span", map[string]string{ep: "Write `clm-aa1111` as a citation.\n"}, nil},
 		{"a statement marker", map[string]string{"leaf.md": "# Leaf\n\nProse." + kb.StatementMarker("clm-aa1111") + "\n"}, nil},

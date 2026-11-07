@@ -48,7 +48,7 @@ const (
 	modelHintsShared = "One model may serve more than one role where the provider accepts its catalogue on " +
 		"the decision surface (oMLX does); check decision quality before settling."
 	modelHintsVendor = "Which models a decision surface accepts is its server's choice " +
-		"(the provider's decisionsFlavor selects the surface); a decision probe shows whether one is accepted."
+		"(the provider's decisionApi selects the surface); a decision probe shows whether one is accepted."
 )
 
 // hintsCommentWidth is the column the template's comment block wraps at,
@@ -89,7 +89,7 @@ func hintCommentBlock(lead, text string) string {
 	return strings.Join(append(lines, line), "\n")
 }
 
-// ModelHintsMarkdown is the same guidance as a document: the rows as a table,
+// ModelHintsMarkdown is the same guidance as Markdown: the rows as a table,
 // then the notes that hold for every row. It is what the kbase://model-hints
 // resource serves.
 func ModelHintsMarkdown() string {

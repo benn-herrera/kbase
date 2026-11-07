@@ -4,10 +4,13 @@
 `just test-integration-opscript-results` applies it through `./bin/kbase write`
 to a scratch copy of the results fixture, wants every batch `done` and `verify`
 green, then re-issues every batch and wants each to report the outcome its step
-states under `reissue`, with `kb-root/` byte-identical: `refused` for a batch
-holding an add, which finds its node or edge standing, and `unchanged` for a
-batch of edits whose values already stand. A `refused` step also states under
-`reissue-detail` the prefix its first refusal's `detail` starts with —
+states under `reissue`, with `kb-root/` byte-identical: `unchanged` for a
+batch whose entries all stand as it states them — an add finding its node or
+edge standing with the same values, an edit whose values already stand — and
+`refused` for a batch one of whose entries is refused, such as an add whose
+node or edge a later step edited, so that it stands with other values. A
+`refused` step also states under
+`reissue-detail` the prefix its first refusal's `detail` starts with — such as
 `"node exists: "` or `"edge exists: "` — and an `unchanged` step states none;
 the staging refuses a script that breaks either.
 

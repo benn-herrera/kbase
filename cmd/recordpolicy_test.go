@@ -22,13 +22,13 @@ var recordCodecHomes = []string{"internal/kb", "internal/formats"}
 // recordFileNames are the names of the two record files' paths, by the import
 // path that exports them.
 var recordFileNames = map[string][]string{
-	"kbase/internal/kb":                {"GraphNodesFile", "GraphEdgesFile"},
-	"kbase/internal/formats/format400": {"NodesFile", "EdgesFile"},
+	"kbase/internal/kb":               {"GraphNodesFile", "GraphEdgesFile"},
+	"kbase/internal/formats/format40": {"NodesFile", "EdgesFile"},
 }
 
 // recordOnlyKeys are the record keys whose YAML tag makes a struct a record
 // struct: the bearing a missing field zeroes, and the flag only records carry.
-// Result documents carry a bearing too, but are composed as records, never
+// Results carry a bearing too, but are composed as records, never
 // tagged structs.
 var recordOnlyKeys = []string{kb.BearingKey, kb.ManuallyScoredKey}
 

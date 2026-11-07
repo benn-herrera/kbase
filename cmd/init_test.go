@@ -46,12 +46,12 @@ func gitWorktree(t *testing.T) string {
 	return repo
 }
 
-// TestInitRefusesOutsideAWorktree: nothing is created, the document carries
+// TestInitRefusesOutsideAWorktree: nothing is created, the result carries
 // no kb-root key, and the remedy is the git init the tool never runs.
 func TestInitRefusesOutsideAWorktree(t *testing.T) {
 	dir := t.TempDir()
 	out, code := kbase(t, dir, "init")
-	d := checkDocument(t, "init", out)
+	d := checkResult(t, "init", out)
 	if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
 		t.Fatalf("outcome %s exit %d, want refused exit %d\n%s", d.Outcome, code, toolresult.ExitCode(toolresult.Refused), out)
 	}
@@ -76,7 +76,7 @@ func TestInitRefusesAnyExistingKBRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 		out, code := kbase(t, repo, "init")
-		d := checkDocument(t, "init", out)
+		d := checkResult(t, "init", out)
 		if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
 			t.Fatalf("empty kb-root: outcome %s exit %d\n%s", d.Outcome, code, out)
 		}
@@ -106,7 +106,7 @@ func TestInitRefusesAnyExistingKBRoot(t *testing.T) {
 				}
 			}
 			out, code := kbase(t, repo, "init")
-			d := checkDocument(t, "init", out)
+			d := checkResult(t, "init", out)
 			if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
 				t.Fatalf("existing kb-root (%s): outcome %s exit %d\n%s", name, d.Outcome, code, out)
 			}
@@ -167,7 +167,7 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	}
 	repo := gitWorktree(t)
 	out, code := kbase(t, repo, "init")
-	d := checkDocument(t, "init", out)
+	d := checkResult(t, "init", out)
 	if d.Outcome != toolresult.Done || code != 0 {
 		t.Fatalf("birth: outcome %s exit %d\n%s", d.Outcome, code, out)
 	}
@@ -237,7 +237,7 @@ func TestInitBirthWritesTheBornTreeAndCommitsIt(t *testing.T) {
 	}
 
 	again, code := kbase(t, repo, "init")
-	d = checkDocument(t, "init", again)
+	d = checkResult(t, "init", again)
 	if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || !strings.Contains(again, `check: "kb-root"`) {
 		t.Fatalf("re-issue at a born KB: outcome %s exit %d\n%s", d.Outcome, code, again)
 	}
@@ -304,14 +304,14 @@ func TestInitRefusesATitleSpanningLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := kbase(t, repo, "init", "--title", "X\nY")
-	if d := checkDocument(t, "init", out); d.Outcome != toolresult.Refused || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `check: "kb-root"`) {
+	if d := checkResult(t, "init", out); d.Outcome != toolresult.Refused || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `check: "kb-root"`) {
 		t.Errorf("--title spanning lines over a standing kb-root/: outcome %s, want both refusal items\n%s", d.Outcome, out)
 	}
 
 	for _, title := range []string{"X\n- [v](v/index.md)", "X\r\nY", "X\rY", "X\n"} {
 		repo := gitWorktree(t)
 		out, code := kbase(t, repo, "init", "--title", title)
-		d := checkDocument(t, "init", out)
+		d := checkResult(t, "init", out)
 		if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) || !strings.Contains(out, `check: "usage"`) || !strings.Contains(out, `key: "--title"`) {
 			t.Errorf("--title %q: outcome %s exit %d, want a usage refusal naming --title\n%s", title, d.Outcome, code, out)
 		}
@@ -362,7 +362,7 @@ func isExecutable(path string) bool {
 func TestInitTitleBecomesTheHeading(t *testing.T) {
 	repo := gitWorktree(t)
 	out, code := kbase(t, repo, "init", "--title", "Scratch Named")
-	if d := checkDocument(t, "init", out); d.Outcome != toolresult.Done || code != 0 {
+	if d := checkResult(t, "init", out); d.Outcome != toolresult.Done || code != 0 {
 		t.Fatalf("named birth: outcome %s exit %d\n%s", d.Outcome, code, out)
 	}
 	text, err := os.ReadFile(filepath.Join(repo, "kb-root", "entry-point.md"))
@@ -381,7 +381,7 @@ func TestInitWithoutDotWritesThePlaceholder(t *testing.T) {
 	repo := gitWorktree(t)
 	t.Setenv("PATH", gitOnlyPath(t))
 	out, code := kbase(t, repo, "init")
-	d := checkDocument(t, "init", out)
+	d := checkResult(t, "init", out)
 	if d.Outcome != toolresult.Done || code != 0 {
 		t.Fatalf("birth without dot: outcome %s exit %d\n%s", d.Outcome, code, out)
 	}

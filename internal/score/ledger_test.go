@@ -27,23 +27,23 @@ import (
 	"kbase/internal/result"
 )
 
-// rigorAskDigest is the digest of the ask set a rigor run can send, computed here
-// rather than through the package's own helper: the test states the header's ask
-// independently of the code that stamps it — the statement instruction and then
-// the method one, each rendered for an empty subject, concatenated and hashed
-// once.
+// rigorAskDigest is the digest of the ask set a rigor run can send, hashed here
+// rather than through askDigest: the statement instruction set and then the
+// method one, concatenated and hashed once.
 func rigorAskDigest(t *testing.T) string {
 	t.Helper()
-	var b strings.Builder
-	for _, ask := range []func(string) (string, error){asks.ScoreRigorStatement, asks.ScoreRigorMethod} {
-		rendered, err := ask("")
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.WriteString(rendered)
-	}
-	sum := sha256.Sum256([]byte(b.String()))
+	sum := sha256.Sum256([]byte(instructionSet(t, asks.ScoreRigorStatement) + instructionSet(t, asks.ScoreRigorMethod)))
 	return hex.EncodeToString(sum[:])
+}
+
+// instructionSet is one class's every fixed byte, as the header's ask covers it.
+func instructionSet(t *testing.T, ask func(string, *asks.Correction) (string, error)) string {
+	t.Helper()
+	set, err := asks.ScoreInstructionSet(ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
 }
 
 // header is the run.yaml the tests' runs are opened with.
@@ -188,14 +188,7 @@ func TestCreateWritesTheRunHeader(t *testing.T) {
 // its one render, and a both-pass run's is one digest over the three, in the
 // order its walk takes them.
 func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
-	statement, err := asks.ScoreRigorStatement("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	method, err := asks.ScoreRigorMethod("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	statement, method := instructionSet(t, asks.ScoreRigorStatement), instructionSet(t, asks.ScoreRigorMethod)
 	got, err := askDigest(query.PassRigor)
 	if err != nil {
 		t.Fatal(err)
@@ -209,10 +202,7 @@ func TestAskDigestCoversEveryInstructionOfThePass(t *testing.T) {
 		}
 	}
 
-	bearing, err := asks.ScoreBearing("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearing := instructionSet(t, asks.ScoreBearing)
 	if got, err := askDigest(query.PassBearing); err != nil || got != digestOf(bearing) {
 		t.Errorf("the bearing run's ask = %q, %v; want the digest of its one instruction", got, err)
 	}
@@ -598,9 +588,6 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	if !reflect.DeepEqual(*landed, wantLandings) {
 		t.Errorf("the re-pricing landed %+v, want %+v", *landed, wantLandings)
 	}
-	if got := back.Repriced(); got != 2 {
-		t.Errorf("Repriced() = %d, want the two values the resume moved", got)
-	}
 	after, err := os.ReadFile(filepath.Join(l.Dir(), runFile))
 	if err != nil {
 		t.Fatal(err)
@@ -633,8 +620,8 @@ func TestResumeRepricesFromTheRecordedIDs(t *testing.T) {
 	none, again := landingOn(nil)
 	still := resumed(t, dir, again)
 	defer still.Close()
-	if len(*none) != 0 || still.Repriced() != 0 {
-		t.Errorf("a re-derivation that moved nothing landed %+v and counted %d", *none, still.Repriced())
+	if len(*none) != 0 {
+		t.Errorf("a re-derivation that moved nothing landed %+v", *none)
 	}
 	if _, err := os.Stat(filepath.Join(l.Dir(), repricedFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a re-derivation that moved nothing recorded %v", err)
@@ -699,14 +686,14 @@ func TestResumeLeavesASkippedItemUnrepriced(t *testing.T) {
 	}
 }
 
-// TestResumeFoldsTheResultsAStoppedRunLeft: the result files a killed walk left
+// TestResumeFoldsTheAnswerFilesAStoppedRunLeft: the answer files a killed walk left
 // fold on the next resume, before it re-prices and with no ask for them: an
 // answered value lands, its capture and its line are recorded in the order of
-// the walk that wrote them, and the files are removed. A result whose attempt
-// the ledger already records is removed alone. A result for an item the resume
-// skips lands nothing and records no line, its capture still appended, and the
+// the walk that wrote them, and the files are removed. An answer file whose
+// attempt the ledger already records is removed alone. An answer file for an
+// item the resume skips lands nothing and records no line, its capture still appended, and the
 // walk then records the item skipped.
-func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
+func TestResumeFoldsTheAnswerFilesAStoppedRunLeft(t *testing.T) {
 	src, ix, _ := runSet(t)
 	dir := t.TempDir()
 	l := kept(t, dir)
@@ -717,7 +704,7 @@ func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
 		return e
 	}
 	// The ledger as the killed invocation's start left it: a line the running
-	// table re-prices, and the line of an attempt whose result file still
+	// table re-prices, and the line of an attempt whose answer file still
 	// stands.
 	if err := l.Append(moved, landedEntry("0.30", kb.FaultOverreach)); err != nil {
 		t.Fatal(err)
@@ -726,7 +713,7 @@ func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
 	if err := l.Append(recorded, recordedEntry); err != nil {
 		t.Fatal(err)
 	}
-	// The result files, named by place in the walk: the fold takes them in that
+	// The answer files, named by place in the walk: the fold takes them in that
 	// order, 3 before 10, and not in their names' order.
 	for _, r := range []struct {
 		at int
@@ -740,7 +727,7 @@ func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
 	} {
 		c := captureRecord{Run: l.run, Pass: passOf(r.it), identity: identityOf(r.it), PromptSHA256: r.e.PromptSHA256,
 			Started: r.e.Started, Ended: r.e.Ended}
-		if err := l.writeResult(r.at, resultRecord{Line: l.line(r.it, r.e), Capture: c}); err != nil {
+		if err := l.writeAnswerFile(r.at, answerFile{Line: l.line(r.it, r.e), Capture: c}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -766,7 +753,7 @@ func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
 		t.Errorf("the captures name %q, want every folded result's but the one already recorded, in walk order", got)
 	}
 	if _, err := os.Stat(filepath.Join(l.Dir(), resultsDir)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the fold left the result files: %v", err)
+		t.Errorf("the fold left the answer files: %v", err)
 	}
 	for it, want := range map[query.Item]string{answered: StatusDone, failed: StatusFailed, manual: ""} {
 		if got := back.Status(it); got != want {
@@ -787,6 +774,49 @@ func TestResumeFoldsTheResultsAStoppedRunLeft(t *testing.T) {
 	}
 	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "status"); !slices.Equal(got[len(got)-2:], []string{StatusDone, StatusSkipped}) {
 		t.Errorf("the ledger's lines record %q, want the walk's two lines last", got)
+	}
+}
+
+// TestResumeFoldsAReAskedAnswerFileInCallOrder: an answer file holding a
+// refused call under prior folds both calls, the prior's capture and line ahead
+// of the final call's, and lands the final value alone.
+func TestResumeFoldsAReAskedAnswerFileInCallOrder(t *testing.T) {
+	dir := t.TempDir()
+	l := kept(t, dir)
+	it := node(kb.NodeKindClaim, "clm-aaaaaa")
+	refusedEntry := Entry{Status: StatusFailed, Reply: "the reply is no answer: line 1 is not a charge line", Model: "small",
+		PromptSHA256: "aa", Started: "2026-10-20T10:01:00Z", Ended: "2026-10-20T10:01:05Z"}
+	final := landedEntry("0.85", kb.FaultOverreach)
+	final.Model, final.PromptSHA256, final.Started, final.Ended = "small", "bb", "2026-10-20T10:01:05Z", "2026-10-20T10:01:09Z"
+	captured := func(e Entry, c *correctionRecord) captureRecord {
+		return captureRecord{Run: l.run, Pass: passOf(it), identity: identityOf(it), Correction: c, PromptSHA256: e.PromptSHA256,
+			Started: e.Started, Ended: e.Ended}
+	}
+	prior := &answerFile{Line: l.line(it, refusedEntry), Capture: captured(refusedEntry, nil)}
+	file := answerFile{Line: l.line(it, final), Capture: captured(final, &correctionRecord{Case: asks.RefusalNotAChargeLine, Values: map[string]string{asks.SlotReplyLine: "1"}, Quoted: []string{"about half"}}), Prior: prior}
+	if err := l.writeAnswerFile(0, file); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	landed, land := landingOn(nil)
+	back, err := Resume(dir, header(), land, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close()
+	if want := []landing{{item: it, value: "0.85"}}; !reflect.DeepEqual(*landed, want) {
+		t.Errorf("the resume landed %+v, want the final call's value alone, %+v", *landed, want)
+	}
+	for _, f := range []string{linesFile, capturesFile} {
+		if got := fieldOf(t, filepath.Join(l.Dir(), f), "prompt_sha256"); !slices.Equal(got, []string{"aa", "bb"}) {
+			t.Errorf("%s records the calls %q, want the refused one, then the final one", f, got)
+		}
+	}
+	if got := back.Status(it); got != StatusDone {
+		t.Errorf("the item folded as %q, want its final call's %q", got, StatusDone)
 	}
 }
 

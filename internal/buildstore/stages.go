@@ -235,7 +235,7 @@ func EndingOf(success string, err error) Ending {
 	return Ending{Outcome: result.Failed, items: []result.Item{{Check: CheckError, Detail: err.Error()}}}
 }
 
-// Fields is the key that closes the result document, none on success.
+// Fields is the key that closes the result, none on success.
 func (e Ending) Fields() []result.Field {
 	switch e.Outcome {
 	case result.Refused, result.Retry:

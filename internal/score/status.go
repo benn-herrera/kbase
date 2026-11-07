@@ -16,7 +16,7 @@ import (
 // Status reports the run the state store stands at, as the status command
 // reads it: the run the holder record names, else — where no run holds the
 // store — whichever of its newest runs started later, a score run or a build
-// invocation, and the build's own document where the store records neither or
+// invocation, and the build's own result where the store records neither or
 // the two starts cannot be ordered. It reads the store's records alone.
 func Status(opts buildstore.MonitorOptions) (string, []result.Field) {
 	_, stateDir, outcome, fields := buildstore.Locate(opts)
@@ -30,7 +30,7 @@ func Status(opts buildstore.MonitorOptions) (string, []result.Field) {
 		return buildstore.MonitorEnd(placement, err)
 	}
 	if h.Kind == buildstore.KindScore {
-		return runDocument(stateDir, h, live)
+		return runResult(stateDir, h, live)
 	}
 	if live {
 		return buildstore.Status(opts)
@@ -47,7 +47,7 @@ func Status(opts buildstore.MonitorOptions) (string, []result.Field) {
 		return buildstore.MonitorEnd(placement, err)
 	}
 	if startedAfter(started, buildState.Started) {
-		return runDocument(stateDir, buildstore.Holder{Run: run, Started: started}, false)
+		return runResult(stateDir, buildstore.Holder{Run: run, Started: started}, false)
 	}
 	return buildstore.Status(opts)
 }
@@ -68,14 +68,15 @@ func startedAfter(a, b string) bool {
 	return at.After(bt)
 }
 
-// runDocument reports the score run the holder record h names in the state
-// store at stateDir: the state from the run's result document, else running
+// runResult reports the score run the holder record h names in the state
+// store at stateDir: the state a build's ending takes from the outcome its
+// stored result records, else running
 // while a process holds the store and interrupted where none does; the counts
 // from its ledger; and the command that continues it where the run has not
 // finished. h is the store's own record where one names the run, and where the
 // store names none and the run is reported as its newest, a record carrying the
 // run and the start its header records, with no process.
-func runDocument(stateDir string, h buildstore.Holder, live bool) (string, []result.Field) {
+func runResult(stateDir string, h buildstore.Holder, live bool) (string, []result.Field) {
 	placement := []result.Field{{Key: "state-dir", Value: stateDir}}
 	run := h.Run
 	st, err := ReadRun(stateDir, run)
@@ -92,7 +93,7 @@ func runDocument(stateDir string, h buildstore.Holder, live bool) (string, []res
 	}
 	_, doc, wrote := readResult(stateDir, run)
 	if wrote {
-		state = outcomeOf(doc)
+		state = buildstore.StateOf(outcomeOf(doc))
 	}
 	fields := []result.Field{
 		{Key: "state-dir", Value: stateDir},
@@ -106,10 +107,10 @@ func runDocument(stateDir string, h buildstore.Holder, live bool) (string, []res
 	if len(st.Scored) > 0 {
 		fields = append(fields, result.Field{Key: "scored", Value: st.Scored})
 	}
-	if len(st.Failures) > 0 {
-		fields = append(fields, result.Field{Key: result.FailuresKey, Value: st.Failures})
+	if len(st.FailedItems) > 0 {
+		fields = append(fields, result.Field{Key: "failed-items", Value: st.FailedItems})
 	}
-	if state != result.Done && state != buildstore.StateRunning {
+	if state != buildstore.StateFinished && state != buildstore.StateRunning {
 		if resume := doc["resume"]; resume != nil {
 			fields = append(fields, result.Field{Key: "resume", Value: resume})
 		}
@@ -117,16 +118,16 @@ func runDocument(stateDir string, h buildstore.Holder, live bool) (string, []res
 	return result.Done, fields
 }
 
-// ResumeOf is the resume command the result document of the run in the state
+// ResumeOf is the resume command the stored result of the run in the state
 // store at stateDir carries; nil where the run wrote none.
 func ResumeOf(stateDir, run string) any {
 	_, doc, _ := readResult(stateDir, run)
 	return doc["resume"]
 }
 
-// readResult is the result document the run in the state store at stateDir
+// readResult is the stored result the run in the state store at stateDir
 // wrote: its bytes and its decoding, and wrote false where none can be read. A
-// document that does not decode keeps its bytes and decodes to nil.
+// stored result that does not decode keeps its bytes and decodes to nil.
 func readResult(stateDir, run string) (b []byte, doc map[string]any, wrote bool) {
 	b, err := os.ReadFile(filepath.Join(RunsDir(stateDir), run, ResultFile))
 	if err != nil {
@@ -139,7 +140,7 @@ func readResult(stateDir, run string) (b []byte, doc map[string]any, wrote bool)
 }
 
 // WaitRun polls the score run named by pid until it ends, and returns the run's
-// result document and the exit code its outcome maps to. A run whose process
+// stored result and the exit code its outcome maps to. A run whose process
 // ended without writing a result reports the failure the ledger supports.
 func WaitRun(stateDir string, pid int, interval time.Duration) (string, int, error) {
 	run, err := RunByPID(stateDir, pid)
@@ -161,14 +162,14 @@ func WaitRun(stateDir string, pid int, interval time.Duration) (string, int, err
 		}
 		time.Sleep(interval)
 	}
-	doc, err := interruptedDocument(stateDir, run)
+	doc, err := interruptedResult(stateDir, run)
 	if err != nil {
 		return "", 0, err
 	}
 	return doc, result.ExitCode(result.Failed), nil
 }
 
-// outcomeOf is a decoded result document's outcome, result.Failed where it
+// outcomeOf is a decoded stored result's outcome, result.Failed where it
 // names none.
 func outcomeOf(doc map[string]any) string {
 	if outcome, _ := doc["outcome"].(string); outcome != "" {
@@ -177,11 +178,11 @@ func outcomeOf(doc map[string]any) string {
 	return result.Failed
 }
 
-// interruptedDocument is the document a score run that ended without writing
-// its result reports: the ledger's counts and failures, and the failure naming
-// the process's end. It reuses the run's ledger, the record the run wrote,
-// rather than inventing a parallel one.
-func interruptedDocument(stateDir, run string) (string, error) {
+// interruptedResult is the result reported for a score run that ended without
+// writing its own: the ledger's counts and failures, and the failure naming the
+// process's end. It reuses the run's ledger, the record the run wrote, rather
+// than inventing a parallel one.
+func interruptedResult(stateDir, run string) (string, error) {
 	st, err := ReadRun(stateDir, run)
 	if err != nil {
 		return "", err
@@ -207,7 +208,7 @@ func interruptedDocument(stateDir, run string) (string, error) {
 	return b.String(), nil
 }
 
-// CountsRecord is a run's counts as the document states them.
+// CountsRecord is a run's counts as the result states them.
 func CountsRecord(c Counts) result.Record {
 	return result.Record{
 		{Key: "total", Value: c.Total},

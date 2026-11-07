@@ -85,13 +85,20 @@ func TestSystemPromptsAreTheFragmentsWhole(t *testing.T) {
 	}
 }
 
-func TestLint(t *testing.T) {
-	if found, err := Lint(nil); err != nil || len(found) != 0 {
-		t.Errorf("Lint over the shelf = %q, %v; want no stray delimiter", found, err)
+// TestShelfHasNoStrayDelimiter: every file on the shelf parses as slots.
+func TestShelfHasNoStrayDelimiter(t *testing.T) {
+	files, err := shelfFiles()
+	if err != nil {
+		t.Fatal(err)
 	}
-	found, err := Lint(map[string]*regexp.Regexp{"the body slot": regexp.MustCompile(`@!dyn\.body!@`)})
-	if err != nil || len(found) == 0 || !strings.Contains(found[0], `names "the body slot"`) {
-		t.Errorf("Lint with a prohibited phrase the shelf spells = %q, %v", found, err)
+	for _, f := range files {
+		text, err := load(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := slotsOf(text, f); err != nil {
+			t.Error(err)
+		}
 	}
 }
 

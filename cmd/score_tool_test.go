@@ -71,13 +71,13 @@ func scoreToolServer(t *testing.T, repo, base string) mcp.Server {
 	return servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
 }
 
-// scoreToolStart calls the score tool and requires the start document: the run's
+// scoreToolStart calls the score tool and requires the start result: the run's
 // id, ledger directory, pid and the wait command.
 func scoreToolStart(t *testing.T, srv mcp.Server, state string, args map[string]any) (run string, pid int, ledger string) {
 	t.Helper()
 	args = maps.Clone(args)
 	args["state-dir"] = state
-	start, isError := callTool(t, srv, "score", args)
+	start, isError := startTool(t, srv, "score", args)
 	pidFloat, _ := start["pid"].(float64)
 	run, _ = start["run"].(string)
 	ledger, _ = start["ledger"].(string)
@@ -142,8 +142,8 @@ func TestMCPScoreStartsDetached(t *testing.T) {
 	}
 }
 
-// TestMCPScoreWaitReportsFailures: a finished run's wait document counts the
-// failed item and carries its reason, as the run's own document does.
+// TestMCPScoreWaitReportsFailures: a finished run's wait result counts the
+// failed item and carries its reason, as the run's own result does.
 func TestMCPScoreWaitReportsFailures(t *testing.T) {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -319,7 +319,7 @@ func TestMCPScoreCancelLeavesResumableLedger(t *testing.T) {
 	// item the cancellation left unasked.
 	scoreToolProvider(t, base, "value")
 	out, code := kbase(t, repo, "score", "--resume", "--state-dir", state)
-	doc := checkDocument(t, "score", out)
+	doc := checkResult(t, "score", out)
 	if doc.Outcome != toolresult.Done || code != 0 || doc.Values["run"] != run {
 		t.Fatalf("resume: outcome %s, exit %d, run %v; want done continuing %s\n%s", doc.Outcome, code, doc.Values["run"], run, out)
 	}
@@ -371,8 +371,8 @@ func TestMCPScoreTakesTheEdgeAsAMapping(t *testing.T) {
 	}{
 		{"an edge that does not stand", map[string]any{"source": "clm-aaaaaa", "target": "clm-bbbbbb", "relation": "supports"},
 			"no edge supports clm-aaaaaa → clm-bbbbbb"},
-		{"a relation holding a comma", map[string]any{"source": "clm-aaaaaa", "target": "clm-bbbbbb", "relation": "sup,ports"},
-			"`edge`'s relation holds a comma, and none of its values may: \"sup,ports\""},
+		{"a source holding a comma", map[string]any{"source": "clm,aaaaaa", "target": "clm-bbbbbb", "relation": "supports"},
+			"`edge`'s source holds a comma, and none of its values may: \"clm,aaaaaa\""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			doc, isError := callTool(t, srv, "score", map[string]any{"edge": c.edge, "state-dir": state})
@@ -412,18 +412,70 @@ func TestMCPScoreReportsARunStillStarting(t *testing.T) {
 	defer release()
 	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
 
-	start, isError := callTool(t, srv, "score", map[string]any{"state-dir": state})
+	start, isError := startTool(t, srv, "score", map[string]any{"state-dir": state})
 	pid, _ := start["pid"].(float64)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantWait := buildstore.ShellJoin([]string{exe, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid))})
-	if isError || start["outcome"] != toolresult.Done || start["state"] != "starting" || start["state-dir"] != state || pid <= 0 ||
-		start["wait"] != wantWait {
-		t.Fatalf("score start: isError %v, %v; want done, state starting, the state-dir, the pid and %q", isError, start, wantWait)
+	if isError || start["outcome"] != toolresult.Done || start["kb-root"] != filepath.Join(repo, "kb-root") || start["state"] != "starting" ||
+		start["state-dir"] != state || pid <= 0 || start["wait"] != wantWait {
+		t.Fatalf("score start: isError %v, %v; want done, the kb-root, state starting, the state-dir, the pid and %q", isError, start, wantWait)
 	}
 	if _, named := start["run"]; named {
 		t.Errorf("a run still starting names a run: %v", start)
+	}
+}
+
+// TestMCPLaunchReportsConfigurationFaults: a launch reads the configuration
+// the run will read, and its result's warnings carries each fault — a
+// providers.toml entry that drops out of the pool here — or is empty where
+// there is none; the run starts either way.
+func TestMCPLaunchReportsConfigurationFaults(t *testing.T) {
+	const fault = `provider "broken" unavailable: no baseUrl declared`
+	for _, faulted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("faulted=%v", faulted), func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo, err := filepath.EvalSymlinks(scoreRepo(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			gitRepo(t, repo)
+			state := filepath.Join(base, "state")
+			scoreToolProvider(t, base, "slow")
+			providers := config.ProvidersPath(childConfigDir(base))
+			if faulted {
+				pool, err := os.ReadFile(providers)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeValues(t, childConfigDir(base), config.ProvidersFileName,
+					string(pool)+fmt.Sprintf("\n[broken]\napi = %q\n", config.ProviderAPIOpenAI))
+			}
+			srv := scoreToolServer(t, repo, base)
+
+			start, isError := startTool(t, srv, "score", map[string]any{"pass": "rigor", "state-dir": state})
+			t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
+			if pid, _ := start["pid"].(float64); isError || start["outcome"] != toolresult.Done || pid <= 0 || start["run"] == nil {
+				t.Fatalf("score start: isError %v, %v; want the run started", isError, start)
+			}
+			warnings, ok := start["warnings"].([]any)
+			if !ok {
+				t.Fatalf("score start carries no warnings list: %v", start)
+			}
+			if !faulted {
+				if len(warnings) != 0 {
+					t.Errorf("warnings = %v, want an empty list where there is no fault", warnings)
+				}
+				return
+			}
+			if w, _ := warnings[0].(map[string]any); len(warnings) != 1 || w["path"] != providers || w["detail"] != fault {
+				t.Errorf("warnings = %v, want %q against %s", warnings, fault, providers)
+			}
+		})
 	}
 }

@@ -2,7 +2,7 @@
 
 **`rigor` judges one node's own worth**: what the node's text displays, against what the node
 asserts. It is asked of a claim, an analysis and an experiment — never of a work, whose standing is
-judged with the document in hand and written by `edit-work`, and never of an axiom, whose `rigor` is
+judged with the work in hand and written by `edit-work`, and never of an axiom, whose `rigor` is
 `1.00` by rule. Truth is out of scope — a charge is returned on what the text displays, never on
 whether the assertion holds in the world, so a text that reasons impeccably to a false conclusion and
 contradicts itself nowhere returns `none`. A premise the node's edges carry is out of scope too:
@@ -15,7 +15,7 @@ the **method vocabulary** asks whether it establishes what it sets out to establ
 as a method when it is judged at all, though no pass asks it. A claim displays no derivation, and that
 is not a defect: a derivation belongs in an analysis, and support reaches a claim through edges. A
 claim's missing method is therefore not a statement fault, and a claim's missing support is not a
-rigor fault at all — it is the walk's `0`, under
+rigor fault at all — it is the `0` that strength propagation gives it, under
 [Strength is computed](strength-is-computed.md).
 
 **`bearing` judges how much of one source's argument does work for the target it scores**: which of
@@ -28,7 +28,7 @@ citing it is judged; bearing weights the source's contribution and never modifie
 A part of the source does *work* for the target when, taking the source as given, believing it would
 change what one should think about some part of the target's assertion, in either direction. Support
 and refutation are both work done, and the sign is never judged: the charges count the parts of the
-source that do none, and the walk turns what remains into a limit. A source and a target may share
+source that do none, and strength propagation turns what remains into a limit. A source and a target may share
 subject matter and vocabulary while nothing any part of the source states reaches what the target
 asserts.
 

@@ -8,12 +8,12 @@ import (
 	"kbase/internal/result"
 )
 
-// dirtyPathsShown is how many changed paths the trail document names before it
+// dirtyPathsShown is how many changed paths the trail result names before it
 // counts the rest.
 const dirtyPathsShown = 20
 
 // BuildTrail reads the build's commit trail and the worktree, the state store
-// opened as status opens it, and returns the document naming every boundary,
+// opened as status opens it, and returns the result naming every boundary,
 // oldest first, and started-at, each with the exact command that rewinds there;
 // where no build stands, none. Nothing is run: the commands are the caller's.
 func BuildTrail(opts MonitorOptions) (string, []result.Field) {
@@ -69,7 +69,7 @@ func BuildTrail(opts MonitorOptions) (string, []result.Field) {
 // than discarding uncommitted changes in the files the reset touches.
 func resetCommand(commit string) string { return "git reset --keep " + commit }
 
-// trailBoundaries is the trail's boundaries as the document lists them, oldest
+// trailBoundaries is the trail's boundaries as the result lists them, oldest
 // first, each with its command: the reset to it, then the build resumed from
 // it as the run recording resume launched it, where resume reads as a kbase
 // build invocation, else the bare resume.
@@ -89,7 +89,7 @@ func trailBoundaries(trail []gitledger.Entry, resume []string) []result.Record {
 	return records
 }
 
-// dirtyField is the document's dirty value: false where the worktree is clean,
+// dirtyField is the result's dirty value: false where the worktree is clean,
 // else the changed paths, the first dirtyPathsShown named and the rest counted.
 func dirtyField(paths []string) any {
 	if len(paths) == 0 {

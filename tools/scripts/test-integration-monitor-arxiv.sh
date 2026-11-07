@@ -2,8 +2,8 @@
 # An out-of-process monitor over a running build, as personant runs one: the
 # build is started in the background in a fresh fixture repository and a
 # loop polls ./bin/kbase status, each poll kept; at the first poll reporting
-# the build running in a stage past start — so the start boundary is
-# recorded and what follows is a resume — ./bin/kbase cancel stops it. Then:
+# the build running in a stage past start and document-graph — so kb-root/
+# exists and what follows is a resume — ./bin/kbase cancel stops it. Then:
 # the build exited
 # cancelled (exit 4) naming its stage and unit, that stage unrecorded; the
 # lock released and its file removed (a second cancel is refused, finding no
@@ -59,15 +59,8 @@ check() {
     printf '%s\t%s\t%s\t%s\n' "$1" "${verdict}" "$3" "$4" >> "${out}/checks.tsv"
     printf '  %s %s: %s\n' "${verdict}" "$1" "$3"
 }
-# keys <stem> <verb> <outcome>: the result parsed against its documented
-# keys, its outcome the one named.
-keys() {
-    set +e
-    go test -count=1 -run '^TestResultDocument$' ./cmd -args -result.doc="${root}/$1.out" -result.verb="$2" -result.outcome="$3" > "$1.keys.log" 2>&1
-    local rc=$?
-    set -e
-    check "$(basename "$1")-keys" "${rc}" "the $2 result parses against its documented keys, outcome $3" "$1.keys.log"
-}
+# shellcheck source=tools/scripts/lib-result-keys.sh
+source "${script_dir}/lib-result-keys.sh"
 field() { sed -n "s/^$2: \"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$1.out" | head -n 1; }
 
 # The build, in the background; the monitor, out of its process.
@@ -82,7 +75,7 @@ for n in $(seq 1 2000); do
     state_now="$(field "${stem}" state)"
     current="$(sed -n '/^current:$/,/^[a-z]/s/^    stage: "\(.*\)"$/\1/p' "${stem}.out")"
     printf '%s\t%s\t%s\n' "${n}" "${state_now}" "${current}" >> "${out}/monitor.tsv"
-    if [[ "${state_now}" == running && -n "${current}" && "${current}" != start ]]; then
+    if [[ "${state_now}" == running && -n "${current}" && "${current}" != start && "${current}" != document-graph ]]; then
         capture "${out}/cancel" "${kbase}" cancel --state-dir "${state}"
         cancelled_at="${n}"
         break
@@ -95,7 +88,7 @@ printf '%s\n' "$?" > "${out}/build.exit"
 set -e
 
 check observed-running "$([[ -n "${cancelled_at}" ]] && echo 0 || echo 1)" \
-    "a status poll saw the build running past start (poll ${cancelled_at:-none}) and cancel was issued" "${out}/monitor.tsv"
+    "a status poll saw the build running in a stage past start and document-graph (poll ${cancelled_at:-none}) and cancel was issued" "${out}/monitor.tsv"
 if [[ -z "${cancelled_at}" ]]; then
     printf 'integration(test-integration-monitor-arxiv): the build finished before any poll saw it running — see monitor.tsv\n'
     exit 1
@@ -132,7 +125,7 @@ check status-finished "$([[ "$(field "${out}/status-finished" state)" == finishe
     "status after the resume reports $(field "${out}/status-finished" state)" "${out}/status-finished.out"
 keys "${out}/status-finished" status done
 
-OUT_DIR="${out}" RECIPE="test-integration-monitor-arxiv" INVOCATION="${MONITOR_ARXIV_ID} staged into repo/ (sources, git init, one commit)\n(cd repo && ${kbase} build <volume-root> --no-inference --config-dir config --state-dir state) > build.out &\nper poll NNNN until one reports running: (cd repo && ${kbase} status --state-dir state) > polls/NNNN.out; then ${kbase} cancel --state-dir state > cancel.out\nwait for the build; ${kbase} cancel again > cancel-again.out; ${kbase} status > status-cancelled.out\nthe resume command status-cancelled.out gives (resume.command), run from repo > resume.out; ${kbase} status > status-finished.out\neach result: go test -run '^TestResultDocument\$' ./cmd -args -result.doc=<stem>.out -result.verb=<verb> -result.outcome=<outcome> > <stem>.keys.log" \
+OUT_DIR="${out}" RECIPE="test-integration-monitor-arxiv" INVOCATION="${MONITOR_ARXIV_ID} staged into repo/ (sources, git init, one commit)\n(cd repo && ${kbase} build <volume-root> --no-inference --config-dir config --state-dir state) > build.out &\nper poll NNNN until one reports running in a stage past start and document-graph: (cd repo && ${kbase} status --state-dir state) > polls/NNNN.out; then ${kbase} cancel --state-dir state > cancel.out\nwait for the build; ${kbase} cancel again > cancel-again.out; ${kbase} status > status-cancelled.out\nthe resume command status-cancelled.out gives (resume.command), run from repo > resume.out; ${kbase} status > status-finished.out\neach result: go test -count=1 -run '^TestResult\$' ./cmd -args -result.file=<stem>.out -result.verb=<verb> -result.outcome=<outcome> > <stem>.keys.log" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-monitor-arxiv): a check failed — see checks.tsv\n'

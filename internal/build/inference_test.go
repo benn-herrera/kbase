@@ -622,8 +622,8 @@ func TestInterruptedAskingStageResumesFromTheAnswerCache(t *testing.T) {
 	if outcome != result.Done {
 		t.Fatalf("resume = %s %v", outcome, fields)
 	}
-	if restored, _ := storetest.Field(fields, "restored").([]string); len(restored) != 0 {
-		t.Errorf("the resume restored %q; want nothing, since a stage stopped mid-asks writes no build record and nothing under kb-root/", restored)
+	if reset, _ := storetest.Field(fields, "reset").([]string); len(reset) != 0 {
+		t.Errorf("the resume restored %q; want nothing, since a stage stopped mid-asks writes no build record and nothing under kb-root/", reset)
 	}
 	if want := clean.count() - len(cached); resumed.count() != want {
 		t.Errorf("the resume asked %d times, want %d: every ask but the %d the cache holds", resumed.count(), want, len(cached))

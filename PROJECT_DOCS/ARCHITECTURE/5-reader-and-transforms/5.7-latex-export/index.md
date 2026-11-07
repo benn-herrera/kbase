@@ -1,9 +1,12 @@
 ### 5.7 LaTeX export
 
-How `export-latex` meets SPEC §8, whose outcomes — the files of `gen-tex/`, the content rules,
-simplification, idempotence — this section cites and does not restate. [§5.3](../5.3-json-transforms.md) chose Go over a
-Lua filter because the forward transform emits records; the export emits none, so pandoc's own
-filter mechanism suffices, and the author can re-run the conversion with plain pandoc.
+**Pattern:** Pandoc multi-file conversion with a Lua filter, a custom template and a manifest-tracked
+output directory.
+
+The mechanism of `export-latex` (SPEC §8 `export-latex`), which defines the files of `gen-tex/`, the
+content rules, simplification and idempotence. The export emits no records, so pandoc's own filter
+mechanism suffices where [§5.3](../5.3-json-transforms.md) uses Go, and the author can re-run the
+conversion with plain pandoc.
 
 Contents:
 

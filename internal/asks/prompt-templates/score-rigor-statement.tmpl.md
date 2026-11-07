@@ -88,4 +88,4 @@ The line cited is in the node's title or in its statement. A statement fault's s
 carries it: the title phrase that outruns the statement, the term, the unfixed quantity, one of the
 incompatible statements. An absence's site is the line whose truth turns on the free parameter.
 
-@!score-answer-close!@
+@!score-answer-close!@@!correction-head!@@!refusal-case!@@!correction-quote!@@!correction-close!@

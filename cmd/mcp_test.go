@@ -33,7 +33,6 @@ import (
 	"kbase/internal/log"
 	"kbase/internal/mcp"
 	"kbase/internal/mcp/protocol"
-	"kbase/internal/query"
 	toolresult "kbase/internal/result"
 	"kbase/internal/version"
 	"kbase/internal/write"
@@ -568,7 +567,8 @@ func TestMCPToolsAreTheCommandTree(t *testing.T) {
 // TestMCPRequiredFlags: a tool's schema requires its positionals, less an
 // optional variadic one, and no flag — score's --pass among them, a run walking
 // every pass unless it is told otherwise — and every flag still stands as an
-// optional property carrying its usage as its description. A query's required
+// optional property carrying its brief as its description; its usage and
+// default are the help's argument list's. A query's required
 // positional is an operation's argument, which refusal.jsonl's show exchange
 // holds to the same rule.
 func TestMCPRequiredFlags(t *testing.T) {
@@ -598,21 +598,7 @@ func TestMCPRequiredFlags(t *testing.T) {
 			}
 		})
 	}
-	t.Run("--pass is an optional property stating the default", func(t *testing.T) {
-		properties := tools["score"].InputSchema.Properties
-		property, ok := properties["pass"]
-		if !ok {
-			t.Fatalf("score: no pass property: %v", properties)
-		}
-		want := map[string]any{"type": "string", "description": scoreCmd.Flags().Lookup("pass").Usage}
-		for key, value := range want {
-			if got := property[key]; got != value {
-				t.Errorf("score: --pass %s %v, want %v", key, got, value)
-			}
-		}
-		if description, _ := property["description"].(string); !strings.Contains(description, query.PassAll) {
-			t.Errorf("score: --pass description %q does not state the default %q", description, query.PassAll)
-		}
+	t.Run("--pass is not required", func(t *testing.T) {
 		if slices.Contains(tools["score"].InputSchema.Required, "pass") {
 			t.Error("score: --pass is required, which its verb does not refuse a run without")
 		}
@@ -644,8 +630,9 @@ func TestMCPRequiredFlags(t *testing.T) {
 				return
 			}
 			flags = append(flags, f.Name)
-			if got, _ := properties[f.Name]["description"].(string); !strings.HasPrefix(got, f.Usage) {
-				t.Errorf("score: --%s description %q, want it to open with its usage %q", f.Name, got, f.Usage)
+			brief := mcp.BriefOf(scoreCmd, f.Name)
+			if got, _ := properties[f.Name]["description"].(string); brief == "" || got != mcp.Spelling(rootCmd, true).Spell(brief) {
+				t.Errorf("score: --%s description %q, want its brief %q", f.Name, got, brief)
 			}
 		})
 		slices.Sort(flags)
@@ -889,6 +876,17 @@ func callToolResult(t *testing.T, srv mcp.Server, name string, args map[string]a
 	return text, result.Structured, result.IsError
 }
 
+// startTool is one tools/call of a tool that starts a detached run, as
+// callTool, a done result's text checked as the launch's result.
+func startTool(t *testing.T, srv mcp.Server, name string, args map[string]any) (map[string]any, bool) {
+	t.Helper()
+	text, structured, isError := callToolResult(t, srv, name, args)
+	if structured["outcome"] == toolresult.Done {
+		checkResult(t, "launch", text)
+	}
+	return structured, isError
+}
+
 // stalledBuildRepos stages repositories named by names under one isolated
 // base, each holding the transcripts' paper, for builds against a provider
 // that never answers, so a build started there stays in flight. It returns the
@@ -929,7 +927,7 @@ func stalledBuildRepos(t *testing.T, names ...string) (string, []string) {
 
 // TestMCPBuildStartsDetached starts a build through the tool against a
 // provider that never answers, so the build stays in flight: the tool
-// returns the start document while the build runs on, status reads it
+// returns the start result while the build runs on, status reads it
 // running under the pid the tool named, and cancel stops it resumably. The
 // server's --log-file reaches the build: this test process opens no log, so
 // the file exists only if the build opened it. A call naming no project-dir
@@ -945,7 +943,7 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	state := filepath.Join(base, "state")
 	monitor := map[string]any{"state-dir": state}
 
-	start, isError := callTool(t, srv, "build", map[string]any{"volume-root": []any{filepath.Join(repo, "paper.tex")}, "state-dir": state})
+	start, isError := startTool(t, srv, "build", map[string]any{"volume-root": []any{filepath.Join(repo, "paper.tex")}, "state-dir": state})
 	t.Cleanup(func() { callTool(t, srv, "cancel", monitor) })
 	pid, _ := start["pid"].(float64)
 	resume, _ := start["resume"].(string)
@@ -965,7 +963,7 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 
 	otherState := filepath.Join(base, "other-state")
 	otherMonitor := map[string]any{"state-dir": otherState, "project-dir": other}
-	elsewhere, isError := callTool(t, srv, "build", map[string]any{"project-dir": other,
+	elsewhere, isError := startTool(t, srv, "build", map[string]any{"project-dir": other,
 		"volume-root": []any{filepath.Join(other, "paper.tex")}, "state-dir": otherState})
 	t.Cleanup(func() { callTool(t, srv, "cancel", otherMonitor) })
 	otherPID, _ := elsewhere["pid"].(float64)
@@ -1007,9 +1005,9 @@ func TestMCPBuildStartsDetached(t *testing.T) {
 	}
 	// The wait the tool handed out is the background command a session without
 	// a subscription runs: the run it names is over, so it returns at once with
-	// that store's status document.
+	// that store's status result.
 	out, code := kbase(t, repo, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid)))
-	if doc := checkDocument(t, "wait", out); doc.Outcome != toolresult.Done || code != 0 ||
+	if doc := checkResult(t, "wait", out); doc.Outcome != toolresult.Done || code != 0 ||
 		doc.Values["state"] != "cancelled" || doc.Values["pid"] != int(pid) {
 		t.Errorf("wait: outcome %s, exit %d, %v\n%s", doc.Outcome, code, doc.Values, out)
 	}
@@ -1037,7 +1035,7 @@ func TestMCPBuildReportsARunStillStarting(t *testing.T) {
 	defer release()
 	t.Cleanup(func() { callTool(t, srv, "cancel", map[string]any{"state-dir": state}) })
 
-	start, isError := callTool(t, srv, "build", map[string]any{"volume-root": []any{filepath.Join(repo, "paper.tex")},
+	start, isError := startTool(t, srv, "build", map[string]any{"volume-root": []any{filepath.Join(repo, "paper.tex")},
 		"no-inference": true, "state-dir": state})
 	pid, _ := start["pid"].(float64)
 	exe, err := os.Executable()
@@ -1045,12 +1043,12 @@ func TestMCPBuildReportsARunStillStarting(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantWait := buildstore.ShellJoin([]string{exe, "wait", "--state-dir", state, "--pid", strconv.Itoa(int(pid))})
-	if isError || start["outcome"] != toolresult.Done || start["state"] != "starting" || start["state-dir"] != state || pid <= 0 ||
-		start["wait"] != wantWait {
-		t.Fatalf("build start: isError %v, %v; want done, state starting, the state-dir, the pid and %q", isError, start, wantWait)
+	if isError || start["outcome"] != toolresult.Done || start["kb-root"] != filepath.Join(repo, "kb-root") || start["state"] != "starting" ||
+		start["state-dir"] != state || pid <= 0 || start["wait"] != wantWait {
+		t.Fatalf("build start: isError %v, %v; want done, the kb-root, state starting, the state-dir, the pid and %q", isError, start, wantWait)
 	}
-	if keys := slices.Sorted(maps.Keys(start)); !slices.Equal(keys, []string{"outcome", "pid", "state", "state-dir", "wait"}) {
-		t.Errorf("a build still starting reports %q, want outcome, state, state-dir, pid and wait alone", keys)
+	if keys := slices.Sorted(maps.Keys(start)); !slices.Equal(keys, []string{"kb-root", "outcome", "pid", "state", "state-dir", "wait", "warnings"}) {
+		t.Errorf("a build still starting reports %q, want kb-root, outcome, state, state-dir, pid, wait and warnings alone", keys)
 	}
 }
 
@@ -1292,19 +1290,19 @@ func trailRepo(t *testing.T) (string, string) {
 	return repo, commit
 }
 
-// TestBuildTrailIsOneDocumentOnBothSurfaces: build-trail at the command line
-// and over MCP gives the same document — its keys, the head, each
+// TestBuildTrailIsOneResultOnBothSurfaces: build-trail at the command line
+// and over MCP gives the same result — its keys, the head, each
 // boundary's stage, commit and subject, started-at and dirty — each boundary's
 // command the reset, git reset --keep <commit>, then the build resumed, which
 // each surface spells as it takes it. A dirty tree is reported rather than
 // refused.
-func TestBuildTrailIsOneDocumentOnBothSurfaces(t *testing.T) {
+func TestBuildTrailIsOneResultOnBothSurfaces(t *testing.T) {
 	repo, last := trailRepo(t)
 	srv := servedServer(rootCmd, mcp.LocatedAt(repo), &bytes.Buffer{}, log.Discard())
 
 	_, overMCP, isError := callToolResult(t, srv, "build-trail", map[string]any{})
 	out, code := kbase(t, repo, "build-trail")
-	atCLI := checkDocument(t, "build-trail", out)
+	atCLI := checkResult(t, "build-trail", out)
 	if isError || overMCP["outcome"] != toolresult.Done || overMCP["head"] != last || code != 0 || atCLI.Outcome != toolresult.Done {
 		t.Fatalf("build-trail: over MCP isError %v, %v; at the CLI exit %d\n%s", isError, overMCP, code, out)
 	}
@@ -1338,7 +1336,7 @@ func TestBuildTrailIsOneDocumentOnBothSurfaces(t *testing.T) {
 		}
 	}
 
-	// Dirt is a warning, never a refusal: the document names what a reset
+	// Dirt is a warning, never a refusal: the result names what a reset
 	// would touch.
 	writeValues(t, repo, "notes.md", "uncommitted\n")
 	_, dirtyDoc, isError := callToolResult(t, srv, "build-trail", map[string]any{})
@@ -1516,7 +1514,7 @@ func TestMCPProjectRequiredLocatesNoProject(t *testing.T) {
 
 // TestMCPProjectDirSchemaPerMode: every tool's project-dir is optional on a
 // server that may locate a project of its own, and its description there
-// carries sentences about that project after what the property names. On a
+// carries a clause about that project after what the property names. On a
 // server whose every call names its project the property is required and
 // its description is what it names alone. The rest of the schema is alike.
 func TestMCPProjectDirSchemaPerMode(t *testing.T) {
@@ -1547,8 +1545,8 @@ func TestMCPProjectDirSchemaPerMode(t *testing.T) {
 		}
 		meaning, _ := req.InputSchema.Properties["project-dir"]["description"].(string)
 		described, _ := opt.InputSchema.Properties["project-dir"]["description"].(string)
-		if meaning == "" || !strings.HasPrefix(described, meaning+" ") || len(described) <= len(meaning)+1 {
-			t.Errorf("%s: project-dir described %q where required, %q where optional; want the optional one to be the required one followed by its own sentences",
+		if meaning == "" || !strings.HasPrefix(described, meaning) || len(described) <= len(meaning) {
+			t.Errorf("%s: project-dir described %q where required, %q where optional; want the optional one to be the required one followed by its own clause",
 				req.Name, meaning, described)
 		}
 	}

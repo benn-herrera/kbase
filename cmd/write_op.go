@@ -27,13 +27,13 @@ type writeOpOptions struct {
 	Op string
 	// WorkDir is where the search for the repository root starts.
 	WorkDir string
-	// ValuesFile is the values document's path; "" reads Stdin.
+	// ValuesFile is the batch's path; "" reads Stdin.
 	ValuesFile string
 	Stdin      io.Reader
 	DryRun     bool
 	Commit     bool
 	// ArgumentEntry is whether the values were composed from a tool call's
-	// arguments rather than a document the caller wrote, so a refusal naming
+	// arguments rather than a batch the caller wrote, so a refusal naming
 	// no path has a line and column that would point nowhere the caller can see.
 	ArgumentEntry bool
 	Stdout        io.Writer
@@ -66,18 +66,18 @@ func writeOp(opts writeOpOptions) (string, []toolresult.Field) {
 		values, err = io.ReadAll(opts.Stdin)
 	}
 	if err != nil {
-		return failed(fields, fmt.Errorf("reading the values: %w", err))
+		return failed(fields, fmt.Errorf("reading the batch: %w", err))
 	}
 	commits := &kbCommits{repo: filepath.Dir(root), lg: opts.Logger}
 	run := write.Options{KBRoot: root, Values: values, DryRun: opts.DryRun, Commit: opts.Commit, Preflight: commits.preflight, Logger: opts.Logger}
 	var res write.Result
 	var uncommitted string
-	release, outcome, items, err := holdKB(root, write.RetryRemedy(opts.Op))
+	release, outcome, items, err := holdKB(root, write.RetryRemedy(opts.Op), opts.Logger)
 	if err != nil {
 		return failed(fields, err)
 	}
 	if release == nil {
-		res = write.Result{Outcome: outcome, DryRun: opts.DryRun || write.DocumentDryRun(opts.Op, values), Refusals: items}
+		res = write.Result{Outcome: outcome, DryRun: opts.DryRun || write.BatchDryRun(opts.Op, values), Refusals: items}
 	} else {
 		defer release()
 		res = write.Run(opts.Op, run)
@@ -267,7 +267,7 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// valuesHelp closes the root's help: how the CLI takes a values document,
+// valuesHelp closes the root's help: how the CLI takes a batch,
 // then the write batch's contract.
 var valuesHelp = `kbase write and each write op read their batch as YAML (JSON accepted) on
 stdin, or in the file --values names. A refusal names each offending key, its
@@ -288,7 +288,7 @@ Entries apply in the order given, each checked against the records as the
 earlier entries left them; kbase never reorders a batch. Every add mints its
 node's id, known only from the result, so no entry names an id another entry
 of the same batch mints: add those nodes in one batch, then their edges in a
-second, from the id each entry's result gives.
+second, from each add's "id" in the result's "entries".
 
 A batch is all or nothing, its derivation included: the strengths, summary
 pages and sheets are computed in memory with the records, and every changed
@@ -369,7 +369,7 @@ func valuesCommand(op, short, long string) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&valuesFile, "values", "", "the values document (YAML or JSON); stdin when absent")
+	cmd.Flags().StringVar(&valuesFile, "values", "", "a file holding the batch (YAML or JSON); stdin when absent")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "do everything but write")
 	cmd.Flags().BoolVar(&commit, "commit", false, "commit kb-root/'s prior changes, then the batch, so git can undo it")
 	return cmd

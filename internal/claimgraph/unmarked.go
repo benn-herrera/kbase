@@ -238,13 +238,13 @@ func References(ctx context.Context, opts Options) (Report, error) {
 }
 
 // askPlanned asks every planned pair rec does not hold, one group per source
-// in plan order, as one ask batch, adding every group to the record in that
-// order once the batch has drained: an answered or re-asked pair carries its
+// in plan order, as one wave of calls, adding every group to the record in that
+// order once the wave has drained: an answered or re-asked pair carries its
 // letter, a defaulted one none. It writes nothing, and returns the record,
-// how many planned pairs it already held, this run's groups and the batch's
+// how many planned pairs it already held, this run's groups and the wave's
 // elapsed time. A call that never completes stops it, the record as it was
 // given and the groups it asked. Each source's group is a unit of progress and each
-// defaulted pair a fallback, both heard once the batch has drained.
+// defaulted pair a fallback, both heard once the wave has drained.
 func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, statement func(ClaimNode) string, body func(document string) string, opts Options) (buildrecords.UnmarkedRecord, int, []asks.GroupRecord, time.Duration, error) {
 	pending := unanswered(rec)
 	held := 0
@@ -262,7 +262,7 @@ func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *Authore
 	if err := opts.Progress.units(len(sources)); err != nil {
 		return rec, held, nil, 0, err
 	}
-	batch := opts.batch(ctx)
+	wave := opts.wave(ctx)
 	for _, id := range sources {
 		source, _ := g.node(id)
 		items := make([]asks.UnmarkedItem, len(bySource[id]))
@@ -270,12 +270,12 @@ func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *Authore
 			target, _ := g.node(targetID)
 			items[i] = asks.UnmarkedItem{Target: askClaim(target), Statement: statement(target)}
 		}
-		if err := batch.AskGroup(asks.Unmarked, id,
+		if err := wave.AskGroup(asks.Unmarked, id,
 			asks.UnmarkedAsks(source.Document, body(source.Document), askClaim(source), statement(source), items)); err != nil {
 			break
 		}
 	}
-	groups, err := batch.Wait()
+	groups, err := wave.Wait()
 	if err != nil {
 		return rec, held, groups, 0, err
 	}
@@ -290,15 +290,15 @@ func askPlanned(ctx context.Context, rec buildrecords.UnmarkedRecord, g *Authore
 			if item.Outcome == asks.Defaulted {
 				if err := opts.Progress.fallback(result.Item{Check: checkDefaulted, Path: source.Document,
 					Detail: fmt.Sprintf("%s -> %s was answered with no offered letter twice: it is recorded defaulted and yields no candidate", id, item.Item)}); err != nil {
-					return rec, held, groups, batch.Elapsed(), err
+					return rec, held, groups, wave.Elapsed(), err
 				}
 			}
 		}
 		if err := opts.Progress.unit(id); err != nil {
-			return rec, held, groups, batch.Elapsed(), err
+			return rec, held, groups, wave.Elapsed(), err
 		}
 	}
-	return rec, held, groups, batch.Elapsed(), nil
+	return rec, held, groups, wave.Elapsed(), nil
 }
 
 func unmarkedFindings(planned unmarkedPlan, rec buildrecords.UnmarkedRecord, g *AuthoredGraph, held int, groups []asks.GroupRecord, wall time.Duration) []Finding {

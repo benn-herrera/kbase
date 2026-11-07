@@ -97,6 +97,40 @@ func TestAddCitationWritesEachForm(t *testing.T) {
 	}
 }
 
+// TestARepeatedAddCitation: an add-citation re-issued over the line it wrote
+// is unchanged, reporting the link it wrote, kb-root/ byte-identical; one
+// whose form or cited node differs is refused at snippet, the line no longer
+// holding the snippet.
+func TestARepeatedAddCitation(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, id, snippet string
+		quote                   []string
+		differing               string
+	}{
+		{"quote", "As Claim B is the bound, we go on.", "clm-bbbbbb", "Claim B is the bound", nil,
+			citeEntry("clm-bbbbbb", "Claim B is the bound", "Claim B is the bound")},
+		{"paraphrase", "As the limit is tight, we go on.", "clm-bbbbbb", "the limit is tight", []string{"is the bound"},
+			citeEntry("clm-aaaaaa", "the limit is tight", "Claim A holds")},
+		{"naming", "As clm-bbbbbb shows, we go on.", "clm-bbbbbb", "clm-bbbbbb", nil, citeEntry("clm-aaaaaa", "clm-bbbbbb")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := citeKB(t, tc.body)
+			first := onlyEntry(t, run(t, root, AddCitation, citeEntry(tc.id, tc.snippet, tc.quote...)))
+			before := snapshot(t, root)
+			res := run(t, root, AddCitation, citeEntry(tc.id, tc.snippet, tc.quote...))
+			if res.Outcome != result.Unchanged || len(res.Entries) != 1 || res.Entries[0].Link != first.Link || res.Entries[0].ID != tc.id {
+				t.Errorf("identical re-issue = %+v, want unchanged, link %s", res, first.Link)
+			}
+			if res := run(t, root, AddCitation, tc.differing); res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Key != "snippet" {
+				t.Errorf("differing re-issue = %+v, want refused at snippet", res)
+			}
+			if !maps.Equal(before, snapshot(t, root)) {
+				t.Error("a re-issued add-citation changed kb-root/")
+			}
+		})
+	}
+}
+
 // TestAddCitationMatchesTheSnippetVerbatim: page add-citation says the snippet
 // is "exactly the text on that line that becomes the link text", so one
 // copying a double space from the line matches, and is not collapsed first.

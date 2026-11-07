@@ -62,10 +62,21 @@ const (
 // no id, so all three classes can splice it.
 const scoreDisposition = "score-disposition"
 
-// fragmentSlots is every fragment a template splices; systemSlots is the subset
-// that is a call's system prompt.
+// decisionCorrection is the text a decision question's re-ask carries after a
+// refusal. It is a fragment no template splices.
+const decisionCorrection = "decision-correction"
+
+// MaxAsks is the most calls one item's ask makes: the first ask, and one re-ask
+// where its reply is refused. Its readers are a score item's attempt, a decision
+// item's resolve and the build's overview loop; the correction fragments are
+// written for exactly two asks, so a third would need text of its own.
+const MaxAsks = 2
+
+// fragmentSlots is every fragment a template splices, and every fragment no
+// template splices that is no alternative; systemSlots is the subset that is a
+// call's system prompt.
 var (
-	fragmentSlots = []string{OverviewSystem, ScoreSystem, scoreDisposition, scoreAnswerOccurrences, scoreAnswerClose}
+	fragmentSlots = []string{OverviewSystem, ScoreSystem, scoreDisposition, scoreAnswerOccurrences, scoreAnswerClose, decisionCorrection}
 	systemSlots   = []string{OverviewSystem, ScoreSystem}
 )
 
@@ -74,6 +85,10 @@ var (
 // an answer.
 var alternativeSlots = map[string][]string{
 	"passage-correction": {"", "overview-correction"},
+	correctionHead:       {"", scoreCorrectionHead},
+	refusalCase:          append([]string{""}, refusalFragments()...),
+	correctionQuote:      {"", scoreCorrectionQuote},
+	correctionClose:      {"", scoreCorrectionClose},
 }
 
 // ComposeError is a template and its caller disagreeing: a defect in kbase,
@@ -242,6 +257,12 @@ func System(name string) (string, error) {
 	return Render(fragmentFile(name), nil, nil, nil)
 }
 
+// DecisionCorrection is the decision-correction fragment rendered whole: the
+// text a refused decision question's re-ask appends, its separator included.
+func DecisionCorrection() (string, error) {
+	return Render(fragmentFile(decisionCorrection), nil, nil, nil)
+}
+
 // shelfFiles is every template and fragment on the shelf, by its path under
 // prompt-templates/, sorted.
 func shelfFiles() ([]string, error) {
@@ -255,37 +276,4 @@ func shelfFiles() ([]string, error) {
 	})
 	slices.Sort(out)
 	return out, err
-}
-
-// Lint is every finding over the shelf, in file order: a line spelling
-// something prohibited names, by its label, and a delimiter that does not
-// parse as a slot. Empty is a pass.
-func Lint(prohibited map[string]*regexp.Regexp) ([]string, error) {
-	files, err := shelfFiles()
-	if err != nil {
-		return nil, err
-	}
-	labels := make([]string, 0, len(prohibited))
-	for l := range prohibited {
-		labels = append(labels, l)
-	}
-	slices.Sort(labels)
-	var findings []string
-	for _, f := range files {
-		text, err := load(f)
-		if err != nil {
-			return nil, err
-		}
-		for i, line := range strings.Split(text, "\n") {
-			for _, l := range labels {
-				if prohibited[l].MatchString(line) {
-					findings = append(findings, fmt.Sprintf("%s:%d: names %q — prohibited in a prompt template", f, i+1, l))
-				}
-			}
-		}
-		if _, err := slotsOf(text, f); err != nil {
-			findings = append(findings, err.Error())
-		}
-	}
-	return findings, nil
 }

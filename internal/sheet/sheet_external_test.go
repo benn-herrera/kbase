@@ -235,3 +235,28 @@ func TestRenderDraws(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderTwiceIsByteIdentical: the fixture rendered twice through dot gives
+// the same sheets, byte for byte, so a repeated write leaves them unchanged.
+func TestRenderTwiceIsByteIdentical(t *testing.T) {
+	src := openAdjagentFixture(t)
+	first, err := renderDerived(t, src)
+	if errors.Is(err, sheet.ErrNoDot) {
+		t.Skip("no Graphviz dot on PATH")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := renderDerived(t, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) == 0 || len(first) != len(second) {
+		t.Fatalf("rendered %d sheets, then %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i].Path != second[i].Path || !bytes.Equal(first[i].SVG, second[i].SVG) {
+			t.Errorf("sheet %d: %s rendered, then %s with other bytes", i, first[i].Path, second[i].Path)
+		}
+	}
+}

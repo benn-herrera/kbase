@@ -85,7 +85,7 @@ func landedOrRetried(t *testing.T, repo, title, out string, err error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := checkDocument(t, write.AddWork, out)
+	d := checkResult(t, write.AddWork, out)
 	switch d.Outcome {
 	case "done":
 		if records := nodeRecords(t, repo); !strings.Contains(records, title) {
@@ -124,7 +124,7 @@ func TestUpdateFormatRacingAWriteOpLosesNoEdit(t *testing.T) {
 		if errs[1] != nil {
 			t.Fatal(errs[1])
 		}
-		d := checkDocument(t, "update-format", outs[1])
+		d := checkResult(t, "update-format", outs[1])
 		dirty := d.Outcome == "refused" && !slices.ContainsFunc(d.items("refusals"), func(it map[string]any) bool { return it["check"] != checkDirtyPaths })
 		if d.Outcome != "done" && d.Outcome != "unchanged" && d.Outcome != "retry" && !dirty {
 			t.Errorf("racing update-format = %s\n%s", d.Outcome, outs[1])
@@ -169,7 +169,7 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 		if c.err != nil {
 			t.Fatal(c.err)
 		}
-		d := checkDocument(t, c.verb, c.out)
+		d := checkResult(t, c.verb, c.out)
 		items := d.items("refusals")
 		if d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkLock || items[0]["path"] != state ||
 			items[0]["detail"] != detail || items[0]["remedy"] != nil {
@@ -185,7 +185,7 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 		Stdout: &dryOut, Stderr: &bytes.Buffer{}, Logger: log.Discard()}); err != nil {
 		t.Fatal(err)
 	}
-	d := checkDocument(t, write.AddWork, dryOut.String())
+	d := checkResult(t, write.AddWork, dryOut.String())
 	if items := d.items("refusals"); d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != checkLock || d.Values["dry-run"] != true {
 		t.Errorf("a dry run under a running build:\n%s", dryOut.String())
 	}
@@ -195,7 +195,7 @@ func TestWriteVerbsRefuseWhileABuildRuns(t *testing.T) {
 	if out, err := runQuiet(runVerify, repo); err != nil || out != verified {
 		t.Errorf("verify under a running build: %v\n%s\nwant as before the build:\n%s", err, out, verified)
 	}
-	if out, _ := kbase(t, repo, "stats"); checkDocument(t, "stats", out).Outcome != "done" {
+	if out, _ := kbase(t, repo, "stats"); checkResult(t, "stats", out).Outcome != "done" {
 		t.Errorf("stats under a running build:\n%s", out)
 	}
 }
@@ -223,7 +223,7 @@ func TestWriterRefusedAtOnceWhileABuildWaitsOutAnother(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if took := time.Since(start); checkDocument(t, write.AddWork, out).Outcome != "refused" || took > write.LockWait/2 {
+	if took := time.Since(start); checkResult(t, write.AddWork, out).Outcome != "refused" || took > write.LockWait/2 {
 		t.Errorf("a writer behind a waiting build took %v:\n%s", took, out)
 	}
 }

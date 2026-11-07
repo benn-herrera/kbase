@@ -25,6 +25,9 @@ const (
 	LayerSourceGlobal = "global"
 )
 
+// WriteLayers are the layers a configure command's --layer may name.
+var WriteLayers = []string{LayerSourceGlobal, LayerSourceRepository}
+
 // RepositoryDirName is the repository's configuration directory, read over
 // the global one.
 const RepositoryDirName = ".kbase"
@@ -90,7 +93,7 @@ func GlobalDir() (string, error) {
 }
 
 // WriteTarget is the directory configuration is written into where no
-// location flag names one: the directory a flag or $KBASE_CONFIG_DIR names,
+// --layer names one: the directory a flag or $KBASE_CONFIG_DIR names,
 // whether or not it exists, so an explicit choice is never second-guessed;
 // otherwise the global layer. It reads the layers this invocation resolved,
 // whose last is the global one wherever none is named.

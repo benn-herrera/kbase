@@ -26,7 +26,8 @@ type Finding struct {
 
 // UpdateFormatRemedy is the command that converts a KB in an older format,
 // and so clears its index-freshness finding and a write refused while its
-// conversion is pending.
+// conversion is pending, and that cites every bare id, clearing each bare-id
+// finding.
 var UpdateFormatRemedy = argmark.Call("update-format", nil)
 
 // EmptyBatchRemedy is the write that clears a register-freshness finding: an
@@ -121,19 +122,10 @@ func DemotedFindings(src *kb.Source) ([]result.Item, error) {
 // citation of the node belongs.
 const CheckBareID = "bare-id"
 
-// bareIDRemedy is the write batch whose add-citation entry clears the bare-id
-// fault of id on the 1-based line of document: the id as snippet, which
-// writes the naming form.
-func bareIDRemedy(document string, line int, id string) string {
-	entry := map[string]any{"operation": "add-citation", "document": document, "line": line, "id": id, "snippet": id}
-	return "cite the node: " + argmark.Call("write", map[string]any{"entry": []map[string]any{entry}}) +
-		", which replaces the id with its naming-form citation"
-}
-
 // BareIDFindings is a finding per id of a node the records carry, of any
-// kind, standing in the prose of a document under kb-root/ outside code,
-// statement markers and link titles and destinations; the register pages,
-// which refresh renders, are not read. A KB state Derive refuses is its refusal.
+// kind, standing bare (kb.TextBareIDs) in a document under kb-root/; the
+// register pages, which refresh renders, are not read. A KB state Derive
+// refuses is its refusal.
 func BareIDFindings(src *kb.Source) ([]Finding, error) {
 	x, err := loadDerivation(src)
 	if err != nil {
@@ -159,14 +151,12 @@ func BareIDFindings(src *kb.Source) ([]Finding, error) {
 		if err != nil {
 			return nil, err
 		}
-		for n, line := range kb.SplitLines(kb.StripCodeSplitLines(text)) {
-			for _, tok := range kb.BareIDs(line) {
-				if _, ok := known[tok.ID]; !ok {
-					continue
-				}
-				out = append(out, Finding{Check: CheckBareID, Path: rel, Line: n + 1, Remedy: bareIDRemedy(rel, n+1, tok.ID),
-					Detail: fmt.Sprintf("%s:%d: %s stands bare in prose, and prose refers to a node only by citing it", rel, n+1, tok.ID)})
+		for _, t := range kb.TextBareIDs(text) {
+			if _, ok := known[t.ID]; !ok {
+				continue
 			}
+			out = append(out, Finding{Check: CheckBareID, Path: rel, Line: t.Line + 1, Remedy: UpdateFormatRemedy,
+				Detail: fmt.Sprintf("%s:%d: %s stands bare in prose, and prose refers to a node only by citing it", rel, t.Line+1, t.ID)})
 		}
 	}
 	return out, nil

@@ -50,10 +50,10 @@ func writeValues(t *testing.T, dir, name, text string) string {
 func TestMaintenanceResultsParse(t *testing.T) {
 	repo := maintenanceRepo(t)
 	values := t.TempDir()
-	run := func(want string, args ...string) resultDoc {
+	run := func(want string, args ...string) parsedResult {
 		t.Helper()
 		out, code := kbase(t, repo, args...)
-		d := checkDocument(t, args[0], out)
+		d := checkResult(t, args[0], out)
 		if d.Outcome != want || code != toolresult.ExitCode(want) {
 			t.Errorf("%q: outcome %s, exit %d; want %s\n%s", args, d.Outcome, code, want, out)
 		}
@@ -82,9 +82,13 @@ func TestMaintenanceResultsParse(t *testing.T) {
 	if len(ids) != 2 || first.Values["sheet"] == nil {
 		t.Fatalf("add: %v", first.Values)
 	}
-	again := run("refused", "add-claim", "--values", add)
-	if items := again.items("refusals"); len(items) != 1 || items[0]["entry"] != 1 || items[0]["detail"] != "node exists: "+ids[0] {
-		t.Errorf("re-issued add: refusals %v, want entry 1, node exists: %s", again.Values["refusals"], ids[0])
+	if again := run("unchanged", "add-claim", "--values", add); !slices.Equal(again.entryIDs(), ids) {
+		t.Errorf("identical re-issued add: ids %v, want %v", again.entryIDs(), ids)
+	}
+	differing := run("refused", "add-claim", "--values", writeValues(t, values, "differing.yaml", "entry:\n"+
+		"- title: A Result\n  rigor: 0.25\n  rationale: Shown.\n  document: a.md\n  line: 5\n  snippet: A result is shown\n"))
+	if items := differing.items("refusals"); len(items) != 1 || items[0]["entry"] != 1 || items[0]["detail"] != "node exists: "+ids[0] {
+		t.Errorf("differing re-issued add: refusals %v, want entry 1, node exists: %s", differing.Values["refusals"], ids[0])
 	}
 	dry := run("done", "edit-claim", "--dry-run", "--values", writeValues(t, values, "dry.yaml", "entry:\n- id: "+ids[0]+"\n  rigor: 0.25\n"))
 	if dry.Values["dry-run"] != true || len(anyStrings(dry.Values["written"])) == 0 {
@@ -163,7 +167,7 @@ func TestMaintenanceResultsParse(t *testing.T) {
 		}
 		return out
 	}
-	sectionLimits := map[string]int{"highest_leverage": *query.HighestLeverage().Limit, "weakest": *query.Weakest().Limit}
+	sectionLimits := map[string]int{"highest-leverage": *query.HighestLeverage().Limit, "weakest": *query.Weakest().Limit}
 	requireHead := func(surface, section string, full []any) {
 		t.Helper()
 		if got := resultIDs(stats[section]); !slices.Equal(got, full[:min(len(full), sectionLimits[section])]) {
@@ -171,9 +175,9 @@ func TestMaintenanceResultsParse(t *testing.T) {
 		}
 	}
 	cliHelp, _ := kbase(t, repo, "stats", "--help")
-	cliCalls := regexp.MustCompile("`kbase (find(?: --[a-z-]+ [^ ,`\n]+)+)` for ([a-z_]+)").FindAllStringSubmatch(cliHelp, -1)
+	cliCalls := regexp.MustCompile("`kbase (find(?: --[a-z-]+ [^ ,`\n]+)+)` for ([a-z-]+)").FindAllStringSubmatch(cliHelp, -1)
 	srv := servedServer(rootCmd, mcp.LocatedAt(realPath(t, repo)), &bytes.Buffer{}, log.Discard())
-	mcpCalls := regexp.MustCompile("`query (\\{\"operation\":\"find\",\"arguments\":\\{[^{}]*\\}\\})` for ([a-z_]+)").
+	mcpCalls := regexp.MustCompile("`query (\\{\"operation\":\"find\",\"arguments\":\\{[^{}]*\\}\\})` for ([a-z-]+)").
 		FindAllStringSubmatch(readResource(t, srv, mcp.HelpURIPrefix+"stats"), -1)
 	if len(cliCalls) != len(sectionLimits) || len(mcpCalls) != len(sectionLimits) {
 		t.Fatalf("stats' help renders %q at the command line and %q over MCP, want one find call per ranked section", cliCalls, mcpCalls)
@@ -195,7 +199,7 @@ func TestMaintenanceResultsParse(t *testing.T) {
 
 	outside := t.TempDir()
 	out, code := kbase(t, outside, "update-format")
-	if d := checkDocument(t, "update-format", out); d.Outcome != "refused" || code != 1 {
+	if d := checkResult(t, "update-format", out); d.Outcome != "refused" || code != 1 {
 		t.Errorf("update-format outside a worktree: %s", out)
 	}
 }
@@ -236,10 +240,10 @@ func buildRepoWith(t *testing.T, paper string) (repo, state string) {
 // against its subcommand's documented keys.
 func TestBuildResultsParse(t *testing.T) {
 	repo, state := buildRepo(t)
-	run := func(want string, args ...string) resultDoc {
+	run := func(want string, args ...string) parsedResult {
 		t.Helper()
 		out, code := kbase(t, repo, args...)
-		d := checkDocument(t, args[0], out)
+		d := checkResult(t, args[0], out)
 		if d.Outcome != want || code != toolresult.ExitCode(want) {
 			t.Errorf("%q: outcome %s, exit %d; want %s\n%s", args, d.Outcome, code, want, out)
 		}

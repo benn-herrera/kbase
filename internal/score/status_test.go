@@ -23,7 +23,7 @@ import (
 
 // heldRun opens a run in the store at state whose process is pid, records its
 // two items and the line the first landed, and returns the closed ledger — the
-// run a waiter finds a result document for, or finds abandoned. cmd's status
+// run a waiter finds a stored result for, or finds abandoned. cmd's status
 // tests stage the same run through the verb's package, which cannot reach this
 // file's helpers.
 func heldRun(t *testing.T, state, run string, pid int) *Ledger {
@@ -81,12 +81,12 @@ func holdStore(t *testing.T, state, run string) func() {
 	}
 }
 
-// decoded is a result document's keys.
+// decoded is a result's keys.
 func decoded(t *testing.T, doc string) map[string]any {
 	t.Helper()
 	var d map[string]any
 	if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
-		t.Fatalf("decoding the document: %v\n%s", err, doc)
+		t.Fatalf("decoding the result: %v\n%s", err, doc)
 	}
 	return d
 }
@@ -148,11 +148,11 @@ func TestStatusFollowsTheOperationLock(t *testing.T) {
 // refusedNote stands for the note cmd supplies with a refused key's remedy.
 const refusedNote = "a note on how the key reaches the store"
 
-// TestReadRunOverlaysTheResultFilesOnTheLedger: a run that was killed before its
-// flush has result files and no lines for them. They count under the status
-// they record: a result overrides the ledger's last status for its item, and an
-// item outside the item list counts too.
-func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
+// TestReadRunOverlaysTheAnswerFilesOnTheLedger: a run that was killed before its
+// flush has answer files and no lines for them. They count under the status
+// they record: an answer file overrides the ledger's last status for its item,
+// and an item outside the item list counts too.
+func TestReadRunOverlaysTheAnswerFilesOnTheLedger(t *testing.T) {
 	state := t.TempDir()
 	l := heldRun(t, state, "run-unflushed", 0)
 	landedAgain := node(kb.NodeKindClaim, "clm-aaaaaa")
@@ -166,7 +166,7 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 		{answered, Entry{Status: StatusDone, Value: "0.40", Faults: []Charge{}, Started: at, Ended: at}},
 		{outside, Entry{Status: StatusFailed, Reply: "http 401: " + strings.Repeat("a long provider body ", 40), Remedy: "the command that lets the call through", Note: refusedNote, Started: at, Ended: at}},
 	} {
-		if err := l.writeResult(i, resultRecord{Line: l.line(r.it, r.e)}); err != nil {
+		if err := l.writeAnswerFile(i, answerFile{Line: l.line(r.it, r.e)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -181,18 +181,18 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 	if want := []string{"clm-bbbbbb"}; !slices.Equal(st.Scored, want) {
 		t.Errorf("scored %q, want %q", st.Scored, want)
 	}
-	if len(st.Failures) != 2 {
-		t.Errorf("failures %+v, want the overridden item and the outside one", st.Failures)
+	if len(st.FailedItems) != 2 {
+		t.Errorf("failures %+v, want the overridden item and the outside one", st.FailedItems)
 	}
 	// A failure item carries the remedy its line recorded, and one whose line
 	// names none carries none.
 	remedies := map[string]string{}
-	for _, f := range st.Failures {
+	for _, f := range st.FailedItems {
 		remedies[strings.SplitN(f.Detail, ":", 2)[0]] = f.Remedy
 	}
 	// The reply is longer than the summary's bound; the note the line recorded
 	// still ends the detail.
-	for _, f := range st.Failures {
+	for _, f := range st.FailedItems {
 		if f.Remedy != "" && !strings.HasSuffix(f.Detail, "; "+refusedNote) {
 			t.Errorf("failure detail %q does not end with the note its line recorded", f.Detail)
 		}
@@ -202,10 +202,10 @@ func TestReadRunOverlaysTheResultFilesOnTheLedger(t *testing.T) {
 	}
 }
 
-// TestReadResultsSkipsAFileThatNoLongerStands: a result file the flush removes
+// TestReadAnswerFilesSkipsAFileThatNoLongerStands: an answer file the flush removes
 // between the listing and the read is no result, not an error. A dangling link
 // is listed and fails to read the same way.
-func TestReadResultsSkipsAFileThatNoLongerStands(t *testing.T) {
+func TestReadAnswerFilesSkipsAFileThatNoLongerStands(t *testing.T) {
 	runDir := t.TempDir()
 	dir := filepath.Join(runDir, resultsDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -214,19 +214,19 @@ func TestReadResultsSkipsAFileThatNoLongerStands(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dir, "0"+resultSuffix)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readResults(runDir)
+	got, err := readAnswerFiles(runDir)
 	if err != nil || len(got) != 0 {
-		t.Errorf("readResults = %v, %v; want none and no error", got, err)
+		t.Errorf("readAnswerFiles = %v, %v; want none and no error", got, err)
 	}
 }
 
-// TestWaitRunReturnsTheRunsDocument: the run wrote its result document, so the
-// waiter reads that document rather than inventing one, and exits on the outcome
-// it names — cancelled here, so the code 4 is the document's own.
-func TestWaitRunReturnsTheRunsDocument(t *testing.T) {
+// TestWaitRunReturnsTheRunsStoredResult: the run wrote its stored result, so the
+// waiter reads that stored result rather than inventing one, and exits on the outcome
+// it names — cancelled here, so the code 4 is the stored result's own.
+func TestWaitRunReturnsTheRunsStoredResult(t *testing.T) {
 	state, pid := t.TempDir(), os.Getpid()
 	l := heldRun(t, state, "run-cancelled", pid)
-	if err := WriteResultDocument(l.Dir(), result.Cancelled, nil); err != nil {
+	if err := WriteStoredResult(l.Dir(), result.Cancelled, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +239,7 @@ func TestWaitRunReturnsTheRunsDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	if doc != string(want) {
-		t.Errorf("wait reported\n%s\nwant the run's own document\n%s", doc, want)
+		t.Errorf("wait reported\n%s\nwant the run's own stored result\n%s", doc, want)
 	}
 	if code != result.ExitCode(result.Cancelled) {
 		t.Errorf("exit %d, want the cancelled outcome's %d", code, result.ExitCode(result.Cancelled))
@@ -248,8 +248,8 @@ func TestWaitRunReturnsTheRunsDocument(t *testing.T) {
 
 // TestWaitRunWaitsWhileTheRunHoldsTheStore: a holder record naming the run's
 // own process is a run still in flight, so the waiter polls rather than
-// reporting the fallback, and returns the document the run writes while it
-// waits — a document that did not stand when the first pass read there.
+// reporting the fallback, and returns the stored result the run writes while it
+// waits — a stored result that did not stand when the first pass read there.
 func TestWaitRunWaitsWhileTheRunHoldsTheStore(t *testing.T) {
 	state := t.TempDir()
 	l := heldRun(t, state, "run-live", os.Getpid())
@@ -258,7 +258,7 @@ func TestWaitRunWaitsWhileTheRunHoldsTheStore(t *testing.T) {
 	written := make(chan error, 1)
 	go func() {
 		time.Sleep(5 * time.Millisecond)
-		written <- WriteResultDocument(l.Dir(), result.Cancelled, nil)
+		written <- WriteStoredResult(l.Dir(), result.Cancelled, nil)
 	}()
 
 	doc, code, err := WaitRun(state, os.Getpid(), time.Millisecond)
@@ -266,14 +266,14 @@ func TestWaitRunWaitsWhileTheRunHoldsTheStore(t *testing.T) {
 		t.Fatalf("wait: %v", err)
 	}
 	if err := <-written; err != nil {
-		t.Fatalf("the run's document: %v", err)
+		t.Fatalf("the run's stored result: %v", err)
 	}
 	want, err := os.ReadFile(filepath.Join(l.Dir(), ResultFile))
 	if err != nil {
-		t.Fatalf("reading the document the run wrote: %v", err)
+		t.Fatalf("reading the stored result the run wrote: %v", err)
 	}
 	if doc != string(want) {
-		t.Errorf("wait reported\n%s\nwant the document the run wrote\n%s", doc, want)
+		t.Errorf("wait reported\n%s\nwant the stored result the run wrote\n%s", doc, want)
 	}
 	if code != result.ExitCode(result.Cancelled) {
 		t.Errorf("exit %d, want the cancelled outcome's %d", code, result.ExitCode(result.Cancelled))
@@ -318,11 +318,11 @@ func TestWaitRunStopsBehindAnotherProcessHolder(t *testing.T) {
 		t.Errorf("exit %d, want the run's end, which is failed's %d (3)", res.code, result.ExitCode(result.Failed))
 	}
 	if d := decoded(t, res.doc); d["outcome"] != result.Failed || d["run"] != "run-superseded" {
-		t.Errorf("document names outcome %v, run %v; want failed, run-superseded\n%s", d["outcome"], d["run"], res.doc)
+		t.Errorf("result names outcome %v, run %v; want failed, run-superseded\n%s", d["outcome"], d["run"], res.doc)
 	}
 }
 
-// TestWaitRunReportsARunItsProcessLeft: no document and no live holder is a
+// TestWaitRunReportsARunItsProcessLeft: no stored result and no live holder is a
 // run whose process ended without writing its result. The waiter reports it from
 // the run's own ledger — the counts and the one item that landed — with the
 // failure naming the end, and exits on failed, which is 3.
@@ -339,7 +339,7 @@ func TestWaitRunReportsARunItsProcessLeft(t *testing.T) {
 	}
 	d := decoded(t, doc)
 	if d["outcome"] != result.Failed || d["run"] != "run-abandoned" || d["state-dir"] != state || d["pass"] != query.PassRigor {
-		t.Errorf("document names outcome %v, run %v, state-dir %v, pass %v; want failed, run-abandoned, %s, %s\n%s",
+		t.Errorf("result names outcome %v, run %v, state-dir %v, pass %v; want failed, run-abandoned, %s, %s\n%s",
 			d["outcome"], d["run"], d["state-dir"], d["pass"], state, query.PassRigor, doc)
 	}
 	counts, _ := d["counts"].(map[string]any)

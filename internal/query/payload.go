@@ -17,14 +17,11 @@ import (
 // show and stats. KB text a row carries — a title, a rationale, a context, a
 // leaf's line — is a result.Verbatim, written as it stands on every surface.
 
-// ResultsKey holds a query's answer in its result document.
+// ResultsKey holds a query's answer in its result.
 const ResultsKey = "results"
 
 // StatsRankLimit is how many rows each ranked section of stats carries.
 const StatsRankLimit = 10
-
-// manuallyScoredKey is the key of a record's manually-scored value.
-const manuallyScoredKey = "manually_scored"
 
 // pendingOrValue is a value as it stands, or *pending* where it is pending.
 func pendingOrValue(v *float64) any {
@@ -91,20 +88,20 @@ func identity(ix *Index, n kb.NodeRow) result.Record {
 	if host != "" {
 		hostAnchor = ix.hostAnchors[n.ID]
 	}
-	return result.Record{{Key: "node_type", Value: n.NodeType}, {Key: "id", Value: n.ID}, {Key: "title", Value: result.Verbatim(n.Title)},
-		{Key: "host", Value: orNull(host)}, {Key: "host_anchor", Value: hostAnchor}, {Key: "summary", Value: summary}}
+	return result.Record{{Key: "kind", Value: n.NodeType}, {Key: "id", Value: n.ID}, {Key: "title", Value: result.Verbatim(n.Title)},
+		{Key: "host", Value: orNull(host)}, {Key: "host-anchor", Value: hostAnchor}, {Key: "summary", Value: summary}}
 }
 
 // nodeFields is each node kind's record, total over kb.NodeKinds.
 var nodeFields = map[string]func(*Index, kb.NodeRow) result.Record{
 	kb.NodeKindClaim: func(ix *Index, n kb.NodeRow) result.Record {
 		return append(identity(ix, n), result.Record{{Key: "rigor", Value: pendingOrValue(n.Rigor)}, {Key: "strength", Value: pendingOrDisplay(n.Strength)},
-			{Key: "build_status", Value: optString(n.BuildStatus)}, {Key: "strength_band", Value: n.StrengthBand},
-			{Key: "rationale", Value: result.Verbatim(ix.rationales[n.ID])}, {Key: "premise_count", Value: n.PremiseCount}}...)
+			{Key: "build-status", Value: optString(n.BuildStatus)}, {Key: "strength-band", Value: n.StrengthBand},
+			{Key: "rationale", Value: result.Verbatim(ix.rationales[n.ID])}, {Key: "premises", Value: n.PremiseCount}}...)
 	},
 	kb.NodeKindAnalysis: func(ix *Index, n kb.NodeRow) result.Record {
 		return append(identity(ix, n), result.Record{{Key: "rigor", Value: pendingOrValue(n.Rigor)}, {Key: "strength", Value: pendingOrDisplay(n.Strength)},
-			{Key: "strength_band", Value: n.StrengthBand}, {Key: "rationale", Value: result.Verbatim(ix.rationales[n.ID])}}...)
+			{Key: "strength-band", Value: n.StrengthBand}, {Key: "rationale", Value: result.Verbatim(ix.rationales[n.ID])}}...)
 	},
 	kb.NodeKindExperiment: func(ix *Index, n kb.NodeRow) result.Record {
 		return append(identity(ix, n), result.Field{Key: "status", Value: n.Status}, result.Field{Key: "rigor", Value: pendingOrValue(n.Rigor)})
@@ -120,7 +117,7 @@ var nodeFields = map[string]func(*Index, kb.NodeRow) result.Record{
 
 func weakPointRecord(n FoundNode) result.Record {
 	return result.Record{{Key: "id", Value: n.Node.ID}, {Key: "strength", Value: displayStrength(n.Strength)},
-		{Key: "strength_band", Value: n.Node.StrengthBand}, {Key: "dependents", Value: n.Dependents}, {Key: "title", Value: result.Verbatim(n.Node.Title)}}
+		{Key: "strength-band", Value: n.Node.StrengthBand}, {Key: "dependents", Value: n.Dependents}, {Key: "title", Value: result.Verbatim(n.Node.Title)}}
 }
 
 // compareRelations orders two relations as the edge file's identity orders
@@ -152,7 +149,7 @@ func NoNode(key, id string) result.Item {
 	return result.Item{Check: kb.CheckUnknownID, Key: key, Detail: detail, Remedy: remedy}
 }
 
-// FindPayload is a row per node sel selects (Find): its id, node_type, title, label
+// FindPayload is a row per node sel selects (Find): its id, kind, title, label
 // (null for a hosted kind), host leaf (null where it has none), strength
 // (*pending* where pending) and dependents' count. It refuses, as usage, what
 // FindUsage refuses.
@@ -162,7 +159,7 @@ func FindPayload(ix *Index, sel FindSelection) ([]result.Record, []result.Item) 
 	}
 	out := []result.Record{}
 	for _, n := range ix.Find(sel) {
-		out = append(out, result.Record{{Key: "id", Value: n.Node.ID}, {Key: "node_type", Value: n.Node.NodeType}, {Key: "title", Value: result.Verbatim(n.Node.Title)},
+		out = append(out, result.Record{{Key: "id", Value: n.Node.ID}, {Key: "kind", Value: n.Node.NodeType}, {Key: "title", Value: result.Verbatim(n.Node.Title)},
 			{Key: "label", Value: nodeLabel(n.Node)}, {Key: "host", Value: orNull(n.Host)}, {Key: "strength", Value: pendingOrDisplay(n.Strength)},
 			{Key: "dependents", Value: n.Dependents}})
 	}
@@ -231,7 +228,7 @@ func ShowPayload(ix *Index, id string) (result.Record, bool) {
 	}
 	rec := nodeFields[n.NodeType](ix, n)
 	if manual, carried := ix.nodeManual[id]; carried {
-		rec = insertAfter(rec, "rigor", result.Field{Key: manuallyScoredKey, Value: manual})
+		rec = insertAfter(rec, "rigor", result.Field{Key: kb.ManuallyScoredKey, Value: manual})
 	}
 	return rec, true
 }
@@ -271,8 +268,8 @@ func StatsPayload(ix *Index) result.Record {
 			demoted++
 		}
 	}
-	out = append(out, result.Field{Key: "edges", Value: len(ix.edges)}, result.Field{Key: "demoted_edges", Value: demoted},
-		result.Field{Key: "subtree_aggregates", Value: volumeAggregates(ix)})
+	out = append(out, result.Field{Key: "edges", Value: len(ix.edges)}, result.Field{Key: "demoted-edges", Value: demoted},
+		result.Field{Key: "subtree-aggregates", Value: volumeAggregates(ix)})
 	var rigor, bearing flagCounts
 	for _, manual := range ix.nodeManual {
 		rigor = rigor.add(manual)
@@ -282,8 +279,8 @@ func StatsPayload(ix *Index) result.Record {
 			bearing = bearing.add(*e.ManuallyScored)
 		}
 	}
-	out = append(out, result.Field{Key: "rigor_manual", Value: rigor.manual}, result.Field{Key: "rigor_model", Value: rigor.model},
-		result.Field{Key: "bearing_manual", Value: bearing.manual}, result.Field{Key: "bearing_model", Value: bearing.model},
+	out = append(out, result.Field{Key: "rigor-manual", Value: rigor.manual}, result.Field{Key: "rigor-model", Value: rigor.model},
+		result.Field{Key: "bearing-manual", Value: bearing.manual}, result.Field{Key: "bearing-model", Value: bearing.model},
 		result.Field{Key: "relations", Value: relationCensus(ix)})
 
 	bands := map[string]int{}
@@ -292,9 +289,9 @@ func StatsPayload(ix *Index) result.Record {
 	}
 	var dist result.Record
 	for _, b := range kb.StrengthBandLadder {
-		dist = append(dist, result.Field{Key: b.Label, Value: bands[b.Slug]})
+		dist = append(dist, result.Field{Key: b.Slug, Value: bands[b.Slug]})
 	}
-	dist = append(dist, result.Field{Key: kb.PendingLiteral, Value: bands[kb.UnknownBandSlug]})
+	dist = append(dist, result.Field{Key: kb.UnknownBandSlug, Value: bands[kb.UnknownBandSlug]})
 
 	leverage := []result.Record{}
 	for _, n := range ix.Find(HighestLeverage()) {
@@ -305,7 +302,7 @@ func StatsPayload(ix *Index) result.Record {
 		weakest = append(weakest, result.Record{{Key: "id", Value: n.Node.ID}, {Key: "strength", Value: displayStrength(n.Strength)},
 			{Key: "title", Value: result.Verbatim(n.Node.Title)}})
 	}
-	return append(out, result.Field{Key: "strength_bands", Value: dist}, result.Field{Key: "highest_leverage", Value: leverage},
+	return append(out, result.Field{Key: "strength-bands", Value: dist}, result.Field{Key: "highest-leverage", Value: leverage},
 		result.Field{Key: "weakest", Value: weakest})
 }
 
@@ -331,7 +328,7 @@ func volumeAggregates(ix *Index) result.Record {
 	return out
 }
 
-// HighestLeverage is the find question stats' highest_leverage previews: the
+// HighestLeverage is the find question stats' highest-leverage previews: the
 // claims below DefaultMaxStrength with at least DefaultMinDependents
 // dependents, the most dependents first; its first StatsRankLimit.
 func HighestLeverage() FindSelection {
@@ -489,5 +486,5 @@ func compareEdgeRows(a, b kb.EdgeRow) int {
 func EdgeRowRecord(e kb.EdgeRow) result.Record {
 	return result.Record{{Key: "source", Value: e.Source}, {Key: "target", Value: e.Target}, {Key: "relation", Value: e.Relation},
 		{Key: "bearing", Value: e.Bearing}, {Key: "context", Value: optVerbatim(e.Context)},
-		{Key: manuallyScoredKey, Value: optBool(e.ManuallyScored)}, {Key: "replaced_relation", Value: orNull(e.ReplacedRelation)}}
+		{Key: kb.ManuallyScoredKey, Value: optBool(e.ManuallyScored)}, {Key: "replaced-relation", Value: orNull(e.ReplacedRelation)}}
 }

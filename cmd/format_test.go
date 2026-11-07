@@ -110,7 +110,7 @@ func mapsEqualStrings(a, b map[string]string) bool {
 func TestA100KBUpdatesToTheCurrentFormat(t *testing.T) {
 	repo := stageRepo(t, kb100Dir)
 	out, code := kbase(t, repo, "verify")
-	d := checkDocument(t, "verify", out)
+	d := checkResult(t, "verify", out)
 	if code != 1 || d.Outcome != "refused" {
 		t.Fatalf("verify over 1.0.0: exit %d\n%s", code, out)
 	}
@@ -138,7 +138,7 @@ func TestA100KBUpdatesToTheCurrentFormat(t *testing.T) {
 		t.Errorf("update-format left the stamp at %q (%v), want %s", stamp, err, kb.FormatVersion)
 	}
 	out, _ = kbase(t, repo, "verify")
-	d = checkDocument(t, "verify", out)
+	d = checkResult(t, "verify", out)
 	if _, ok := d.Values["migration"]; ok {
 		t.Errorf("a current KB's verify carries a migration record:\n%s", out)
 	}
@@ -163,7 +163,7 @@ func TestNewerFormatRefusedByEveryReader(t *testing.T) {
 			before := tree(t, repo)
 			for _, args := range readers {
 				out, code := kbase(t, repo, args...)
-				d := checkDocument(t, args[0], out)
+				d := checkResult(t, args[0], out)
 				items := d.items("refusals")
 				if code != 1 || d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != "kb-format" || items[0]["remedy"] != "update kbase" ||
 					!strings.Contains(items[0]["detail"].(string), stamp) || !strings.Contains(items[0]["detail"].(string), kb.FormatVersion) {
@@ -184,7 +184,7 @@ func TestNewerFormatRefusedByEveryReader(t *testing.T) {
 		}
 		commitKB(t, repo)
 		out, code := kbase(t, repo, "update-format")
-		if d := checkDocument(t, "update-format", out); code != 0 || !slices.Contains(anyStrings(d.Values["written"]), kb.FormatFile) {
+		if d := checkResult(t, "update-format", out); code != 0 || !slices.Contains(anyStrings(d.Values["written"]), kb.FormatFile) {
 			t.Errorf("update-format over a KB at 4.0.9: exit %d\n%s", code, out)
 		}
 		if stamp, _ := kb.DecodeFormatStamp([]byte(tree(t, repo)[kb.KBDir+"/"+kb.FormatFile])); stamp != kb.FormatVersion {
@@ -211,7 +211,7 @@ func TestARefusedConversionStampsNothing(t *testing.T) {
 	commitKB(t, repo)
 
 	out, code := kbase(t, repo, "update-format")
-	d := checkDocument(t, "update-format", out)
+	d := checkResult(t, "update-format", out)
 	items := d.items("refusals")
 	if code != 1 || d.Outcome != "refused" || len(items) != 1 || items[0]["check"] != kb.CheckSymlink || items[0]["path"] != link {
 		t.Fatalf("update-format over a 1.0.0 KB with a symlinked index file: exit %d\n%s", code, out)
@@ -238,7 +238,7 @@ func kbaseStreams(t *testing.T, dir string, args ...string) (stdout, stderr stri
 	return out.String(), errOut.String(), code
 }
 
-// pendingConversionValues is one values document per write op the caller may
+// pendingConversionValues is one batch per write op the caller may
 // issue, each an entry the op's vocabulary accepts over the score-kb fixture.
 var pendingConversionValues = map[string]string{
 	"add-analysis":    "- title: An Analysis\n  rationale: Shown.\n  document: a.md\n  line: 1\n  snippet: The\n",
@@ -278,7 +278,7 @@ func TestEveryWriteRefusedWhileAConversionIsPending(t *testing.T) {
 		file := writeValues(t, values, op+".yaml", "entry:\n"+entry)
 		for _, args := range [][]string{{op, "--values", file}, {op, "--dry-run", "--values", file}} {
 			out, stderr, code := kbaseStreams(t, repo, args...)
-			d := checkDocument(t, op, out)
+			d := checkResult(t, op, out)
 			items := d.items("refusals")
 			if code != 1 || len(items) != 1 || items[0]["check"] != index.CheckIndex || items[0]["remedy"] != atTheCommandLine(index.UpdateFormatRemedy) {
 				t.Errorf("%q over 3.0.0: exit %d, want the pending conversion refused\n%s", args, code, out)
@@ -292,7 +292,7 @@ func TestEveryWriteRefusedWhileAConversionIsPending(t *testing.T) {
 		t.Error("a refused write op wrote to the KB")
 	}
 	out, code := kbase(t, repo, "find")
-	d := checkDocument(t, "find", out)
+	d := checkResult(t, "find", out)
 	if m, _ := d.Values["migration"].(map[string]any); code != 0 || m["from"] != "3.0.0" || m["to"] != kb.FormatVersion {
 		t.Errorf("find over 3.0.0: exit %d, want it answered as converted\n%s", code, out)
 	}
@@ -345,7 +345,7 @@ func TestUpdateFormatListsKBTextAsItStands(t *testing.T) {
 		{List: kbload.ListBareIDs, Path: "a.md", Line: 3, ID: id},
 		{List: kbload.ListNoEdge, ID: id, Text: text},
 		{List: kbload.ListStrengthenBy, ID: id, Text: text},
-	})
+	}, true)
 	for _, overMCP := range []bool{false, true} {
 		var out bytes.Buffer
 		if err := toolresult.Emit(toolresult.Spelled(&out, mcp.Spelling(rootCmd, overMCP)), toolresult.Done, lists...); err != nil {
@@ -368,7 +368,7 @@ func TestEveryConversionWarningReachesTheCaller(t *testing.T) {
 	repo := warnedKB200(t)
 	commitKB(t, repo)
 	out, stderr, code := kbaseStreams(t, repo, "update-format")
-	d := checkDocument(t, "update-format", out)
+	d := checkResult(t, "update-format", out)
 	if code != 0 || d.Outcome != "done" {
 		t.Fatalf("update-format over the 2.0.0 KB: exit %d\n%s", code, out)
 	}
@@ -425,7 +425,7 @@ func TestUpdateFormatRewritesTheMaintainedBlocks(t *testing.T) {
 	if err := os.Remove(filepath.Join(repo, kb.KBDir, kb.ConventionsFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal(err)
 	}
-	d := checkDocument(t, "update-format", updateFormatKB(t, repo))
+	d := checkResult(t, "update-format", updateFormatKB(t, repo))
 	if got := anyStrings(d.Values["unfenced"]); !slices.Equal(got, []string{kb.AgentsFile}) {
 		t.Errorf("unfenced = %q, want the AGENTS.md without the marker pair", got)
 	}
@@ -474,7 +474,7 @@ func TestUpdateFormatOverA300KBListsTheConversion(t *testing.T) {
 	leaf := filepath.Join(repo, kb.KBDir, "a.md")
 	writeValues(t, filepath.Dir(leaf), "a.md", tree(t, repo)[kb.KBDir+"/a.md"]+"\nThe second rests on clm-aaaaaa.\n")
 
-	d := checkDocument(t, "update-format", updateFormatKB(t, repo))
+	d := checkResult(t, "update-format", updateFormatKB(t, repo))
 	if formatOf(t, repo) != kb.FormatVersion {
 		t.Errorf("the KB stands at %s, want %s", formatOf(t, repo), kb.FormatVersion)
 	}
@@ -534,7 +534,7 @@ func TestUpdateFormatMovesTheRootBuildRecords(t *testing.T) {
 
 	writeRepo(t, repo, map[string]string{from: record + "# edited\n"})
 	code, out := runMaintenance(t, runUpdateFormat, repo)
-	d := checkDocument(t, "update-format", out)
+	d := checkResult(t, "update-format", out)
 	if items := d.items("refusals"); code != 1 || len(items) != 1 || items[0]["check"] != checkDirtyPaths || items[0]["path"] != from {
 		t.Errorf("update-format over a dirty %s: exit %d, want one dirty-paths item naming it\n%s", from, code, out)
 	}
@@ -547,7 +547,7 @@ func TestUpdateFormatMovesTheRootBuildRecords(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("update-format over the clean record: exit %d\n%s", code, out)
 	}
-	d = checkDocument(t, "update-format", out)
+	d = checkResult(t, "update-format", out)
 	if removed := anyStrings(d.Values["removed"]); !slices.Contains(removed, from) {
 		t.Errorf("removed = %q, want the moved record's root path %s", removed, from)
 	}
@@ -606,7 +606,7 @@ func TestARefusedConversionMovesNoRecord(t *testing.T) {
 			commitKB(t, repo)
 
 			code, out := runMaintenance(t, runUpdateFormat, repo)
-			d := checkDocument(t, "update-format", out)
+			d := checkResult(t, "update-format", out)
 			if d.Outcome != toolresult.Refused || code != toolresult.ExitCode(toolresult.Refused) {
 				t.Fatalf("update-format: outcome %s, exit %d; want refused\n%s", d.Outcome, code, out)
 			}

@@ -200,13 +200,12 @@ func HasFormatStamp(kbRoot string) bool {
 // coveredFiles is every file a format covers, under its repository-relative
 // slash path: kb-root's documents, its index, and the build records a KB
 // before 4.0.0 keeps beside it, which the conversion moves into kb-root/.build/.
-// It is the reader's file set: a
-// directory leaf discovery never descends into holds no document the
-// conversion reads or makes obsolete, and the index is the one excluded
-// directory a format covers, since a migration drains and rewrites it. The walk
-// descends into kb-root/.build/ as leaf discovery does, and reads nothing
-// there: the build records are YAML, and neither reads a .yaml file outside
-// the index as a document.
+// It is the older formats' file set, not the reader's: a directory those
+// formats excluded holds no document the conversion reads or makes obsolete,
+// and the index is the one excluded directory a format covers, since a
+// migration drains and rewrites it. The walk descends into kb-root/.build/
+// and reads nothing there: the build records are YAML, and no format reads a
+// .yaml file outside the index as a document.
 func coveredFiles(kbRoot string) (formats.Files, error) {
 	repo := filepath.Dir(kbRoot)
 	files := formats.Files{}
@@ -232,7 +231,7 @@ func coveredFiles(kbRoot string) (formats.Files, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if kb.ExcludeDirs[d.Name()] && rel != kb.IndexDir {
+			if formats.ExcludeDirs[d.Name()] && rel != kb.IndexDir {
 				return fs.SkipDir
 			}
 			return nil

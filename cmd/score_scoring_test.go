@@ -28,7 +28,7 @@ func scoreWithoutScoring() providerOptions {
 // TestScoreRecordsAProviderRefusalAsItsOwnReason: a provider that answers with
 // a status that is not success declined the request, which is not the transport
 // failing: the item's failure states the refusal with the status, in the reason
-// the document and the ledger's line carry alike, and never reads as a
+// the result and the ledger's line carry alike, and never reads as a
 // transport failure — the reading that sends a diagnosis to the path between
 // kbase and a provider that is answering.
 func TestScoreRecordsAProviderRefusalAsItsOwnReason(t *testing.T) {
@@ -117,7 +117,7 @@ func TestScoreRefusesWithoutAScoringRole(t *testing.T) {
 // TestScoreNamesTheScoringModelAlone: with no --scoring-model, a run over files
 // whose text and scoring roles name different models asks the scoring one: the
 // roles record names its entry and model, the ledger's lines name it, and the
-// text model appears neither in the document nor in the ledger.
+// text model appears neither in the result nor in the ledger.
 func TestScoreNamesTheScoringModelAlone(t *testing.T) {
 	repo, state := scoreRepo(t), t.TempDir()
 	got := scoreIn(t, repo, state, scoreOptions{Pass: query.PassRigor}, func() model.Client { return scoring("none") })

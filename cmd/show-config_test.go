@@ -20,7 +20,7 @@ import (
 )
 
 // The key material the fixture configuration carries. No test lets it reach the
-// document.
+// result.
 const fileKey = "sk-file-MUST-NOT-APPEAR"
 
 // configFixture stages a configuration directory with both files: a pool whose
@@ -110,7 +110,7 @@ func TestShowConfigReportsTheStore(t *testing.T) {
 	configDir, keyPath, truncated := storeFixture(t)
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", configDir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	entries := map[string]map[string]any{}
 	for _, p := range doc.items("providers") {
@@ -121,13 +121,13 @@ func TestShowConfigReportsTheStore(t *testing.T) {
 		e := entries[name]
 		_, keyFile := e["key-file"]
 		_, upgrade := e["upgrade"]
-		if e["key"] != string(config.KeyKindStore) || keyFile || upgrade {
-			t.Errorf("%s has fields %v, want key store with no key-file and no upgrade", name, fieldNames(e))
+		if e["key-source"] != string(config.KeyKindStore) || keyFile || upgrade {
+			t.Errorf("%s has fields %v, want key-source store with no key-file and no upgrade", name, fieldNames(e))
 		}
 	}
-	if filed, want := entries["filed"], "cat '"+keyPath+"' | kbase auth add filed"; filed["key"] != string(config.KeyKindFile) ||
+	if filed, want := entries["filed"], "cat '"+keyPath+"' | kbase auth add filed"; filed["key-source"] != string(config.KeyKindFile) ||
 		filed["key-file"] != "my keys/filed.key" || filed["upgrade"] != want {
-		t.Errorf("filed has fields %v, want key file, its key-file and upgrade %q", fieldNames(filed), want)
+		t.Errorf("filed has fields %v, want key-source file, its key-file and upgrade %q", fieldNames(filed), want)
 	}
 	if e := entries["truncated"]; e["usable"] != false {
 		t.Errorf("truncated has fields %v, want it dropped, named in lowercase: its store file does not open and its key file is missing", fieldNames(e))
@@ -172,7 +172,7 @@ func TestStoredKeyNeverReported(t *testing.T) {
 // TestStoreReportIsShowConfigsAlone: a verb loading configuration warns, on
 // stderr, of a store file that did not open, by its path and what is wrong with
 // it — and never of the upgrade or the unread key file, which show-config's
-// document alone carries.
+// result alone carries.
 func TestStoreReportIsShowConfigsAlone(t *testing.T) {
 	configDir, _, truncated := storeFixture(t)
 	t.Setenv(config.EnvConfigDir, configDir)
@@ -239,9 +239,9 @@ func TestUnlistableStoreIsADiagnostic(t *testing.T) {
 
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", configDir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
-	if providers := doc.items("providers"); len(providers) != 1 || providers[0]["key"] != string(config.KeyKindFile) {
+	if providers := doc.items("providers"); len(providers) != 1 || providers[0]["key-source"] != string(config.KeyKindFile) {
 		t.Errorf("%d providers, want filed with its file key", len(providers))
 	}
 	// config.toml names no role, so each role's diagnostic follows the store's.
@@ -266,8 +266,8 @@ func TestUnlistableStoreIsADiagnostic(t *testing.T) {
 }
 
 // runShowConfigVerb runs `kbase show-config` through the real root command from
-// work and reads the document it wrote, with the verb's stderr.
-func runShowConfigVerb(t *testing.T, work string, args ...string) (doc resultDoc, stdout, stderr string, code int) {
+// work and reads the result it wrote, with the verb's stderr.
+func runShowConfigVerb(t *testing.T, work string, args ...string) (doc parsedResult, stdout, stderr string, code int) {
 	t.Helper()
 	t.Chdir(work)
 	stdoutBuf, stderrBuf, err := executeRoot(t, append([]string{"show-config"}, args...)...)
@@ -278,28 +278,28 @@ func runShowConfigVerb(t *testing.T, work string, args ...string) (doc resultDoc
 		}
 	}
 	stdout, stderr = stdoutBuf.String(), stderrBuf.String()
-	return checkDocument(t, "show-config", stdout), stdout, stderr, code
+	return checkResult(t, "show-config", stdout), stdout, stderr, code
 }
 
 // fieldNames is the sorted names of m's fields and none of their values, so a
-// failure message can say what a document item holds without formatting a value
+// failure message can say what a result item holds without formatting a value
 // that could hold a key.
 func fieldNames(m map[string]any) []string {
 	return slices.Sorted(maps.Keys(m))
 }
 
 // reportedLayers is the report's layers, in precedence order, each as the
-// mapping the document carries.
-func reportedLayers(t *testing.T, doc resultDoc) []map[string]any {
+// mapping the result carries.
+func reportedLayers(t *testing.T, doc parsedResult) []map[string]any {
 	t.Helper()
 	layers := doc.items("layers")
 	if len(layers) == 0 {
-		t.Fatalf("the document reports no layers; its fields are %v", fieldNames(doc.Values))
+		t.Fatalf("the result reports no layers; its fields are %v", fieldNames(doc.Values))
 	}
 	return layers
 }
 
-// TestShowConfigReportsTheConfiguration: the document names the layer the flag
+// TestShowConfigReportsTheConfiguration: the result names the layer the flag
 // chose with what it holds, every pool entry with the layer it came from, the
 // kind of key it supplies and why it faulted, the merged role values, the
 // selection, one record per role with its endpoint and each field's
@@ -309,13 +309,13 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 	dir := configFixture(t)
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	layers := reportedLayers(t, doc)
 	if len(layers) != 1 {
 		t.Fatalf("layers = %v, want the one directory the flag named", layers)
 	}
-	if want := (map[string]any{"path": dir, "source": config.LayerSourceExplicit, "exists": true,
+	if want := (map[string]any{"path": dir, "layer": config.LayerSourceExplicit, "exists": true,
 		"providers-exists": true, "config-exists": true}); !reflect.DeepEqual(layers[0], want) {
 		t.Errorf("layers[0] = %v, want %v", layers[0], want)
 	}
@@ -335,10 +335,10 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Errorf("the dropped entry has fields %v, want usable false, the reason it dropped and its layer", fieldNames(broken))
 	} else if _, ok := broken["base-url"]; ok {
 		t.Errorf("the dropped entry carries base-url; its fields are %v", fieldNames(broken))
-	} else if _, ok := broken["key"]; ok {
-		t.Errorf("the dropped entry carries key; its fields are %v", fieldNames(broken))
+	} else if _, ok := broken["key-source"]; ok {
+		t.Errorf("the dropped entry carries key-source; its fields are %v", fieldNames(broken))
 	}
-	if file := entries["file"]; file["key"] != string(config.KeyKindFile) || file["key-file"] != "key.txt" ||
+	if file := entries["file"]; file["key-source"] != string(config.KeyKindFile) || file["key-file"] != "key.txt" ||
 		file["usable"] != true || file["fault"] == nil || file["layer"] != config.LayerSourceExplicit {
 		t.Errorf("the key-file entry has fields %v, want key file, its path, usable, the permission warning and its layer", fieldNames(file))
 	}
@@ -350,7 +350,7 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Errorf("config has fields %v, want each role's value as written and null for the unset one", fieldNames(cfg))
 	}
 	selection, _ := doc.Values["selection"].(map[string]any)
-	if selection["provider"] != "file" || selection["rule"] != config.RuleSoleProvider {
+	if selection["provider"] != "file" || selection["provider-rule"] != config.RuleSoleProvider {
 		t.Errorf("selection has fields %v, want the pool's only usable entry — config.toml names none", fieldNames(selection))
 	}
 	for _, want := range []struct{ role, model, provider string }{
@@ -390,7 +390,7 @@ func TestShowConfigReportsTheConfiguration(t *testing.T) {
 		t.Errorf("the role's diagnostic has fields %v, want models.scoring in the config file", fieldNames(last))
 	}
 	if strings.Contains(stdout, fileKey) {
-		t.Errorf("the document (%d bytes) carries the key", len(stdout))
+		t.Errorf("the result (%d bytes) carries the key", len(stdout))
 	}
 }
 
@@ -403,10 +403,10 @@ func TestShowConfigReportsAnAbsentConfiguration(t *testing.T) {
 	t.Setenv(config.EnvConfigDir, dir)
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir())
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	layers := reportedLayers(t, doc)
-	if want := (map[string]any{"path": dir, "source": config.LayerSourceEnvironment,
+	if want := (map[string]any{"path": dir, "layer": config.LayerSourceEnvironment,
 		"exists": false, "providers-exists": false, "config-exists": false}); len(layers) != 1 || !reflect.DeepEqual(layers[0], want) {
 		t.Errorf("layers = %v, want %v", layers, want)
 	}
@@ -438,7 +438,7 @@ func TestShowConfigNamesTheConfigFileALackBelongsTo(t *testing.T) {
 	writeValues(t, dir, config.ProvidersFileName, "[solo]\nbaseUrl = \"http://solo.example/v1\"\n")
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	diagnostics := doc.items("diagnostics")
 	want := config.ConfigPath(dir)
@@ -466,7 +466,7 @@ func TestShowConfigReportsARolesProviderThePoolLacks(t *testing.T) {
 	writeValues(t, dir, config.ConfigFileName, "[models]\ndecision = \"lab/d\"\ntext = \"lab/t\"\nscoring = \"elsewhere/clef\"\n")
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	var scoring map[string]any
 	for _, item := range doc.items("diagnostics") {
@@ -488,16 +488,16 @@ func TestShowConfigReportsARolesProviderThePoolLacks(t *testing.T) {
 
 // TestShowConfigRefusesAConfigurationThatDoesNotLoad: a file failing the strict
 // load refuses exactly as it does for every other subcommand, and a refused
-// document carries no diagnostics.
+// result carries no diagnostics.
 func TestShowConfigRefusesAConfigurationThatDoesNotLoad(t *testing.T) {
 	dir := t.TempDir()
 	writeValues(t, dir, config.ConfigFileName, "provider = \"a\"\n\n[models]\nheavy = \"some-model\"\n")
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != toolresult.ExitCode(toolresult.Refused) || doc.Outcome != toolresult.Refused {
-		t.Fatalf("outcome %s, exit %d; want refused, %d (document %d bytes)", doc.Outcome, code, toolresult.ExitCode(toolresult.Refused), len(stdout))
+		t.Fatalf("outcome %s, exit %d; want refused, %d (result %d bytes)", doc.Outcome, code, toolresult.ExitCode(toolresult.Refused), len(stdout))
 	}
 	if _, ok := doc.Values["diagnostics"]; ok {
-		t.Errorf("a refused document (%d bytes) carries diagnostics", len(stdout))
+		t.Errorf("a refused result (%d bytes) carries diagnostics", len(stdout))
 	}
 	items := doc.items(toolresult.RefusalsKey)
 	if len(items) != 1 || items[0]["check"] != toolresult.CheckUsage {
@@ -511,18 +511,18 @@ func TestShowConfigRefusesAConfigurationThatDoesNotLoad(t *testing.T) {
 	}
 }
 
-// TestShowConfigReportsTheDecisionsFlavor: every usable entry states which
-// decision surface it speaks — the systemone default where the entry is
+// TestShowConfigReportsTheDecisionAPI: every usable entry states which
+// decision API it speaks — the systemone default where the entry is
 // silent, the value where it names one — and a dropped provider, which has no
 // entry to describe, states none.
-func TestShowConfigReportsTheDecisionsFlavor(t *testing.T) {
+func TestShowConfigReportsTheDecisionAPI(t *testing.T) {
 	dir := t.TempDir()
 	writeValues(t, dir, config.ProvidersFileName, `[silent]
 baseUrl = "http://silent.example/v1"
 
 [deciding]
 baseUrl = "http://deciding.example/v1"
-decisionsFlavor = "decisions"
+decisionApi = "decisions"
 
 [broken]
 `)
@@ -530,20 +530,20 @@ decisionsFlavor = "decisions"
 
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	entries := map[string]map[string]any{}
 	for _, p := range doc.items("providers") {
 		name, _ := p["name"].(string)
 		entries[name] = p
 	}
-	if got := entries["silent"]["decisions-flavor"]; got != config.FlavorSystemOne {
-		t.Errorf("an entry silent on the flavour reports %v, want %s", got, config.FlavorSystemOne)
+	if got := entries["silent"]["decision-api"]; got != config.DecisionAPISystemOne {
+		t.Errorf("an entry silent on the decision API reports %v, want %s", got, config.DecisionAPISystemOne)
 	}
-	if got := entries["deciding"]["decisions-flavor"]; got != config.FlavorDecisions {
-		t.Errorf("an entry naming decisions reports %v, want %s", got, config.FlavorDecisions)
+	if got := entries["deciding"]["decision-api"]; got != config.DecisionAPIDecisions {
+		t.Errorf("an entry naming decisions reports %v, want %s", got, config.DecisionAPIDecisions)
 	}
-	if got, ok := entries["broken"]["decisions-flavor"]; ok {
+	if got, ok := entries["broken"]["decision-api"]; ok {
 		t.Errorf("the dropped entry states a decision surface (%v); its fields are %v", got, fieldNames(entries["broken"]))
 	}
 }
@@ -567,7 +567,7 @@ api = "openai"
 
 	doc, stdout, _, code := runShowConfigVerb(t, t.TempDir(), "--config-dir", dir)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	entries := map[string]map[string]any{}
 	for _, p := range doc.items("providers") {
@@ -607,7 +607,7 @@ func TestShowConfigReportsTheSamplingAndItsLayers(t *testing.T) {
 
 	doc, stdout, _, code := runShowConfigVerb(t, repo)
 	if code != 0 || doc.Outcome != toolresult.Done {
-		t.Fatalf("outcome %s, exit %d; want done, 0 (document %d bytes)", doc.Outcome, code, len(stdout))
+		t.Fatalf("outcome %s, exit %d; want done, 0 (result %d bytes)", doc.Outcome, code, len(stdout))
 	}
 	cfg, _ := doc.Values["config"].(map[string]any)
 	sampling, _ := cfg["sampling"].(map[string]any)

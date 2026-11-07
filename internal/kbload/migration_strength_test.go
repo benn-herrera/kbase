@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"kbase/internal/formats"
-	"kbase/internal/formats/format200"
+	"kbase/internal/formats/format20"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 )
@@ -65,12 +65,12 @@ func TestAMigratedClaimsStrengthIsIts100Solidity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, _, _, err := formats.Chain("1.0.0", format200.Version200, files)
+	two, _, _, err := formats.Chain("1.0.0", format20.Version, files)
 	if err != nil {
 		t.Fatalf("converting to 2.0.0: %v", err)
 	}
-	register := string(two[kb.KBDir+"/"+format200.RegisterFile])
-	claims := format200.ParseClaimEntries(register, format200.RegisterFile, nil, func(string, int, string) {})
+	register := string(two[kb.KBDir+"/"+format20.RegisterFile])
+	claims := format20.ParseClaimEntries(register, format20.RegisterFile, nil, func(string, int, string) {})
 	if len(claims) != 4 {
 		t.Fatalf("the converted register holds %d claim entries, want 4:\n%s", len(claims), register)
 	}

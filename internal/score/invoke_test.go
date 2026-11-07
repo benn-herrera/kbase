@@ -336,7 +336,7 @@ func TestInvokeWritesNoCommonFileWhileItAsks(t *testing.T) {
 }
 
 // TestInvokeResumeLandsAKilledRunsResults: a resume over a run a kill stopped
-// after an item's answer lands that answer from its result file and asks
+// after an item's answer lands that answer from its answer file and asks
 // nothing for it, and reports the value scored.
 func TestInvokeResumeLandsAKilledRunsResults(t *testing.T) {
 	root, state := oneClaimKB(t), t.TempDir()
@@ -353,7 +353,7 @@ func TestInvokeResumeLandsAKilledRunsResults(t *testing.T) {
 	l := &Ledger{dir: first.Ledger, run: first.Run, backEnd: "provider"}
 	e := landedEntry("0.85", kb.FaultOverreach)
 	e.Started, e.Ended, e.Judged = "2026-10-20T10:01:00Z", "2026-10-20T10:01:05Z", judgedNow(t, root, claim)
-	if err := l.writeResult(0, resultRecord{Line: l.line(claim, e), Capture: captureRecord{Run: first.Run, identity: identityOf(claim)}}); err != nil {
+	if err := l.writeAnswerFile(0, answerFile{Line: l.line(claim, e), Capture: captureRecord{Run: first.Run, identity: identityOf(claim)}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -387,7 +387,7 @@ func TestInvokeResumeAsksAgainAnItemWhoseTextChanged(t *testing.T) {
 	l := &Ledger{dir: first.Ledger, run: first.Run, backEnd: "provider"}
 	e := landedEntry("0.85", kb.FaultOverreach)
 	e.Started, e.Ended, e.Judged = "2026-10-20T10:01:00Z", "2026-10-20T10:01:05Z", judgedNow(t, root, claim)
-	if err := l.writeResult(0, resultRecord{Line: l.line(claim, e), Capture: captureRecord{Run: first.Run, identity: identityOf(claim)}}); err != nil {
+	if err := l.writeAnswerFile(0, answerFile{Line: l.line(claim, e), Capture: captureRecord{Run: first.Run, identity: identityOf(claim)}}); err != nil {
 		t.Fatal(err)
 	}
 	rewriteLeaf(t, root, "vol/a.md", "The claim's own paragraph.", "The claim's paragraph, edited by hand.")
@@ -432,7 +432,7 @@ func TestInvokeResumeAsksNothingOfARemovedItem(t *testing.T) {
 	l := &Ledger{dir: first.Ledger, run: first.Run, backEnd: "provider"}
 	e := landedEntry("0.85", kb.FaultOverreach)
 	e.Started, e.Ended, e.Judged = "2026-10-20T10:01:00Z", "2026-10-20T10:01:05Z", judgedNow(t, root, removed)
-	if err := l.writeResult(1, resultRecord{Line: l.line(removed, e), Capture: captureRecord{Run: first.Run, identity: identityOf(removed)}}); err != nil {
+	if err := l.writeAnswerFile(1, answerFile{Line: l.line(removed, e), Capture: captureRecord{Run: first.Run, identity: identityOf(removed)}}); err != nil {
 		t.Fatal(err)
 	}
 	if res := write.Run(write.RemoveNode, write.Options{KBRoot: root, Values: []byte(`{"entry": [{"id": "clm-bbbbbb"}]}`),
@@ -486,8 +486,8 @@ func TestARunWhoseOnlyUnfinishedItemWasRemovedIsNotResumable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Counts != (Counts{Total: 2, Done: 1, Skipped: 1}) || len(st.Failures) != 0 {
-		t.Errorf("the run reads counts %+v, failures %v; want failed 0, skipped 1 and no failure", st.Counts, st.Failures)
+	if st.Counts != (Counts{Total: 2, Done: 1, Skipped: 1}) || len(st.FailedItems) != 0 {
+		t.Errorf("the run reads counts %+v, failures %v; want failed 0, skipped 1 and no failure", st.Counts, st.FailedItems)
 	}
 	if _, err := ResumeTarget(state); err == nil || !strings.Contains(err.Error(), "finished") {
 		t.Errorf("ResumeTarget = %v, want the run refused as finished", err)
@@ -715,7 +715,7 @@ func TestInvokeResumeOfAFinishedRunAsksNothing(t *testing.T) {
 // and the report names the failed item with the reason its line recorded.
 func TestInvokeFailsAMalformedReplyAndGoesOn(t *testing.T) {
 	root, state := invokeKB(t), t.TempDir()
-	ask, _ := replying(t, "none", "about half", "none", "none")
+	ask, _ := replying(t, "none", "about half", "about half", "none", "none")
 	rep := invoked(t, invocation(t, root, state, query.PassRigor, false, ask))
 	if rep.Outcome != result.Failed {
 		t.Fatalf("the run with a malformed reply: outcome %s", rep.Outcome)

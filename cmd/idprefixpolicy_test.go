@@ -32,7 +32,7 @@ var idPrefixProse = map[string]int{
 // TestNoIDPrefixSpelledOutsideFormats: outside internal/formats, a node id is
 // composed and matched through kb's prefix constants and kb.IDBody, so no
 // production string literal spells a prefix. The formats tree is outside the
-// rule: format400 defines the prefixes, and a superseded format keeps its own.
+// rule: format40 defines the prefixes, and a superseded format keeps its own.
 func TestNoIDPrefixSpelledOutsideFormats(t *testing.T) {
 	fset := token.NewFileSet()
 	seen := map[string]int{}

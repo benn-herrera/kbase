@@ -63,10 +63,10 @@ func readerLaunch(read MultichoiceReader) Launch {
 	}
 }
 
-// askGroup asks items as the one group of a batch launched over read, and
+// askGroup asks items as the one group of a wave launched over read, and
 // returns its record.
 func askGroup(read MultichoiceReader, group string, items []MultichoiceItem) (GroupRecord, error) {
-	b := NewBatch(context.Background(), readerLaunch(read))
+	b := NewWave(context.Background(), readerLaunch(read))
 	if err := b.AskGroup(Paragraph, group, items); err != nil {
 		_, err = b.Wait()
 		return GroupRecord{}, err
@@ -133,6 +133,46 @@ func TestAskGroupDecisionRules(t *testing.T) {
 	}
 }
 
+// TestResolveCorrectsOnlyARefusal: a first reply with no letter is re-asked
+// once — carrying the decision-correction text where the model refused, as
+// the identical question otherwise — and the re-ask's reply ends the item.
+func TestResolveCorrectsOnlyARefusal(t *testing.T) {
+	correction, err := DecisionCorrection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := MultichoiceQuestion{Kind: Paragraph, Group: "g", Item: "S1", State: "st", Offered: []string{"A", "B"}, Attempt: 1}
+	for _, tc := range []struct {
+		name  string
+		first Reply
+		want  string
+	}{
+		{"a refusal", Reply{Refused: true}, correction},
+		{"no answer", Reply{}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked []MultichoiceQuestion
+			read := func(_ context.Context, q MultichoiceQuestion) (Reply, error) {
+				asked = append(asked, q)
+				if len(asked) == 1 {
+					return tc.first, nil
+				}
+				return Reply{Refused: true}, nil
+			}
+			calls, err := resolve(context.Background(), read, first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(calls) != MaxAsks || len(asked) != MaxAsks {
+				t.Fatalf("%d calls, %d asks; want %d of each", len(calls), len(asked), MaxAsks)
+			}
+			if again := asked[1]; again.Correction != tc.want || again.Attempt != 2 || again.State != first.State || again.Item != first.Item {
+				t.Errorf("the re-ask = %+v, want attempt 2 of the same item and state, correction %q", again, tc.want)
+			}
+		})
+	}
+}
+
 func TestAskGroupStopsOnACallThatNeverCompletes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -153,11 +193,11 @@ func TestAskGroupStopsOnACallThatNeverCompletes(t *testing.T) {
 	}
 }
 
-// TestABatchReportsTheFailingItemNotACancelledSibling: an item whose call
-// fails while siblings are in flight stops the batch, and the batch reports
+// TestAWaveReportsTheFailingItemNotACancelledSibling: an item whose call
+// fails while siblings are in flight stops the wave, and the wave reports
 // that failure — not a sibling's error from the cancellation it caused, even
 // where the sibling stands earlier in the group.
-func TestABatchReportsTheFailingItemNotACancelledSibling(t *testing.T) {
+func TestAWaveReportsTheFailingItemNotACancelledSibling(t *testing.T) {
 	var inFlight sync.WaitGroup
 	inFlight.Add(2)
 	read := func(ctx context.Context, q MultichoiceQuestion) (Reply, error) {
@@ -175,7 +215,7 @@ func TestABatchReportsTheFailingItemNotACancelledSibling(t *testing.T) {
 	_, err := askGroup(read, "v/leaf.md", paragraphItems("S1", "S2", "S3", "S4"))
 	var incomplete IncompleteError
 	if !errors.As(err, &incomplete) || incomplete.Subject != "S3" {
-		t.Fatalf("the batch = %v, want S3's call that never completed", err)
+		t.Fatalf("the wave = %v, want S3's call that never completed", err)
 	}
 }
 
@@ -196,7 +236,7 @@ func TestAOneItemGroupDoesNotHoldUpTheNextGroup(t *testing.T) {
 			return Reply{}, IncompleteError{Subject: q.Item, Detail: "the second group never started while this ask was in flight"}
 		}
 	}
-	b := NewBatch(context.Background(), readerLaunch(read))
+	b := NewWave(context.Background(), readerLaunch(read))
 	for _, g := range []struct{ leaf, item string }{{"v/a.md", "S1"}, {"v/b.md", "S2"}} {
 		if err := b.AskGroup(Paragraph, g.leaf, paragraphItems(g.item)); err != nil {
 			break
@@ -213,7 +253,7 @@ func TestAOneItemGroupDoesNotHoldUpTheNextGroup(t *testing.T) {
 func TestWriteGroupRecordsIsOneFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), AskRecordsDir)
 	s := &scripted{replies: map[string][]string{"S1": {"A"}, "S2": {"B"}}}
-	b := NewBatch(context.Background(), readerLaunch(s.read))
+	b := NewWave(context.Background(), readerLaunch(s.read))
 	for _, g := range []struct{ leaf, item string }{{"v/b.md", "S1"}, {"v/a.md", "S2"}} {
 		if err := b.AskGroup(Paragraph, g.leaf, paragraphItems(g.item)); err != nil {
 			t.Fatal(err)
@@ -270,7 +310,7 @@ func TestWriteGroupRecordsIsOneFile(t *testing.T) {
 
 // serialLaunch is a Launch over read holding one item in flight: an item
 // launches once the one before it has returned, and not at all where the
-// batch stopped meanwhile.
+// wave stopped meanwhile.
 func serialLaunch(read MultichoiceReader) Launch {
 	token := make(chan struct{}, 1)
 	return func(ctx context.Context, wg *sync.WaitGroup, item func(MultichoiceReader) func(error)) error {
@@ -327,11 +367,11 @@ func (h *heard) stateOf(t *testing.T, item string) string {
 	return ""
 }
 
-// askedBatch is the one group of items, of kind, asked through a batch new
+// askedWave is the one group of items, of kind, asked through a wave newWave
 // makes over launch, and Wait's error.
-func askedBatch(t *testing.T, newBatch func(context.Context, Launch) *Batch, launch Launch, kind Kind, items []MultichoiceItem) (GroupRecord, error) {
+func askedWave(t *testing.T, newWave func(context.Context, Launch) *Wave, launch Launch, kind Kind, items []MultichoiceItem) (GroupRecord, error) {
 	t.Helper()
-	b := newBatch(context.Background(), launch)
+	b := newWave(context.Background(), launch)
 	_ = b.AskGroup(kind, "g", items) // a stop is Wait's to report
 	recs, err := b.Wait()
 	if len(recs) != 1 {
@@ -369,7 +409,7 @@ func itemsOf(t *testing.T, kind Kind) []MultichoiceItem {
 // leaf's inputs once, in the group's, and each paragraph's in its item's.
 func TestAGroupRecordsSharedInputsOnce(t *testing.T) {
 	h := &heard{}
-	rec, err := askedBatch(t, NewBatch, readerLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
+	rec, err := askedWave(t, NewWave, readerLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,13 +446,13 @@ func TestAskDigestCoversTheQuestionAndTheState(t *testing.T) {
 	}
 }
 
-// TestAStoppedBatchRecordsWhatItAsked: one item at a time, the second's call
-// never completing. A build's batch stops on it and records the first
+// TestAStoppedWaveRecordsWhatItAsked: one item at a time, the second's call
+// never completing. A build's wave stops on it and records the first
 // answered, the second failed with its inputs and digest and no call, and
 // the third, never launched, not at all.
-func TestAStoppedBatchRecordsWhatItAsked(t *testing.T) {
+func TestAStoppedWaveRecordsWhatItAsked(t *testing.T) {
 	h := &heard{scripted: scripted{replies: map[string][]string{"S1": {LetterClaim}, "S3": {LetterClaim}}}}
-	rec, err := askedBatch(t, NewBatch, serialLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
+	rec, err := askedWave(t, NewWave, serialLaunch(h.read), Paragraph, paragraphItems("S1", "S2", "S3"))
 	var incomplete IncompleteError
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("Wait = %v; want a stop", err)
@@ -439,7 +479,7 @@ func TestAStoppedBatchRecordsWhatItAsked(t *testing.T) {
 // completed.
 func TestAFailedReAskKeepsItsCompletedCall(t *testing.T) {
 	h := &heard{scripted: scripted{replies: map[string][]string{"S1": {"?"}}}}
-	rec, err := askedBatch(t, NewBatch, serialLaunch(h.read), Paragraph, paragraphItems("S1"))
+	rec, err := askedWave(t, NewWave, serialLaunch(h.read), Paragraph, paragraphItems("S1"))
 	var incomplete IncompleteError
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("Wait = %v, want the re-ask that never completed", err)
@@ -449,9 +489,9 @@ func TestAFailedReAskKeepsItsCompletedCall(t *testing.T) {
 	}
 }
 
-func TestAFinishedBatchRecordsEveryGroup(t *testing.T) {
+func TestAFinishedWaveRecordsEveryGroup(t *testing.T) {
 	read := (&scripted{replies: map[string][]string{"P1": {"A"}, "P3": {"A"}}}).read
-	b := NewBatch(context.Background(), readerLaunch(read))
+	b := NewWave(context.Background(), readerLaunch(read))
 	for _, g := range []struct {
 		leaf  string
 		items []MultichoiceItem

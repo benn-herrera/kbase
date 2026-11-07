@@ -54,9 +54,9 @@ func assertCite(t *testing.T, ct closedText, c Charge) {
 	if c.Offset < 0 || c.Offset > len(ct.text) || !strings.HasPrefix(ct.text[c.Offset:], c.Citation) {
 		t.Fatalf("the %s charge's offset %d does not hold its quote %q", c.ID, c.Offset, c.Citation)
 	}
-	site, why := ct.look(c.Lines)
-	if why != "" {
-		t.Fatalf("the %s charge records the lines %q: %s", c.ID, c.Lines, why)
+	site, fault := ct.look(c.Lines)
+	if fault != nil {
+		t.Fatalf("the %s charge records the lines %q: %s", c.ID, c.Lines, fault.why)
 	}
 	if site.citation != c.Citation || site.offset != c.Offset || site.end != c.Passage {
 		t.Errorf("the %s charge records %+v, and its lines resolve to %+v", c.ID, c, site)
@@ -233,8 +233,8 @@ func TestParseAnswerRefusesTheLabels(t *testing.T) {
 			if err == nil {
 				t.Fatalf("the charge recording %v was read, want the label refused", got.Faults)
 			}
-			if !strings.Contains(err.Error(), "names no line") || !strings.Contains(err.Error(), label) {
-				t.Errorf("the refusal %q does not refuse %q as naming no line", err, label)
+			if !strings.Contains(err.Error(), "names no line") || strings.Contains(err.Error(), label) {
+				t.Errorf("the refusal %q does not refuse %q as naming no line, or carries the field's text", err, label)
 			}
 		})
 	}
@@ -292,8 +292,10 @@ func TestParseAnswerRefusesMalformed(t *testing.T) {
 		table kb.FaultTable
 		reply string
 		want  []string
+		// absent is reply text the reason must not carry.
+		absent []string
 	}{
-		{name: "a decimal", text: rigor, table: kb.RigorStatement, reply: "0.75", want: []string{"number", "0.75"}},
+		{name: "a decimal", text: rigor, table: kb.RigorStatement, reply: "0.75", want: []string{"line 1", "number"}, absent: []string{"0.75"}},
 		{name: "the pending literal as a value", text: rigor, table: kb.RigorStatement, reply: kb.PendingLiteral, want: []string{"number"}},
 		{name: "a percentage", text: rigor, table: kb.RigorStatement, reply: "75%", want: []string{"number"}},
 		{name: "a whole number on its own", text: rigor, table: kb.RigorStatement, reply: "1",
@@ -306,13 +308,13 @@ func TestParseAnswerRefusesMalformed(t *testing.T) {
 		{name: "the other pass's id", text: rigor, table: kb.RigorStatement, reply: "flt-inapplicable: 1",
 			want: []string{kb.FaultInapplicable, "allowed:"}},
 		{name: "a line that is not a charge line", text: rigor, table: kb.RigorStatement, reply: "The text is fine.",
-			want: []string{"not a charge line", "The text is fine."}},
+			want: []string{"line 1", "not a charge line"}, absent: []string{"The text is fine."}},
 		{name: "an id with no field", text: rigor, table: kb.RigorStatement, reply: "flt-overreach",
 			want: []string{kb.FaultOverreach, "carries no line"}},
 		{name: "nothing after the colon", text: rigor, table: kb.RigorStatement, reply: "flt-overreach:",
 			want: []string{"carries no line", kb.FaultOverreach}},
 		{name: "words in the field", text: rigor, table: kb.RigorStatement, reply: "flt-overreach: the conclusion follows",
-			want: []string{kb.FaultOverreach, `"the conclusion follows"`, "names no line"}},
+			want: []string{"line 1", kb.FaultOverreach, "names no line"}, absent: []string{"the conclusion follows"}},
 		{name: "a line the call does not show", text: rigor, table: kb.RigorStatement, reply: "flt-overreach: 9",
 			want: []string{kb.FaultOverreach, "line 9 is not one the call shows"}},
 		{name: "a range the call does not show", text: rigor, table: kb.RigorStatement, reply: "flt-overreach: 2-9",
@@ -325,7 +327,7 @@ func TestParseAnswerRefusesMalformed(t *testing.T) {
 			reply: "flt-overreach: 3-2", want: []string{"runs backwards", "3-2"}},
 		{name: "the edge's note, which holds no number", text: bearing, table: kb.BearingFaults,
 			reply: "flt-transfer: a bridge neither text states",
-			want:  []string{"names no line", "a bridge neither text states"}},
+			want:  []string{"names no line"}, absent: []string{"a bridge neither text states"}},
 		{name: "a number the note's lines do not carry", text: bearing, table: kb.BearingFaults,
 			reply: "flt-transfer: 5", want: []string{"line 5 is not one the call shows"}},
 		{name: "none beside a charge", text: rigor, table: kb.RigorStatement, reply: "none\nflt-overreach: 1",
@@ -347,6 +349,11 @@ func TestParseAnswerRefusesMalformed(t *testing.T) {
 			for _, want := range c.want {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal %q does not name %q", err, want)
+				}
+			}
+			for _, text := range c.absent {
+				if strings.Contains(err.Error(), text) {
+					t.Errorf("the refusal %q carries the reply's text %q", err, text)
 				}
 			}
 		})

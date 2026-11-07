@@ -42,7 +42,7 @@ var relationSeries = func() *regexp.Regexp {
 // TestNoRelationSpelledOutsideKB: a relation is named through kb's constants,
 // and a list of relations is composed from them, never kept as prose. The
 // formats tree is outside the rule: it imports nothing of kbase outside
-// itself, and format400 is where the live format defines the relations.
+// itself, and format40 is where the live format defines the relations.
 func TestNoRelationSpelledOutsideKB(t *testing.T) {
 	fset := token.NewFileSet()
 	seen := map[string][]string{}

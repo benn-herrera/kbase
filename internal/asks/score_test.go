@@ -15,7 +15,7 @@ import (
 // ask that renders it, and the closed set it names.
 type scoreAsk struct {
 	name, template string
-	ask            func(string) (string, error)
+	ask            func(string, *Correction) (string, error)
 	table          kb.FaultTable
 }
 
@@ -54,7 +54,7 @@ func TestScoreAsksComposeFromTheOneSlotTheyFill(t *testing.T) {
 			}
 
 			body := "clm-aaaaaa — Theorem 1\n\n> The map has a unique fixed point."
-			got, err := c.ask(body)
+			got, err := c.ask(body, nil)
 			if err != nil {
 				t.Fatalf("composing from exactly the declared slots: %v", err)
 			}
@@ -87,7 +87,7 @@ func TestScoreAsksAreFixedAroundTheirSubject(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			fixed := func(body string) string {
 				t.Helper()
-				got, err := c.ask(body)
+				got, err := c.ask(body, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -122,34 +122,73 @@ func TestScoreAsksRefuseAMissingSlot(t *testing.T) {
 // judgement: an example's rate and threshold are what make underspecification
 // concrete. The set is exact, which is also what keeps one class from naming
 // another's ids: a statement id on a method's ask, or a method id on a
-// statement's, is a charge its own parse would refuse.
+// statement's, is a charge its own parse would refuse. Every re-ask is held to
+// the same — each refusal case, quoting a line and quoting none — its values
+// empty, so what is scanned is the correction's own text.
 func TestScoreAsksNameTheirClasssIDs(t *testing.T) {
 	tokenRE := regexp.MustCompile(`flt-[a-z0-9-]+`)
+	type named struct {
+		name string
+		c    *Correction
+	}
+	corrections := []named{{"first ask", nil}}
+	for _, rc := range refusalCases {
+		values, err := emptyValues(fragmentFile(refusalFragment(rc)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		corrections = append(corrections,
+			named{rc + "/unquoted", &Correction{Case: rc, Values: values}},
+			named{rc + "/quoted", &Correction{Case: rc, Values: values, Lines: []string{""}}})
+	}
 	for _, c := range scoreAsks() {
-		t.Run(c.name, func(t *testing.T) {
-			text, err := c.ask("")
-			if err != nil {
-				t.Fatal(err)
-			}
-			named := tokenRE.FindAllString(text, -1)
-			var set []string
-			for _, id := range named {
-				if !slices.Contains(set, id) {
-					set = append(set, id)
+		for _, corr := range corrections {
+			t.Run(c.name+"/"+corr.name, func(t *testing.T) {
+				text, err := c.ask("", corr.c)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			slices.Sort(set)
-			want := slices.Sorted(slices.Values(c.table.IDs()))
-			if !slices.Equal(set, want) {
-				t.Errorf("%s names %v, and its class accepts %v", c.template, set, want)
-			}
-			if read, hit := scoreJudgement(text); hit != "" {
-				t.Errorf("%s carries %q, read as %s: a template names no score, weight, maximum or band", c.template, hit, read)
-			}
-			if !strings.Contains(text, "`"+kb.ChargeNone+"`") {
-				t.Errorf("%s does not name the answer %s", c.template, kb.ChargeNone)
-			}
-		})
+				named := tokenRE.FindAllString(text, -1)
+				var set []string
+				for _, id := range named {
+					if !slices.Contains(set, id) {
+						set = append(set, id)
+					}
+				}
+				slices.Sort(set)
+				want := slices.Sorted(slices.Values(c.table.IDs()))
+				if !slices.Equal(set, want) {
+					t.Errorf("%s names %v, and its class accepts %v", c.template, set, want)
+				}
+				if read, hit := scoreJudgement(text); hit != "" {
+					t.Errorf("%s carries %q, read as %s: a template names no score, weight, maximum or band", c.template, hit, read)
+				}
+				if !strings.Contains(text, "`"+kb.ChargeNone+"`") {
+					t.Errorf("%s does not name the answer %s", c.template, kb.ChargeNone)
+				}
+			})
+		}
+	}
+}
+
+// TestRefusalCaseChoicesAreTheCaseConstants: the refusal-case slot offers one
+// fragment per exported case constant and nothing else, so a case the parse can
+// name always has text a re-ask can render.
+func TestRefusalCaseChoicesAreTheCaseConstants(t *testing.T) {
+	cases := []string{
+		RefusalEmptyReply, RefusalNoneBesideCharges, RefusalNotAChargeLine, RefusalBareNumber,
+		RefusalIDNotOffered, RefusalIDWithoutLine, RefusalFieldNamesNoLine, RefusalLineNotShown,
+		RefusalRangeBackwards, RefusalRangeCrossesParts, RefusalRangeCrossesGap, RefusalOverlappingRanges,
+	}
+	want := []string{""}
+	for _, c := range cases {
+		want = append(want, refusalFragment(c))
+	}
+	got := slices.Clone(alternativeSlots[refusalCase])
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the %s choices are %q, want the case constants' fragments %q", refusalCase, got, want)
 	}
 }
 

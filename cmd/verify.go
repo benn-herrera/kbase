@@ -67,8 +67,9 @@ nothing. Each fault is an item under "refusals", outcome refused:
   or no entry of a summary page (check: dead-link);
 - an id in a citation's link title, or a node id in prose, that no node
   carries (check: unknown-id);
-- a node id standing bare in prose, outside code, markers and citation link
-  titles (check: bare-id; remedy: add-citation with the id as "snippet");
+- a bare node id,
+  `+bareIDHelp("  ")+` (check: bare-id;
+  remedy: `+index.UpdateFormatRemedy+`, which cites it);
 - a frontmatter block on any document (check: frontmatter);
 - a KB in an older format (check: index-freshness; remedy:
   `+index.UpdateFormatRemedy+`);

@@ -1,76 +1,42 @@
 ### Provider commands
 
-`kbase models [--provider NAME] [--timeout DURATION]` lists the selected
-provider's model identifiers, sorted ascending, in its result document ([§7](../7-tool-result-contract-and-exit-codes/index.md); [page §3.7](../../../NEW_MCP_CLI_DESIGN/3-operations/3.7-setup-and-configuration/models.md)).
-Every input naming a provider — `--provider`, a model reference's provider part, `auth add` and
-`auth remove` — is folded to lowercase, and every output names it so ([page §2.7](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.7-provider-names.md)).
-`kbase configure-providers` and `kbase configure-models` write `providers.toml` and `config.toml` as
-[page §3.7](../../../NEW_MCP_CLI_DESIGN/3-operations/3.7-setup-and-configuration/configure-providers.md) and its [`configure-models`](../../../NEW_MCP_CLI_DESIGN/3-operations/3.7-setup-and-configuration/configure-models.md) leaf state, where they write as "The configure commands' write
-location" states, and under [§9.5](9.5-the-configure-commands-targeted-update-byte-preservation-contract.md). What the page leaves to this implementation:
+`models`, `configure-providers`, `configure-models` and `auth` read and write the configuration. `show-config` is defined in [§9.6](9.6-kbase-show-config/index.md) and `probe` in [§8](../8-maintenance-subcommands/probe.md). Each writes its result under [§7](../7-tool-result-contract-and-exit-codes/item.md). The inputs and outputs of all of them name a provider in lowercase ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)).
 
-- `configure-providers` refuses, `check: usage`: a write with no `--base-url`; a `--base-url`
-  carrying credentials (`user:key@` or `key@`), the `kbase auth add` pipe as its remedy,
-  its detail ending as a refused key's does ([§9](a-refused-key.md), "A refused key"), checked
-  before any other fault of it; a `--base-url` that is no absolute `http` or `https` URL; no
-  refusal of `--base-url` names any part of it. Also refused: an `--api` other than `anthropic` or `openai`, or a
-  `--decisions-flavor` other than `systemone` or `decisions`, each with those values as `allowed`;
-  and `--remove` beside an entry field. A provider name breaking the provider-name rule ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)) is
-  refused keyed `<provider>`. `--remove` of a provider the file holds no entry for is refused
-  `check: provider`, `path` that `providers.toml`, detail ``no provider `<name>` in <path>``, and
-  `kbase show-config` as the remedy.
-- `configure-providers` dials where the written entry has a key — stored, or read from the file
-  its `apiKeyFile` names — under a 30 s deadline, and gives the catalogue, sorted ascending, as
-  `models`. With no key, `next` is two commands: the `kbase auth add` pipe, the provider's name
-  filled in, then `kbase models --provider <name>`. Where the dial fails, `next` is one entry
-  naming the failure, then the `configure-providers` call for a wrong URL, the `kbase auth add`
-  pipe for a wrong key, and `kbase models --provider <name>`; where the stack written
-  into does not reload, one entry naming that and `kbase show-config`; where the written entry
-  does not load, one entry naming its fault's reason and `kbase show-config`.
-- `configure-providers --remove` gives `next` as page `configure-providers` "Result" states, where
-  neither the layer written nor a layer beneath it still holds the provider: one entry per role
-  whose reference names it, giving the role, the reference and the `configure-models` call,
-  carrying the removal's location flag, that replaces it; then, where a key file is stored under
-  the name, one entry giving `kbase auth remove <name>`, saying where the file does not open. With
-  nothing to list there is no `next`.
-- `configure-providers` and `configure-models` read only the stack they write into: a layer
-  outside it that fails the strict load does not stop them. Each reports every fault of that
-  stack as an item of `warnings`, as `kbase models` reports them — `configure-providers` on every
-  outcome from its write or removal on, `configure-models` on every outcome once the stack loads.
-- `configure-models` folds its provider part to lowercase ([page §2.7](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.7-provider-names.md)) and writes it so. It refuses a value that is no reference and a provider
-  the written layer's stack does not hold — the layer written and the layers beneath it: the
-  global layer beneath the repository one, nothing beneath any other — each keyed by its role's
-  flag, every one at once, before any dial. The latter's `path` is the written layer's
-  `providers.toml`, its remedy the `configure-providers <provider> --base-url <url>` call carrying
-  the location flag the call carried, then `kbase show-config`; a provider dropped from that stack
-  by a fault keeps the fault's reason, as "Provider selection" below states. A run naming no role
-  is a usage refusal. A catalogue that
-  cannot be listed is `failed`, nothing written; a model missing from its catalogue is an item
-  of `warnings`, its `key` the role's flag, and a line on stderr. `models` is the three roles the
-  written file holds, null where it holds none.
+**`kbase models [--provider NAME] [--timeout DURATION]`** lists the selected provider's model identifiers, sorted ascending, as `models`. The provider is selected as [Provider selection](provider-selection-is-the-catalogue-verbs-alone.md) states. `--timeout` bounds one request (default 30 s). `models` reports each configuration fault of the configuration it read as an item of `warnings` and as a line on stderr: `path` the file or directory the fault is against, `detail` what is wrong. A fault is a `providers.toml` entry dropped from the pool, a key file that is readable beyond its owner ([§9.4](9.4-key-file-permission-warning.md)) or cannot be read, a stored key file that does not open, or a store directory that exists and does not list ([The files are the one source of inference](the-files-are-the-one-source-of-inference.md)). `warnings` is `[]` where there are none, and is present on every outcome, refusals included. A provider that refuses the call's key is a failure with the remedy [A refused key](a-refused-key.md) states.
 
-`kbase show-config [--provider NAME]` reports how the configuration
-resolves and changes nothing ([§9.6](9.6-kbase-show-config/index.md)). `kbase probe [--model REF] [--decision | --text | --scoring]
-[--prompt TEXT] [--timeout DURATION]`, also the `probe` tool, asks one selection — a role flag's
-role, else the `scoring` role, or the reference `--model` names — one question and reports the
-call, reading no KB and writing no state ([§8](../8-maintenance-subcommands/probe.md)). Each writes its result under [§7](../7-tool-result-contract-and-exit-codes/index.md).
+**`kbase configure-providers <provider> --base-url URL [--api anthropic|openai] [--decision-api systemone|decisions]`** writes a provider's table in `providers.toml`, creating the file where it is absent: it creates the table or sets the fields given. A run whose fields already have the values given writes nothing and is `unchanged`. **`kbase configure-providers <provider> --remove`** removes the provider's table. `--layer` chooses the layer written ([The configure commands' write location](the-configure-commands-write-location.md)). Keys never pass through the command, and no command takes a key file's path: an entry's `apiKeyFile` is read from `providers.toml` and written by no command. Its result is `provider`, `layer`, `written`, `models`, `next` and `warnings`.
 
-`kbase auth add <provider>` stores the API key piped on its stdin for `<provider>`, a
-`providers.toml` entry name, replacing any key stored for it: one file per provider,
-`$XDG_STATE_HOME/kbase/auth/<provider>-key.enc` (`~/.local/state` where the variable is unset or not an absolute path),
-the file named for `<provider>` in lowercase, each file encrypted under an encryption key derived
-for the OS user — obfuscation against a reader of the file, not a boundary against that user — and
-readable by its owner alone. `add` reads the configuration as the provider verbs do, and a
-configuration that does not load refuses as it does for them; a name, folded to lowercase, that no
-`providers.toml` entry carries — in the pool or dropped from it by a fault — is refused,
-`check: usage`, `key` the folded name, detail ``no provider `<name>` in providers.toml (names match in any case)``, `remedy: kbase show-config`. The key arrives on stdin and
-no other way: stdin that is a terminal is refused, as is input of more than 65536 bytes, input that
-is empty once surrounding whitespace is trimmed, and a key that, so trimmed, still holds a
-whitespace or control character, each `check: usage`, naming no part of the input, with the piped
-form, the provider's name filled in, as its `remedy`. A refusal writes nothing, and the name refusals come before stdin is read. `kbase auth remove <provider>` clears the stored key; where none is stored it is refused
-([page §2.10](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.10-existence.md)), `check: usage`, `key` the folded name, detail ``no key stored for provider `<name>` ``,
-`remedy: kbase auth list`. `kbase auth list` names the providers with a stored key, in lowercase; neither reads the
-configuration, so a key file whose entry is gone is still removed. A name that breaks the
-provider-name rule ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)) is a usage refusal, `key` the name as given and the detail the rule,
-never the name; its `remedy` is `kbase show-config` on `add`, `kbase auth list` on `remove`. A
-refusal of the argument count names no argument given. No result names a stored key.
+- Refusals, `check: usage`:
+  - a write with no `--base-url`;
+  - a `--base-url` containing credentials (`user:key@` or `key@`), with the `kbase auth add` pipe as the remedy and a detail that ends as a refused key's does ([A refused key](a-refused-key.md)); this is checked before any other fault of the URL;
+  - a `--base-url` that is no absolute `http` or `https` URL;
+  - an `--api` other than `anthropic` or `openai`, or a `--decision-api` other than `systemone` or `decisions`, each with those values as `allowed`;
+  - `--remove` beside an entry field;
+  - a provider name that breaks the provider-name rule ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)), keyed `<provider>`.
+
+  No refusal of `--base-url` names any part of it.
+- `--remove` of a provider whose `providers.toml` has no entry is refused: `check: provider`, `path` that `providers.toml`, detail ``no provider `<name>` in <path>``, and `kbase show-config` as the remedy, which lists the entries that exist ([Idempotence](../8-maintenance-subcommands/write-batches/idempotence.md)).
+- Where the written entry has a key, stored or read from the file its `apiKeyFile` names, `configure-providers` sends a request to the provider under a 30 s deadline and gives the catalogue, sorted ascending, as `models`; this vets the connection. A failed request leaves the provider written, with the outcome `done`.
+- `next` lists the steps that follow, as commands formatted as the `remedy` rule in [§7](../7-tool-result-contract-and-exit-codes/item.md) states. It is absent where there are none.
+  - With no key, `next` is two commands: the `kbase auth add` pipe with the provider's name filled in, then `kbase models --provider <name>`.
+  - Where the request fails, `next` is one entry naming the failure, then the `configure-providers` call for a wrong URL, the `kbase auth add` pipe for a wrong key, and `kbase models --provider <name>`.
+  - Where the stack written into does not reload, `next` is one entry naming that and `kbase show-config`. Where the written entry does not load, it is one entry naming the fault's reason and `kbase show-config`. The written entry's own fault is both an item of `warnings` and, with its remedy, a step of `next`.
+  - After `--remove`, where neither the layer written nor a layer beneath it still contains the provider, `next` has one entry per role whose reference names it, giving the role, the reference and the `configure-models` call that replaces it, including the removal's `--layer`, where given; then, where a key file is stored under the name, one entry giving `kbase auth remove <name>`, saying where the file does not open.
+- It reads only the stack it writes into (the stack is defined under [The configure commands' write location](the-configure-commands-write-location.md)): a layer outside that stack that fails the strict load does not stop it. `warnings` lists every fault of the stack, as `models` reports them, on every outcome from its write or removal on; a refusal, or a write that fails, has none. `warnings` is `[]` where the stack does not reload after the write.
+
+**`kbase configure-models [--decision REF] [--text REF] [--scoring REF] [--timeout DURATION]`** assigns a model reference (`<provider>/<model>`, [§9.2](9.2-config-toml-the-choices/index.md)) to each role given in `config.toml`, creating the file where it is absent. At least one role is given: a run naming none is a usage refusal. The roles not given are unchanged. `--layer` chooses the layer written ([The configure commands' write location](the-configure-commands-write-location.md)). Its result is `models`, `written` and `warnings`.
+
+- It sends one request to each provider named, `--timeout` (default 30 s) bounding each, and checks each reference against that provider's catalogue. A catalogue that cannot be listed is `failed`, with nothing written. A model missing from its catalogue is a warning, not a failure, since catalogues rotate: an item of `warnings` with `key` the role's flag and `detail` naming the role, the model and the provider, and a line on stderr.
+- A reference's provider part is case-folded to lowercase and written so ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)).
+- It refuses, before any request, a value that is no reference, else a provider that the stack written into does not hold. Each item is keyed by its role's flag, and every offending role is listed at once. A provider refusal has `path` the written layer's `providers.toml`, and as its remedy the `configure-providers <provider> --base-url <url>` call including the `--layer` this call was given, then `kbase show-config`; a provider that a fault dropped from the stack keeps the fault's reason ([Provider selection](provider-selection-is-the-catalogue-verbs-alone.md)). A refusal writes nothing.
+- `models` is the three roles the written file contains, null for a role it does not set.
+- It reads only the stack it writes into: a layer outside it that fails the strict load does not stop it, and a stack that fails the strict load is `failed`, with no `warnings`. Once the stack loads, `warnings` lists every fault of the stack, as `models` reports them, then one item per catalogue miss, on every outcome; the list is `[]` where there are none.
+
+**`kbase auth add <provider>`** stores the API key piped on its stdin for `<provider>`, a `providers.toml` entry name, replacing any key stored for it. The store is one file per provider, `$XDG_STATE_HOME/kbase/auth/<provider>-key.enc` (`~/.local/state` where the variable is unset or not an absolute path), named for the provider in lowercase, encrypted under a key derived for the OS user (obfuscation against a reader of the file, not a boundary against that user), and readable by its owner alone. `auth` is CLI-only: no MCP tool accepts a key ([§11](../11-the-mcp-server/served-text.md)).
+
+- `add` reads the configuration as the provider commands do, and a configuration that does not load refuses it as it does for them. A name, case-folded to lowercase, that no `providers.toml` entry has, in the pool or dropped from it by a fault, is refused: `check: usage`, `key` the folded name, detail ``no provider `<name>` in providers.toml (names match in any case)``, `remedy: kbase show-config`.
+- The key arrives on stdin and no other way. Each of the following is refused, `check: usage`, naming no part of the input, with the piped form (the provider's name filled in) as its `remedy`: stdin that is a terminal; input of more than 65536 bytes; input that is empty once surrounding whitespace is trimmed; a key that, so trimmed, still contains a whitespace or control character. The name refusals come before stdin is read, and a refusal writes nothing.
+- A name that breaks the provider-name rule ([§9.1](9.1-providers-toml-the-endpoint-pool/index.md)) is a usage refusal, `key` the name as given and the detail the rule, never the name; its `remedy` is `kbase show-config` on `add` and `kbase auth list` on `remove`. A refusal of the argument count names no argument given.
+
+**`kbase auth remove <provider>`** clears the stored key. Where none is stored it is refused ([Idempotence](../8-maintenance-subcommands/write-batches/idempotence.md)): `check: usage`, `key` the folded name, detail ``no key stored for provider `<name>` ``, `remedy: kbase auth list`. **`kbase auth list`** names the providers with a stored key, in lowercase, as `providers`. `remove` and `list` do not read the configuration, so a key file whose entry is gone is still removed. No result names a stored key.
 

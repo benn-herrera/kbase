@@ -20,14 +20,15 @@ func waitCommand() *cobra.Command {
 	var pid int
 	cmd := &cobra.Command{
 		Use:   "wait",
-		Short: "wait for a build or score run to end, then report the store's status",
+		Short: "wait for a build or score run to end and print its final result",
 		Long: `wait reads the state store once a second and returns when the run whose pid
 --pid names, a build or a score run, is no longer progressing:
 another run has superseded it, or its own run has ended. It then prints the
-status document for that store, so a command running in the background
-delivers the run's outcome when it exits. --pid is required and must be
-positive; --state-dir defaults as status's. It takes no lock and reads no
-commit trail until that final document.`,
+run's final result: for a build, what kbase status reports for that store;
+for a score run, the stored result the run wrote. That way a command running
+in the background delivers the run's outcome when it exits. --pid is required
+and must be positive; --state-dir defaults as status's. It takes no lock and
+reads no commit trail until it prints that result.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			emit := func(outcome string, fields []toolresult.Field) error {
@@ -54,11 +55,11 @@ commit trail until that final document.`,
 				return emit(outcome, fields)
 			}
 			// The run removes the operation lock when it ends, so the final
-			// document reads the store located here rather than resolving again.
+			// result reads the store located here rather than resolving again.
 			opts.StateDir = dir
 			placement := []toolresult.Field{{Key: "kb-root", Value: kbRoot}, {Key: "state-dir", Value: dir}}
 			// A score run's pid is recorded in its run directory; where the pid
-			// names one, wait polls that run and reports the document it wrote.
+			// names one, wait polls that run and reports the stored result it wrote.
 			_, err = score.RunByPID(dir, pid)
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return emit(failed(placement, err))
@@ -68,7 +69,7 @@ commit trail until that final document.`,
 				if err != nil {
 					return emit(failed(placement, err))
 				}
-				if err := toolresult.Reemit(documentOut(cmd.OutOrStdout()), []byte(doc)); err != nil {
+				if err := toolresult.Reemit(resultOut(cmd.OutOrStdout()), []byte(doc)); err != nil {
 					return err
 				}
 				if code != 0 {

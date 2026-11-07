@@ -294,7 +294,7 @@ func (b *recordBatch) moveMarker(document, id string, line, end int) error {
 const nearbyLimit = 5
 
 // nodeExists refuses an add of a node that stands, naming it.
-func nodeExists(key, id string) error {
+func nodeExists(key, id string) result.Refusal {
 	return result.Refusal{{Key: key, Detail: "node exists: " + id,
 		Remedy: fmt.Sprintf("%s stands with this %s: where it is the node you meant, drop this entry and use %s wherever you would have "+
 			"named the node it adds (%s reads it); where you meant a different node, give a %s no node of its kind carries; then re-run",
@@ -377,58 +377,87 @@ func joinInts(ns []int) string {
 	return strings.Join(out, ", ")
 }
 
-// addHosted adds a claim, an analysis or an experiment: refused where held, the
-// id of the node of its kind carrying its title, is not "", or where its named
-// line is refused; otherwise it mints an id of prefix, writes the record
-// through add, and places the statement marker at the end of the named line,
-// re-pointing every link into a summary entry the new one shifts
-// (keepSummaryLinks).
-func (b *recordBatch) addHosted(e entry, prefix, held string, add func(id string)) error {
-	if held != "" {
-		return nodeExists("title", held)
+// standing is the node of kind an add of label and title finds standing — the
+// one carrying label, else the one carrying title — and the key that found
+// it; held is "" where none stands. An add of a kind without labels passes
+// label "".
+func (b *recordBatch) standing(kind, label, title string) (held, key string) {
+	if label != "" {
+		if held := b.labelHolder(kind, label); held != "" {
+			return held, "label"
+		}
+	}
+	return b.titleHolder(kind, title), "title"
+}
+
+// addOver runs add over held, the node standing with its key, reporting held
+// as the add's id: add writes over held's record, and the entry is refused
+// node exists unless it moves no byte (addedOver).
+func (b *recordBatch) addOver(key, held string, add func() error) error {
+	b.report = entryReport{ID: held}
+	return addedOver(nodeExists(key, held), add())
+}
+
+// addHosted adds a claim, an analysis or an experiment, refused where its
+// named line is refused. Over held, the node of its kind carrying its title,
+// it writes held's record through writeRecord and its marker, and stands only
+// where they move no byte; otherwise it mints an id of prefix, writes the
+// record through writeRecord, and places the statement marker at the end of
+// the named line, re-pointing every link into a summary entry the new one
+// shifts (keepSummaryLinks).
+func (b *recordBatch) addHosted(e entry, prefix, kind string, writeRecord func(id string)) error {
+	place := func(id string) error {
+		writeRecord(id)
+		b.rigorSet(e, id)
+		return b.markAtLine(e.str("document"), e.count("line"), id)
+	}
+	if held, key := b.standing(kind, "", e.str("title")); held != "" {
+		return b.addOver(key, held, func() error {
+			if err := b.checkNamedLine(e); err != nil {
+				return err
+			}
+			return place(held)
+		})
 	}
 	if err := b.checkNamedLine(e); err != nil {
 		return err
 	}
-	return b.keepSummaryLinks("", e.str("title"), func() error {
-		id := b.mint(prefix)
-		add(id)
-		b.rigorSet(e, id)
-		return b.markAtLine(e.str("document"), e.count("line"), id)
-	})
+	return b.keepSummaryLinks("", e.str("title"), func() error { return place(b.mint(prefix)) })
 }
 
 func addClaim(b *recordBatch, e entry) error {
-	return b.addHosted(e, kb.ClaimPrefix, b.titleHolder(kb.NodeKindClaim, e.str("title")), func(id string) {
-		b.g.Claims = append(b.g.Claims, kb.ClaimNode{ID: id, Title: e.str("title"), Rigor: e.score("rigor"),
-			ManuallyScored: b.judged(e.has("rigor")), Rationale: e.str("rationale")})
+	return b.addHosted(e, kb.ClaimPrefix, kb.NodeKindClaim, func(id string) {
+		b.g.Claims = put(b.g.Claims, kb.ClaimNode{ID: id, Title: e.str("title"), Rigor: e.score("rigor"),
+			ManuallyScored: b.judged(e.has("rigor")), Rationale: e.str("rationale")}, func(n kb.ClaimNode) bool { return n.ID == id })
 	})
 }
 
 func addAnalysis(b *recordBatch, e entry) error {
-	return b.addHosted(e, kb.AnalysisPrefix, b.titleHolder(kb.NodeKindAnalysis, e.str("title")), func(id string) {
-		b.g.Analyses = append(b.g.Analyses, kb.AnalysisNode{ID: id, Title: e.str("title"), Rigor: e.score("rigor"),
-			ManuallyScored: b.judged(e.has("rigor")), Rationale: e.str("rationale")})
+	return b.addHosted(e, kb.AnalysisPrefix, kb.NodeKindAnalysis, func(id string) {
+		b.g.Analyses = put(b.g.Analyses, kb.AnalysisNode{ID: id, Title: e.str("title"), Rigor: e.score("rigor"),
+			ManuallyScored: b.judged(e.has("rigor")), Rationale: e.str("rationale")}, func(n kb.AnalysisNode) bool { return n.ID == id })
 	})
 }
 
 func addExperiment(b *recordBatch, e entry) error {
-	return b.addHosted(e, kb.ExperimentPrefix, b.titleHolder(kb.NodeKindExperiment, e.str("title")), func(id string) {
-		b.g.Experiments = append(b.g.Experiments, kb.ExperimentNode{ID: id, Title: e.str("title"), Status: e.str("status"),
-			Rigor: e.score("rigor"), ManuallyScored: b.judged(e.has("rigor"))})
+	return b.addHosted(e, kb.ExperimentPrefix, kb.NodeKindExperiment, func(id string) {
+		b.g.Experiments = put(b.g.Experiments, kb.ExperimentNode{ID: id, Title: e.str("title"), Status: e.str("status"),
+			Rigor: e.score("rigor"), ManuallyScored: b.judged(e.has("rigor"))}, func(n kb.ExperimentNode) bool { return n.ID == id })
 	})
 }
 
-// addWork mints a work's id and records it, refused where a work of that
-// label or that title stands, re-pointing every link into a summary entry the
-// new one shifts (keepSummaryLinks).
+// addWork mints a work's id and records it, re-pointing every link into a
+// summary entry the new one shifts (keepSummaryLinks). Over a work of its
+// label or its title it writes that work's record, and stands only where that
+// moves no byte.
 func addWork(b *recordBatch, e entry) error {
 	n := kb.WorkNode{Label: e.str("label"), Title: e.str("title"), Rigor: e.score("rigor"), Rationale: e.str("rationale")}
-	if held := b.labelHolder(kb.NodeKindWork, n.Label); held != "" {
-		return nodeExists("label", held)
-	}
-	if held := b.titleHolder(kb.NodeKindWork, n.Title); held != "" {
-		return nodeExists("title", held)
+	if held, key := b.standing(kb.NodeKindWork, n.Label, n.Title); held != "" {
+		return b.addOver(key, held, func() error {
+			n.ID = held
+			b.g.Works = put(b.g.Works, n, func(w kb.WorkNode) bool { return w.ID == held })
+			return nil
+		})
 	}
 	return b.keepSummaryLinks("", n.Title, func() error {
 		n.ID = b.mint(kb.WorkPrefix)
@@ -444,24 +473,31 @@ const (
 	axiomHeadingAppended = "appended"
 )
 
-// addAxiom mints an axiom's id and records it, refused where an axiom of that
-// label or that title stands, and gives it its marked heading in axioms.md:
-// the one unmarked heading of its text takes its marker, and where none
-// stands the heading is appended. More than one unmarked heading of its text
-// is refused, naming their lines.
+// addAxiom mints an axiom's id and records it, and gives it its marked
+// heading in axioms.md: the one unmarked heading of its text takes its
+// marker, and where none stands the heading is appended. More than one
+// unmarked heading of its text is refused, naming their lines. Over an axiom
+// of its label or its title it writes that axiom's record, and stands only
+// where that moves no byte and a heading of its text carries that axiom's
+// marker, reported marked.
 func addAxiom(b *recordBatch, e entry) error {
 	n := kb.AxiomNode{Label: e.str("label"), Title: e.str("title")}
-	if held := b.labelHolder(kb.NodeKindAxiom, n.Label); held != "" {
-		return nodeExists("label", held)
-	}
-	if held := b.titleHolder(kb.NodeKindAxiom, n.Title); held != "" {
-		return nodeExists("title", held)
-	}
 	l, err := b.axiomsDocument()
 	if err != nil {
 		return err
 	}
 	text := kb.AxiomHeadingText(n.Label, n.Title)
+	if held, key := b.standing(kb.NodeKindAxiom, n.Label, n.Title); held != "" {
+		return b.addOver(key, held, func() error {
+			if !slices.ContainsFunc(kb.AxiomHeadings(l.text), func(h kb.AxiomHeading) bool { return h.ID == held && h.Text == text }) {
+				return nodeExists(key, held)
+			}
+			n.ID = held
+			b.g.Axioms = put(b.g.Axioms, n, func(a kb.AxiomNode) bool { return a.ID == held })
+			b.report.Heading = axiomHeadingMarked
+			return nil
+		})
+	}
 	var unmarked []int
 	for _, h := range kb.AxiomHeadings(l.text) {
 		if h.ID == "" && h.Text == text {

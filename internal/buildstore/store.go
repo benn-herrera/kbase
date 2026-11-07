@@ -56,7 +56,7 @@ const (
 	KindScore Kind = "score"
 )
 
-// Noun is the run as a refusal and a document name it: "a build", "a score
+// Noun is the run as a refusal and a result name it: "a build", "a score
 // run".
 func (k Kind) Noun() string {
 	if k == KindScore {

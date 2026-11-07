@@ -29,7 +29,7 @@ var diskFileOwners = map[string]string{
 var fileOpenOwners = map[string]string{
 	"internal/kb/source.go":                   "the KB source: every read of a KB file",
 	"internal/kbload/kbload.go":               "the loader: the stamp and the files a migration converts",
-	"internal/atomicfile/atomicfile.go":       "the atomic writer's temporary file",
+	"internal/atomicfile/atomicfile.go":       "the atomic writer's temporary file, and the .gitignore of the directory it makes temporaries in",
 	"internal/docgraph/build.go":              "a volume root's LaTeX source",
 	"internal/docgraph/tree.go":               "a volume's image assets",
 	"internal/latex/pandoc/pandoc.go":         "the LaTeX files a volume root includes, walked to refuse one outside the volume's directory",
@@ -48,10 +48,10 @@ var fileOpenOwners = map[string]string{
 	"internal/buildstore/status.go":           "the operation lock, for the state store it names",
 	"internal/buildstore/storeformat.go":      "the state store's format stamp",
 	"internal/score/ledger.go":                "a scoring run's run.yaml and the lines its attempts appended, in the state store",
-	"cmd/write_op.go":                         "a write op's values document",
+	"cmd/write_op.go":                         "a write op's batch",
 	"internal/export/write.go":                "the export's gen-tex/: its manifest, each file's bytes and pandoc's outputs, compared so an unchanged file is not rewritten or reported, and the filter's findings; never the author's preamble.tex",
 	"internal/mcp/launch.go":                  "a detached build's or score run's captured output in the state store",
-	"internal/score/status.go":                "a scoring run's result document in the state store",
+	"internal/score/status.go":                "a scoring run's stored result in the state store",
 	"internal/auth/auth.go":                   "the credentials store's key files",
 }
 

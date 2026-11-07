@@ -26,7 +26,7 @@ import (
 // through ClientFuncs.
 type Client interface {
 	consultStream(ctx context.Context, req Request) (StreamReader, error)
-	decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error)
+	decision(ctx context.Context, r Retry, req DecisionRequest) (DecisionResponse, error)
 	sampling() Sampling
 	ListModels(ctx context.Context) ([]ModelInfo, error)
 }
@@ -75,7 +75,7 @@ type Endpoint struct {
 	// stays `chat/completions` under either surface, and Protocol is what
 	// selects chat.
 	//
-	// The configured `decisionsFlavor` value is resolved to this by the caller:
+	// The configured `decisionApi` value is resolved to this by the caller:
 	// this package knows the two wire shapes, and the configuration owns the
 	// vocabulary that names them, so no third comparison reads the string.
 	Decisions bool
@@ -322,7 +322,7 @@ func (u Usage) HasTelemetry() bool { return u.Telemetry != InferenceTelemetry{} 
 //
 // It is a typed error rather than a formatted string because the status is
 // the thing callers act on — a 429 means "later" and is worth retrying, a 400
-// means the request itself is wrong and will be just as wrong three times.
+// means the request itself is wrong and will be just as wrong every time.
 // Match with errors.As over a value target, as elsewhere in this codebase.
 //
 // The chat stream and the decision call both return it, because both go
@@ -331,6 +331,9 @@ func (u Usage) HasTelemetry() bool { return u.Telemetry != InferenceTelemetry{} 
 type StatusError struct {
 	Code int
 	Body string
+	// RetryAfter is the response's Retry-After header as sent, "" where it
+	// carried none.
+	RetryAfter string
 }
 
 func (e StatusError) Error() string { return fmt.Sprintf("http %d: %s", e.Code, e.Body) }

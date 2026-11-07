@@ -45,9 +45,9 @@ type Options struct {
 // asking is whether the stage puts its multichoice asks to a model.
 func (o Options) asking() bool { return o.Launch != nil }
 
-// batch is a new ask batch of the stage, launched through Launch.
-func (o Options) batch(ctx context.Context) *asks.Batch {
-	return asks.NewBatch(ctx, o.Launch)
+// wave is a new wave of the stage's calls, launched through Launch.
+func (o Options) wave(ctx context.Context) *asks.Wave {
+	return asks.NewWave(ctx, o.Launch)
 }
 
 // Progress hears a stage's units as they go; a nil func hears nothing.
@@ -99,7 +99,7 @@ func inferenceStop(incomplete asks.IncompleteError) *stop {
 	return &stop{check: "inference-failed", detail: incomplete.Error(), remedy: incomplete.Remedy}
 }
 
-// askStopWriting is askStop(err), the group records the stopped batch
+// askStopWriting is askStop(err), the group records the stopped wave
 // returned written to dir first. An error writing them rides on the stop as
 // its fault and never replaces it.
 func askStopWriting(dir string, records []asks.GroupRecord, err error) error {
@@ -116,7 +116,7 @@ func askStopWriting(dir string, records []asks.GroupRecord, err error) error {
 }
 
 // askTotals is a stage's multichoice asks in the zero form: wall-seconds sums its
-// calls' wall time, stage-wall-seconds is wall, the ask batch's elapsed time.
+// calls' wall time, stage-wall-seconds is wall, the wave's elapsed time.
 func askTotals(records []asks.GroupRecord, wall time.Duration) result.Record {
 	t := asks.Totals(records)
 	perCall := 0.0
@@ -177,7 +177,7 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 			group int
 		}
 		unread := map[string]leafAsks{}
-		batch, launched := opts.batch(ctx), 0
+		wave, launched := opts.wave(ctx), 0
 		for _, p := range paths {
 			if record.Leaves[p].State != ReadUnread {
 				continue
@@ -185,14 +185,14 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 			leaf := readLeaf(t.Documents[p], &inv)
 			a := leafAsks{leaf: leaf, asked: leaf.askedParagraphs(leaf.obligated(&inv)), group: -1}
 			if len(a.asked) > 0 {
-				if err := askLeaf(batch, leaf, a.asked); err != nil {
+				if err := askLeaf(wave, leaf, a.asked); err != nil {
 					break
 				}
 				a.group, launched = launched, launched+1
 			}
 			unread[p] = a
 		}
-		groups, err = batch.Wait()
+		groups, err = wave.Wait()
 		if err != nil {
 			return findings, askStopWriting(opts.AskRecords, groups, err)
 		}
@@ -253,7 +253,7 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 		}
 		minted := len(ids)
 		findings = append(findings,
-			fact("stage-C-asks", append(recordOf(field("leaves", len(groups))), askTotals(groups, batch.Elapsed())...)...),
+			fact("stage-C-asks", append(recordOf(field("leaves", len(groups))), askTotals(groups, wave.Elapsed())...)...),
 			fact("stage-C-defaulted", field("by-cause", counts(DefaultCauses, causes)), field("paragraphs", nonNilStrings(defaulted))))
 
 		after, err := readTree(opts.KBRoot)
@@ -287,14 +287,14 @@ func Discovered(ctx context.Context, opts Options) (Report, error) {
 	})
 }
 
-// askLeaf launches one leaf's paragraph asks into batch, as one group sharing
+// askLeaf launches one leaf's paragraph asks into wave, as one group sharing
 // its render.
-func askLeaf(batch *asks.Batch, leaf *leafReading, asked []askedParagraph) error {
+func askLeaf(wave *asks.Wave, leaf *leafReading, asked []askedParagraph) error {
 	items := make([]asks.ParagraphItem, len(asked))
 	for i, a := range asked {
 		items[i] = asks.ParagraphItem{Paragraph: a.name(), Text: a.labelled()}
 	}
-	return batch.AskGroup(asks.Paragraph, leaf.document, asks.ParagraphAsks(leaf.document, leaf.render.text, items))
+	return wave.AskGroup(asks.Paragraph, leaf.document, asks.ParagraphAsks(leaf.document, leaf.render.text, items))
 }
 
 // judgeLeaf is what one leaf's answered paragraph asks come to.

@@ -9,10 +9,6 @@ import (
 	"time"
 )
 
-// ChatAttempts is how many times one chat call is put on the wire,
-// identically, before a call that never completes is given up.
-const ChatAttempts = 3
-
 // How one request of a chat call ended.
 const (
 	// ChatOK is a stream that reached [DONE] — an empty reply, and one cut off
@@ -67,9 +63,9 @@ type ChatAttempt struct {
 // chat puts prompt to modelID under system as one tool-less chat request,
 // carrying the sampling c sends (Client.sampling) for c's protocol to map onto
 // its own fields — re-issued identically while it does not complete, up to
-// ChatAttempts, pausing before each re-issue for the next of backoff, its last
-// repeating; with no backoff it re-issues at once, and a pause the context's
-// deadline cannot cover ends the call at once with no further attempt. A provider that answered with a
+// r.Attempts, pausing before each re-issue as r.before does; a pause the
+// context's deadline cannot cover ends the call at once with no further
+// attempt. A provider that answered with a
 // status that is not success is re-issued only where the status is retryable
 // (retryableStatus): any other is the request itself being wrong, and the call
 // ends on the one attempt that met it, as does an answer cut off at the
@@ -77,7 +73,7 @@ type ChatAttempt struct {
 // attempt as it ends. It returns the completed attempt, or the last one with
 // an error wrapping ErrChatIncomplete; a cancelled ctx returns its error at
 // once.
-func chat(ctx context.Context, c Client, modelID, system, prompt string, backoff []time.Duration, observe func(ChatAttempt)) (ChatAttempt, error) {
+func chat(ctx context.Context, c Client, r Retry, modelID, system, prompt string, observe func(ChatAttempt)) (ChatAttempt, error) {
 	req := Request{
 		Model:    modelID,
 		Messages: []Message{{Role: "system", Content: system}, {Role: "user", Content: prompt}},
@@ -87,22 +83,14 @@ func chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 		last    ChatAttempt
 		failure error
 	)
-	for attempt := 1; attempt <= ChatAttempts; attempt++ {
-		if attempt > 1 && len(backoff) > 0 {
-			pause := backoff[min(attempt-2, len(backoff)-1)]
-			// A pause the deadline cannot cover leaves no attempt to spend it
-			// on: the wait would end the call on the deadline rather than on
-			// its attempts, so the call gives up now and says how many it
-			// made. A context with no deadline never refuses a pause.
-			if deadline, ok := ctx.Deadline(); ok && pause >= time.Until(deadline) {
-				return last, gaveUp(attempt-1, last, failure)
+	for attempt := 1; attempt <= r.Attempts; attempt++ {
+		if attempt > 1 {
+			fits, beyond, err := r.before(ctx, attempt, failure)
+			if err != nil {
+				return last, err
 			}
-			timer := time.NewTimer(pause)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return last, ctx.Err()
-			case <-timer.C:
+			if !fits {
+				return last, gaveUp(attemptCount(attempt-1)+beyond, last, failure)
 			}
 		}
 		last, failure = chatOnce(ctx, c, req)
@@ -118,27 +106,23 @@ func chat(ctx context.Context, c Client, modelID, system, prompt string, backoff
 		}
 		// An answer cut off before any text is cut off the same way again.
 		if last.Outcome == ChatTruncatedEmpty {
-			return last, gaveUp(attempt, last, failure)
+			return last, gaveUp(attemptCount(attempt), last, failure)
 		}
 		// A provider that read the request and declined it on a status that
 		// will not change will decline it again.
 		var se StatusError
 		if errors.As(failure, &se) && !retryableStatus(se.Code) {
-			return last, gaveUp(attempt, last, failure)
+			return last, gaveUp(attemptCount(attempt), last, failure)
 		}
 	}
-	return last, gaveUp(ChatAttempts, last, failure)
+	return last, gaveUp(attemptCount(r.Attempts), last, failure)
 }
 
-// gaveUp is a call none of whose attempts completed, said as one reason: how
-// many attempts it took, and how the last one ended. It wraps cause, the error
-// that ended the last attempt where one did, so a caller matches its
-// StatusError with errors.As; its text is last.Error.
-func gaveUp(attempts int, last ChatAttempt, cause error) error {
-	count := fmt.Sprintf("%d attempts", attempts)
-	if attempts == 1 {
-		count = "1 attempt"
-	}
+// gaveUp is a call none of whose attempts completed, said as one reason:
+// count, the attempts it took as attemptCount says them, and how the last one
+// ended. It wraps cause, the error that ended the last attempt where one did,
+// so a caller matches its StatusError with errors.As; its text is last.Error.
+func gaveUp(count string, last ChatAttempt, cause error) error {
 	if cause != nil {
 		return fmt.Errorf("%w: %s, the last ending %s: %w", ErrChatIncomplete, count, last.Outcome, cause)
 	}
@@ -146,6 +130,14 @@ func gaveUp(attempts int, last ChatAttempt, cause error) error {
 		return fmt.Errorf("%w: %s, the last ending %s: %s", ErrChatIncomplete, count, last.Outcome, last.Error)
 	}
 	return fmt.Errorf("%w: %s, the last ending %s", ErrChatIncomplete, count, last.Outcome)
+}
+
+// attemptCount is how many attempts a call made, said as a reason says it.
+func attemptCount(n int) string {
+	if n == 1 {
+		return "1 attempt"
+	}
+	return fmt.Sprintf("%d attempts", n)
 }
 
 // chatOnce is one request of the call and how it ended, with the error that

@@ -1,4 +1,4 @@
-### Design fixes the coordinator lands
+### Design fixes
 
 Where a line of an active plan's normative design page says less than the established answer of
 databases, graphs or command-line tools, for behaviour the page already has, the coordinator

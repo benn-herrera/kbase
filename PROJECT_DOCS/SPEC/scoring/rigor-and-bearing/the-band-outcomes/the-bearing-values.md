@@ -1,7 +1,7 @@
 ### The bearing values
 
 `bearing` reaches eleven values, every tenth, and no band of its own: it reaches the ladder only
-through a product in the walk.
+through a product in strength propagation.
 
 | charges | sum | bearing |
 |---|---|---|

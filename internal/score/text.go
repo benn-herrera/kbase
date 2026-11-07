@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kbase/internal/asks"
 	"kbase/internal/kb"
 )
 
@@ -395,49 +396,67 @@ type cite struct {
 	lo, hi   int
 }
 
+// lineFault is why a charge's line field names no lines the call shows: the
+// refusal case (an asks.Refusal… constant), the cited numbers that case names as
+// the reply wrote them — from alone for one number, both for a range — and the
+// reason's text.
+type lineFault struct {
+	refusal  string
+	from, to string
+	why      string
+}
+
 // look resolves field as a charge's line field against the text the call carried:
 // one number, or a range N-M with N at most M, every number one the call shows,
 // all of them in one passage and with nothing between them — a blank line, a label
-// or a heading ends a range. Where it names no such lines it returns the case,
-// which the caller's refusal names.
-func (ct closedText) look(field string) (cite, string) {
+// or a heading ends a range. Where it names no such lines it returns the fault,
+// which the caller's refusal names, and nil otherwise.
+func (ct closedText) look(field string) (cite, *lineFault) {
 	m := linesRE.FindStringSubmatch(field)
 	if m == nil {
-		return cite{}, fmt.Sprintf("field %q names no line: a charge names one line number or a range N-M", field)
+		return cite{}, &lineFault{refusal: asks.RefusalFieldNamesNoLine, why: "field names no line: a charge names one line number"}
+	}
+	// notShown names the number as the reply wrote it, and the reason as the
+	// parse read it: a number too long for an int is read as written.
+	notShown := func(written string, read any) (cite, *lineFault) {
+		return cite{}, &lineFault{refusal: asks.RefusalLineNotShown, from: written, why: fmt.Sprintf("line %v is not one the call shows", read)}
 	}
 	lo, err := strconv.Atoi(m[1])
 	if err != nil {
-		return cite{}, fmt.Sprintf("line %s is not one the call shows", m[1])
+		return notShown(m[1], m[1])
 	}
 	hi := lo
 	if m[2] != "" {
 		if hi, err = strconv.Atoi(m[2]); err != nil {
-			return cite{}, fmt.Sprintf("line %s is not one the call shows", m[2])
+			return notShown(m[2], m[2])
 		}
 	}
+	ranged := func(refusal, format string) (cite, *lineFault) {
+		return cite{}, &lineFault{refusal: refusal, from: m[1], to: m[2], why: fmt.Sprintf(format, lo, hi)}
+	}
 	if hi < lo {
-		return cite{}, fmt.Sprintf("range %d-%d runs backwards: a range is written N-M with N at most M", lo, hi)
+		return ranged(asks.RefusalRangeBackwards, "range %d-%d runs backwards: a charge names one line number")
 	}
 	i, ok := ct.at(lo)
 	if !ok {
-		return cite{}, fmt.Sprintf("line %d is not one the call shows", lo)
+		return notShown(m[1], lo)
 	}
 	j, ok := ct.at(hi)
 	if !ok {
-		return cite{}, fmt.Sprintf("line %d is not one the call shows", hi)
+		return notShown(m[2], hi)
 	}
 	first, last := ct.lines[i], ct.lines[j]
 	if first.end != last.end {
-		return cite{}, fmt.Sprintf("range %d-%d crosses from one passage to another", lo, hi)
+		return ranged(asks.RefusalRangeCrossesParts, "range %d-%d crosses from one passage to another")
 	}
 	if j-i != hi-lo || ct.crossesHeading(i, j) {
-		return cite{}, fmt.Sprintf("range %d-%d crosses a gap: a blank line, a label or a heading lies between its lines", lo, hi)
+		return ranged(asks.RefusalRangeCrossesGap, "range %d-%d crosses a gap: a blank line, a label or a heading lies between its lines")
 	}
 	lines := strconv.Itoa(lo)
 	if hi != lo {
 		lines += "-" + strconv.Itoa(hi)
 	}
-	return cite{end: first.end, lines: lines, citation: ct.text[first.from:last.to], offset: first.from, lo: lo, hi: hi}, ""
+	return cite{end: first.end, lines: lines, citation: ct.text[first.from:last.to], offset: first.from, lo: lo, hi: hi}, nil
 }
 
 // crossesHeading is whether a heading lies between the lines i and j, which ends

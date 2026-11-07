@@ -39,23 +39,30 @@ const (
 	// OpenAI-shaped one on the same base URL, whatever an entry's api.
 	ProviderAPIAnthropic = "anthropic"
 
-	// FlavorSystemOne is the decision surface kbase's multichoice asks have
+	// DecisionAPISystemOne is the decision API kbase's multichoice asks have
 	// always used: `POST <baseUrl>/systemone`, one question keyed by its
 	// own key, answers keyed the same way. The default for an entry that
-	// states no flavour.
-	FlavorSystemOne = "systemone"
+	// states no decisionApi.
+	DecisionAPISystemOne = "systemone"
 
-	// FlavorDecisions is the OpenAI Decisions surface: `POST
+	// DecisionAPIDecisions is the OpenAI Decisions API: `POST
 	// <baseUrl>/decisions`, questions an array of named questions and
 	// answers an array carrying each answer's name. It is a different wire
 	// shape for the same closed-set question, chosen per server.
-	FlavorDecisions = "decisions"
+	DecisionAPIDecisions = "decisions"
 
 	// keyFileExposedBits are the mode bits that make an apiKeyFile
 	// readable by an account other than its owner. A credential every
 	// local user can read has effectively already left the machine, which
 	// is worth saying out loud even though kbase still loads it.
 	keyFileExposedBits = 0o044
+)
+
+// ProviderAPIs is every chat protocol an entry's api names, and
+// DecisionAPIs every decision API its decisionApi names.
+var (
+	ProviderAPIs = []string{ProviderAPIAnthropic, ProviderAPIOpenAI}
+	DecisionAPIs = []string{DecisionAPISystemOne, DecisionAPIDecisions}
 )
 
 // ProviderNamePattern is what every providers.toml entry's name matches, and
@@ -91,11 +98,11 @@ type Provider struct {
 	// says.
 	API string `toml:"api"`
 
-	// DecisionsFlavor is which decision surface this endpoint's server
-	// speaks. Optional; empty means FlavorSystemOne. It names a wire
+	// DecisionAPI is which decision API this endpoint's server
+	// speaks. Optional; empty means DecisionAPISystemOne. It names a wire
 	// shape, never a model: the decision role's id stays in
 	// config.toml.
-	DecisionsFlavor string `toml:"decisionsFlavor"`
+	DecisionAPI string `toml:"decisionApi"`
 
 	// APIKeyFile is a path to a file holding the API key. Relative paths
 	// resolve against the providers.toml directory. It is the only key field
@@ -202,14 +209,14 @@ func (p Provider) Protocol() string {
 	return ProviderAPIAnthropic
 }
 
-// Flavor returns the normalized decision surface this entry's server speaks,
-// defaulting to FlavorSystemOne when unstated — an entry that says nothing is
-// a server kbase's multichoice asks already worked against.
-func (p Provider) Flavor() string {
-	if f := strings.ToLower(strings.TrimSpace(p.DecisionsFlavor)); f != "" {
+// EffectiveDecisionAPI returns the normalized decision API this entry's server
+// speaks, defaulting to DecisionAPISystemOne when unstated — an entry that
+// says nothing is a server kbase's multichoice asks already worked against.
+func (p Provider) EffectiveDecisionAPI() string {
+	if f := strings.ToLower(strings.TrimSpace(p.DecisionAPI)); f != "" {
 		return f
 	}
-	return FlavorSystemOne
+	return DecisionAPISystemOne
 }
 
 // Validate reports whether a pool entry is usable, checking the fields
@@ -221,7 +228,7 @@ func (p Provider) Flavor() string {
 // user gets a named reason instead of an endpoint that quietly went
 // missing from the selection list.
 //
-// Reasons quote the offending type/api/decisionsFlavor value — never a
+// Reasons quote the offending type/api/decisionApi value — never a
 // credential field, and never the baseUrl, which may carry one — so the
 // message identifies the typo it is complaining about.
 func (p Provider) Validate() error {
@@ -237,15 +244,13 @@ func (p Provider) Validate() error {
 	if kind := p.Kind(); kind != ProviderTypeInference {
 		return fmt.Errorf("unknown type %q (known types: %s)", p.Type, ProviderTypeInference)
 	}
-	if api := p.Protocol(); api != ProviderAPIOpenAI && api != ProviderAPIAnthropic {
-		return fmt.Errorf("api %q is not valid for a %s provider (known protocols: %s, %s)",
-			p.API, ProviderTypeInference, ProviderAPIOpenAI, ProviderAPIAnthropic)
+	if !slices.Contains(ProviderAPIs, p.Protocol()) {
+		return fmt.Errorf("api %q is not valid for a %s provider (known protocols: %s)",
+			p.API, ProviderTypeInference, strings.Join(ProviderAPIs, ", "))
 	}
-	switch p.Flavor() {
-	case FlavorSystemOne, FlavorDecisions:
-	default:
-		return fmt.Errorf("unknown decisionsFlavor %q (known surfaces: %s, %s)",
-			p.DecisionsFlavor, FlavorSystemOne, FlavorDecisions)
+	if !slices.Contains(DecisionAPIs, p.EffectiveDecisionAPI()) {
+		return fmt.Errorf("unknown decisionApi %q (known decision APIs: %s)",
+			p.DecisionAPI, strings.Join(DecisionAPIs, ", "))
 	}
 	return nil
 }

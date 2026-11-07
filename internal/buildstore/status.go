@@ -168,19 +168,24 @@ func (r storeReading) state() string {
 		return StateRunning
 	case r.last != nil:
 		end := r.last.End()
-		state := map[string]string{
-			result.Done: StateFinished, result.Unchanged: StateFinished, result.Bounded: StateBounded,
-			result.Cancelled: StateCancelled,
-		}[end.Outcome]
-		switch {
-		case end.Event == "":
+		if end.Event == "" {
 			return StateInterrupted
-		case state == "":
-			return StateFailed
 		}
-		return state
+		return StateOf(end.Outcome)
 	}
 	return StateNone
+}
+
+// StateOf is the state a run that ended with outcome reports: finished for
+// done and unchanged, bounded, cancelled, and failed for any other.
+func StateOf(outcome string) string {
+	if state, ok := map[string]string{
+		result.Done: StateFinished, result.Unchanged: StateFinished, result.Bounded: StateBounded,
+		result.Cancelled: StateCancelled,
+	}[outcome]; ok {
+		return state
+	}
+	return StateFailed
 }
 
 // pid is the run's process: the holder's while a run holds the store, else
@@ -336,7 +341,7 @@ func currentStage(s Stage, last Invocation) result.Record {
 			done, total = e.Done, e.Total
 		}
 	}
-	return result.Record{{Key: "stage", Value: s.ID}, {Key: "units-done", Value: done}, {Key: "units-total", Value: total}}
+	return result.Record{{Key: "stage", Value: s.ID}, {Key: "done", Value: done}, {Key: "total", Value: total}}
 }
 
 func recent(all []Invocation, items func(Invocation) []result.Item) []result.Item {
@@ -374,7 +379,7 @@ func Nullable[T comparable](v T) any {
 	return v
 }
 
-// RecordedCommand is a recorded invocation as a document carries it, the
+// RecordedCommand is a recorded invocation as a result carries it, the
 // marked call each surface spells — a kbase build command line at the command
 // line, the build tool's call over MCP — and whether it reads as a kbase build
 // invocation at all: a record naming another program was not written by
@@ -467,7 +472,7 @@ func OpenRepo(dir string, owned []string, lg log.Logger) (*gitledger.Repo, error
 
 // Locate is the kb-root and the state store a build started from
 // opts.WorkDir works in; outcome is "" there, else it and fields are the
-// document saying why there are none.
+// result saying why there are none.
 func Locate(opts MonitorOptions) (kbRoot, dir, outcome string, fields []result.Field) {
 	_, kbRoot, dir, err := opts.Open()
 	if err != nil {

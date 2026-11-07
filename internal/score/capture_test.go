@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/asks"
 	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
@@ -51,14 +52,13 @@ func rawLines(t *testing.T, path string) [][]byte {
 	return bytes.Split(bytes.TrimSuffix(b, []byte{'\n'}), []byte{'\n'})
 }
 
-// TestRunCapturesEveryCallItMakes: a landing, a parse refusal, a failed call and
-// a refused write each leave one capture, its keys in the record's order, its
+// TestRunCapturesEveryCallItMakes: a landing, a failed call and a refused write
+// each leave one capture, and a parse refusal one per call, its re-ask
+// included; the first call's capture has its keys in the record's order, its
 // reply what the seam returned and its error the attempt's reason; the
 // parse-refused capture carries the reply text that its ledger line does not.
 func TestRunCapturesEveryCallItMakes(t *testing.T) {
 	src, ix, set := runSet(t)
-	// Two lines, so the reason the parse gives — which quotes the line it
-	// refused — is not the reply whole.
 	const malformed = "0.5, roughly.\nThe paragraph is thin."
 	callErr := errors.New("the provider closed the connection")
 	writeErr := errors.New("the register changed under the write")
@@ -71,11 +71,12 @@ func TestRunCapturesEveryCallItMakes(t *testing.T) {
 		write     error
 		wantReply string
 		wantError string
+		calls     int
 	}{
-		{name: "a landing", reply: "none", wantReply: "none"},
-		{name: "a parse refusal", reply: malformed, wantReply: malformed, wantError: "no answer"},
-		{name: "a failed call", err: callErr, wantReply: "", wantError: callErr.Error()},
-		{name: "a refused write", reply: "none", write: writeErr, wantReply: "none", wantError: writeErr.Error()},
+		{name: "a landing", reply: "none", wantReply: "none", calls: 1},
+		{name: "a parse refusal", reply: malformed, wantReply: malformed, wantError: "no answer", calls: asks.MaxAsks},
+		{name: "a failed call", err: callErr, wantReply: "", wantError: callErr.Error(), calls: 1},
+		{name: "a refused write", reply: "none", write: writeErr, wantReply: "none", wantError: writeErr.Error(), calls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l := kept(t, t.TempDir())
@@ -86,8 +87,8 @@ func TestRunCapturesEveryCallItMakes(t *testing.T) {
 				t.Fatal(err)
 			}
 			captures := rawLines(t, filepath.Join(l.Dir(), capturesFile))
-			if len(captures) != 1 {
-				t.Fatalf("the run left %d captures, want one", len(captures))
+			if len(captures) != tc.calls {
+				t.Fatalf("the run left %d captures, want one per call, %d", len(captures), tc.calls)
 			}
 			want := slices.Clone(identityKeys)
 			if tc.wantError != "" {
@@ -112,8 +113,10 @@ func TestRunCapturesEveryCallItMakes(t *testing.T) {
 				t.Errorf("the capture's digest %q, class %q; want the line's %v, its prompt's digest, and %q",
 					rec.PromptSHA256, rec.Class, line["prompt_sha256"], methodClass.name)
 			}
-			if lineReply, _ := line["reply"].(string); tc.reply == malformed && strings.Contains(lineReply, malformed) {
-				t.Errorf("the parse-refused ledger line carries the reply text: %v", line)
+			for _, replyLine := range strings.Split(malformed, "\n") {
+				if lineReply, _ := line["reply"].(string); tc.reply == malformed && strings.Contains(lineReply, replyLine) {
+					t.Errorf("the parse-refused ledger line carries the reply text: %v", line)
+				}
 			}
 		})
 	}

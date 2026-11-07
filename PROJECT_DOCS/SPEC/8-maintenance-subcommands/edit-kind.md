@@ -1,34 +1,42 @@
 ### `edit-<kind>`
 
-`edit-claim`, `edit-analysis`, `edit-experiment`, `edit-work` and `edit-axiom` are [page §3.1](../../../NEW_MCP_CLI_DESIGN/3-operations/3.1-node-writes/edit-claim-edit-analysis-edit-experiment-edit-work-edit-axiom.md)'s
-node edits: the fields each kind's edit may change, at least one given, a title change or an
-axiom's label change keeping every link to the node live in the same write ([page §1.5](../../../NEW_MCP_CLI_DESIGN/1-model/1.5-citations.md)), a work's
-label change rewriting every reference that carries the old key as a key, the result's `id` and
-that label change's `rewritten`, and the refusals; `label` is checked as `add-work` and `add-axiom` check it ([§8](add-kind.md)). An edit
-whose every value already stands is `unchanged` ([page §2.10](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.10-existence.md)); the mark a `rigor` writes is
-[page §2.9](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.9-manually-scored-and-judged-hash.md)'s, and `title` and `rationale` take [page §2.2](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.2-write-batches.md)'s "Values" check. What this release adds to the
-page and holds:
+`edit-claim`, `edit-analysis`, `edit-experiment`, `edit-work` and `edit-axiom` change the fields of the node an entry's `id` names. A field given replaces that field's value whole; at least one is required.
 
-- An entry giving no field, and a field the kind does not carry, are each a shape refusal whose
-  `allowed` is the fields the kind's edit may change, neither `id` nor `operation` among them.
-- An `id` of another kind is refused at `id`, its remedy naming the edit op for that kind; an `id`
-  no node carries is refused `check: unknown-id` at `id`, `detail` `no node <id>`; a `title`
-  or a `label` another node of the kind carries is refused at that key, its `detail` naming that
-  node; a work `label` a citation span or a reference-list entry already uses as a key is refused
-  at `label`, one item per such line, each naming it by `path` and `line`.
-- An edit giving a `rigor` — `*pending*` included — on a claim, an analysis or an experiment
-  records the judged hash of the node's statement as the edit leaves it ([page §2.9](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.9-manually-scored-and-judged-hash.md)); a scoring run's
-  landing, which sets a number, records it the same way. An edit giving no `rigor` keeps the
-  record's `judged-hash` as it stands.
-- A link re-pointed is an inline link or a reference definition outside code, in any document but
-  the summary pages, which the edit does not rewrite: the derivation renders them. Where the edit
-  moves a summary entry's anchor — the node's own, or another entry's repeat suffix shifting with
-  it — every link into that entry is re-pointed too. A citation of the node whose destination resolves to the node's
-  link target before the change is pointed at the target after it, written relative to the citing
-  document. Any other link stands.
-- A work's label change reads citation spans, reference-list entries and links into them outside
-  code, a blockquote's prefixes read past, in every document but the summary pages.
-- A title under which a naming-form citation of the node would not read, whole, as one link — an
-  unbalanced `[` or `]` — is refused at `title`, naming the citing `path:line`.
-- `edit-axiom` rewrites every `axioms.md` heading carrying its marker, and appends its heading
-  where none stands, creating `axioms.md` where the file is absent.
+| Op | `id` (required) | Fields it may change |
+|---|---|---|
+| `edit-claim` | `clm-…` | `title`, `rigor`, `rationale` |
+| `edit-analysis` | `ana-…` | `title`, `rigor`, `rationale` |
+| `edit-experiment` | `exp-…` | `title`, `status`, `rigor` |
+| `edit-work` | `wrk-…` | `label`, `title`, `rigor`, `rationale` |
+| `edit-axiom` | `axm-…` | `label`, `title` |
+
+Fields take the domains of the adds ([§8](add-kind.md)). `label` is checked as `add-work` and `add-axiom` check it.
+
+**Result**: `id`; and on an `edit-work` entry that changes `label`, `rewritten`, each line it rewrote a reference on, `path` and `line`. An edit is `unchanged` where it changes no value, no `manually-scored` flag and no `judged-hash`.
+
+**Rigor.** The `manually-scored` flag and the `judged-hash` an edit writes are defined in [§10](../10-metadata-format-version/provenance-and-the-judged-hash.md). An edit given a `rigor` on a claim, an analysis or an experiment hashes the node's statement as the edit leaves it; an edit giving no `rigor` keeps the record's `judged-hash`.
+
+**Links stay live.** A title change, or an axiom's label change, keeps every link to the node live, in the same write:
+- `edit-axiom` rewrites every `axioms.md` heading that ends in its marker, keeping the marker, and appends its heading where none exists, creating `axioms.md` where the file is absent.
+- A citation of the node in the naming form ([§10](../10-metadata-format-version/citations.md)) gets the new title as its text. Any other link text is a quote or a paraphrase, the author's words, and stays.
+- Where the edit moves an anchor — a hosted node's, a work's or an axiom's heading or summary entry, or another entry's repeat suffix shifting with it — every link into the old anchor is updated to the new one. A link updated is an inline link or a reference definition outside code, in any document but the summary pages, which the edit does not rewrite: the rebuild of the derived views renders them. A citation of the node whose destination resolved to the node's link target before the change points at the target after it, written relative to the citing document. Any other link is unchanged.
+- Where a rewritten naming-form citation sits in a heading and moves an anchor — that heading's own, or a later same-text heading's `-1`, `-2` suffix — every link whose destination resolves to a moved heading, citation or not, is updated to its new anchor.
+
+An edit writes no document other than those the updates above reach.
+
+**A work's `label` change** rewrites, in the same write, every reference that has the old key as a key, so that none dangles and the export still finds the work's entry. It reads citation spans, reference-list entries and links into them outside code, a blockquote's prefixes read past, in every document but the summary pages:
+- each key token of each citation span's `data-cites` (`<span class="citation" data-cites="…">`, the imported LaTeX citations), and the span's text where it is the key-only rendering, the parenthesised key list;
+- each reference-list entry's `id="ref-<key>"`, and each link into `#ref-<key>`.
+
+kbase citations need no rewrite, since they name the node by id and the naming form's text is the title. Prose that mentions the key as words, such as a rationale, is the author's and stays.
+
+**Refusals**:
+- no field given, or a field the kind does not have: a shape refusal whose `allowed` is the fields the kind's edit may change, neither `id` nor `operation` among them;
+- an `id` of another kind: at `id`, the remedy naming the edit op for that kind;
+- an `id` no node has: `check: unknown-id` at `id`, `detail` `no node <id>`;
+- a `rigor` or `status` outside its domain; a prose value containing a line break ([Values input](write-batches/values-input.md));
+- a `title` or a `label` another node of the kind has: at that key, the `detail` naming that node;
+- a work `label` that is not a citation key ([§10](../10-metadata-format-version/five-node-types.md)): at `label`;
+- a work `label` a citation span or a reference-list entry already uses as a key, since the rewrite would merge two references into one: at `label`, one item per such line, each naming it by `path` and `line`;
+- a `title` under which a naming-form citation of the node would not parse, whole, as one link — an unbalanced `[` or `]` —: at `title`, naming the citing `path:line`.
+

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,7 +26,7 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// TestWriteInRefusesASymlink: a document that is a symbolic link is not
+// TestWriteInRefusesASymlink: a file that is a symbolic link is not
 // written through, and the file the link names keeps its bytes.
 func TestWriteInRefusesASymlink(t *testing.T) {
 	root := t.TempDir()
@@ -36,7 +37,7 @@ func TestWriteInRefusesASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := WriteIn(root, link, []byte("new\n"))
+	err := WriteIn(root, filepath.Join(root, "temp"), link, []byte("new\n"))
 	var refused *LinkError
 	if !errors.As(err, &refused) || !strings.Contains(refused.Detail, "symbolic link") || !strings.Contains(refused.Detail, link) {
 		t.Fatalf("WriteIn over a symlink = %v, want a link refusal naming %s", err, link)
@@ -46,7 +47,7 @@ func TestWriteInRefusesASymlink(t *testing.T) {
 	}
 }
 
-// TestWriteInRefusesATargetOutsideRoot: a document below a directory that is a
+// TestWriteInRefusesATargetOutsideRoot: a file below a directory that is a
 // symbolic link out of the tree is refused, and the file it would have
 // replaced keeps its bytes.
 func TestWriteInRefusesATargetOutsideRoot(t *testing.T) {
@@ -59,7 +60,7 @@ func TestWriteInRefusesATargetOutsideRoot(t *testing.T) {
 	}
 	path := filepath.Join(root, "sub", "claims.yaml")
 
-	err := WriteIn(root, path, []byte("new\n"))
+	err := WriteIn(root, filepath.Join(root, "temp"), path, []byte("new\n"))
 	var refused *LinkError
 	if !errors.As(err, &refused) || !strings.Contains(refused.Detail, "outside") || !strings.Contains(refused.Detail, path) {
 		t.Fatalf("WriteIn through a symlinked directory = %v, want a link refusal naming %s", err, path)
@@ -113,27 +114,64 @@ func TestWriteModeSetsTheModeExactly(t *testing.T) {
 	}
 }
 
-// TestWriteInReplacesAFileInsideRoot: a document that stays where it stands is
-// written, leaving no temp behind.
-func TestWriteInReplacesAFileInsideRoot(t *testing.T) {
+// names is the entry names of dir.
+func names(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+// TestWriteInMakesItsTempInTheTempDir: a file inside root is written
+// through a temp in the temp directory, which the write creates holding its
+// ignore file and nothing else once the write is done; nothing is left
+// beside the file.
+func TestWriteInMakesItsTempInTheTempDir(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, ".index", "claims.yaml")
+	path := filepath.Join(root, "volume", "claims.yaml")
 	if err := os.Mkdir(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, path, "old\n")
+	temp := filepath.Join(root, ".index", "kb-temp")
 
-	if err := WriteIn(root, path, []byte("new\n")); err != nil {
+	if err := WriteIn(root, temp, path, []byte("new\n")); err != nil {
 		t.Fatalf("WriteIn inside root: %v", err)
 	}
 	if got := readFile(t, path); got != "new\n" {
 		t.Errorf("%s = %q, want the written bytes", path, got)
 	}
-	entries, err := os.ReadDir(filepath.Dir(path))
-	if err != nil {
+	if got := names(t, filepath.Dir(path)); !slices.Equal(got, []string{"claims.yaml"}) {
+		t.Errorf("the file's directory holds %v, want only the file", got)
+	}
+	if got := names(t, temp); !slices.Equal(got, []string{ignoreFile}) {
+		t.Errorf("the temp directory holds %v, want only %s", got, ignoreFile)
+	}
+	if got := readFile(t, filepath.Join(temp, ignoreFile)); got != ignoreAll {
+		t.Errorf("%s = %q, want %q", ignoreFile, got, ignoreAll)
+	}
+}
+
+// TestWriteInRestoresTheIgnoreFile: an ignore file that no longer ignores
+// everything is rewritten before the write makes its temp beside it.
+func TestWriteInRestoresTheIgnoreFile(t *testing.T) {
+	root := t.TempDir()
+	temp := filepath.Join(root, "kb-temp")
+	if err := os.Mkdir(temp, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "claims.yaml" {
-		t.Errorf("the directory holds %v, want only the document", entries)
+	writeFile(t, filepath.Join(temp, ignoreFile), "!keep\n")
+
+	if err := WriteIn(root, temp, filepath.Join(root, "a.md"), []byte("new\n")); err != nil {
+		t.Fatalf("WriteIn: %v", err)
+	}
+	if got := readFile(t, filepath.Join(temp, ignoreFile)); got != ignoreAll {
+		t.Errorf("%s = %q, want it rewritten to %q", ignoreFile, got, ignoreAll)
 	}
 }

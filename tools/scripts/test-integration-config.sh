@@ -64,33 +64,33 @@ printf '%s\n' '[models]' 'decision = "file/fixture-decision"' 'text = "file/fixt
     > "${dirs}/both/config.toml"
 status=0
 fail() { printf '  fail: %s\n' "$*"; status=1; }
-# role_field <document> <role> <key>: one scalar of the roles entry the named
+# role_field <result> <role> <key>: one scalar of the roles entry the named
 # role is; the entry's first key sits on its "- role:" line, the rest below it.
 role_field() { awk -v r="$2" -v k="$3" '/^roles:/ { on = 1; next } on && /^    - role: / { cur = $0; sub(/^[^:]*: /, "", cur); gsub(/^"|"$/, "", cur); next } on && /^    / { if (cur == r && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1"; }
-# role_source <document> <role> <key>: the layer the document names for one
+# role_source <result> <role> <key>: the layer the result names for one
 # field of that role's sources record.
 role_source() { awk -v r="$2" -v k="$3" '/^roles:/ { on = 1; next } on && /^    - role: / { cur = $0; sub(/^[^:]*: /, "", cur); gsub(/^"|"$/, "", cur); next } on && /^    / { if (cur == r && index($0, k ": ") == 9) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1"; }
-# selection_field <document> <key>: one scalar of the selection record.
+# selection_field <result> <key>: one scalar of the selection record.
 selection_field() { awk -v k="$2" '/^selection:/ { on = 1; next } on && /^    / { if (index($0, k ": ") == 5) { sub(/^[^:]*: /, ""); gsub(/^"|"$/, ""); print; exit }; next } on { exit }' "$1"; }
-# item_field <document> <list> <key>: one scalar of an item under the named
+# item_field <result> <list> <key>: one scalar of an item under the named
 # list (refusals, failures); the item's first key sits on its "- " line, the
 # rest below it.
 item_field() { awk -v list="$2" -v k="$3" '$0 == list ":" { on = 1; next } on && /^    - / { line = "      " substr($0, 7); if (index(line, k ": ") == 7) { sub(/^[^:]*: /, "", line); gsub(/^"|"$/, "", line); print line; exit } next } on && /^      / { if (index($0, k ": ") == 7) { sub(/^[^:]*: /, ""); gsub(/^"|"$/, ""); print; exit }; next } on { exit }' "$1"; }
-# diagnostics <stem>: how many items the document's diagnostics list holds.
+# diagnostics <stem>: how many items the result's diagnostics list holds.
 diagnostics() { awk '/^diagnostics:/ { on = 1; next } on && /^    - / { n++ } END { print n + 0 }' "$1.out"; }
-# layers <stem>: how many layer entries the document reports.
+# layers <stem>: how many layer entries the result reports.
 layers() { awk '/^layers:/ { on = 1; next } on && /^    - / { n++; next } on && /^    / { next } on { exit } END { print n + 0 }' "$1.out"; }
 # layer_field <stem> <n> <key>: one scalar of the nth layer entry (1-based);
 # the entry's first key sits on its "- path:" line, the rest below it.
 layer_field() { awk -v n="$2" -v k="$3" '/^layers:/ { on = 1; next } on && /^    - / { i++; if (i == n && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit } next } on && /^    / { if (i == n && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1.out"; }
-# provider_names <stem>: the pool's entry names, in the order the document lists them.
+# provider_names <stem>: the pool's entry names, in the order the result lists them.
 provider_names() { awk '/^providers:/ { on = 1; next } on && /^    - name: / { n = $0; sub(/^[^:]*: /, "", n); gsub(/^"|"$/, "", n); printf "%s%s", sep, n; sep = ","; next } on && /^    / { next } on { exit }' "$1.out"; }
 # provider_field <stem> <name> <key>: one scalar of the providers entry called name.
 provider_field() { awk -v want="$2" -v k="$3" '/^providers:/ { on = 1; next } on && /^    - name: / { cur = $0; sub(/^[^:]*: /, "", cur); gsub(/^"|"$/, "", cur); next } on && /^    / { if (cur == want && index($0, k ": ") == 7) { sub(/^[^:]*: /, "", $0); gsub(/^"|"$/, "", $0); print; exit }; next } on { exit }' "$1.out"; }
-# report <stem> <ok> <label> [detail]: one leg that checks its document
+# report <stem> <ok> <label> [detail]: one leg that checks its result
 # itself — its config.tsv line, its console line, and the run's status. The
-# console line states the layer and diagnostic counts a show-config document
-# carries, or detail where the leg's document is not one.
+# console line states the layer and diagnostic counts a show-config result
+# carries, or detail where the leg's result is not one.
 report() {
     local verdict=pass
     [[ "$2" -eq 0 ]] || { verdict=fail; status=1; }
@@ -100,7 +100,7 @@ report() {
 }
 
 # run <state> <route> <diagnostics> <files> [args...]: one invocation
-# against the staged configuration named by state, its document checked for
+# against the staged configuration named by state, its result checked for
 # the outcome, the one layer it reads, that layer's source (the environment
 # for a route through KBASE_CONFIG_DIR, explicit for --config-dir), which of
 # its files stand (files: none, pool or both), the count of diagnostics, and
@@ -134,7 +134,7 @@ run() {
         both) want_exists=true; want_providers=true; want_config=true ;;
     esac
     [[ "${route}" == environment ]] && invocation="KBASE_CONFIG_DIR=${dir} ${invocation}"
-    got_source="$(layer_field "${stem}" 1 source)"
+    got_source="$(layer_field "${stem}" 1 layer)"
     got_count="$(diagnostics "${stem}")"
     [[ "$(cat "${stem}.exit")" -eq 0 ]] || ok=1
     grep -qx 'outcome: "done"' "${stem}.out" || ok=1
@@ -187,7 +187,7 @@ chmod 0600 "${layered}/home/.config/kbase/shared.key"
 printf '%s\n' '[models]' 'decision = "inherited/global-decision"' 'text = "inherited/global-text"' 'scoring = "inherited/global-scoring"' \
     > "${layered}/home/.config/kbase/config.toml"
 printf '%s\n' \
-    '[shared]' 'baseUrl = "http://shared.example/v2"' 'decisionsFlavor = "decisions"' \
+    '[shared]' 'baseUrl = "http://shared.example/v2"' 'decisionApi = "decisions"' \
     '' '[local]' 'baseUrl = "http://local.example/v1"' 'apiKeyFile = "local.key"' \
     > "${repo}/.kbase/providers.toml"
 printf '%s\n' "${file_key}-repo" > "${repo}/.kbase/local.key"
@@ -214,22 +214,22 @@ if grep -qF "${file_key}" "${layered_stem}.out"; then layered_ok=1; fi
 #     neither the apiKeyFile nor the key the global entry supplied came with
 #     it.
 [[ "$(provider_field "${layered_stem}" shared base-url)" == "http://shared.example/v2" ]] || layered_ok=1
-[[ "$(provider_field "${layered_stem}" shared key)" == "none" ]] || layered_ok=1
+[[ "$(provider_field "${layered_stem}" shared key-source)" == "none" ]] || layered_ok=1
 [[ -z "$(provider_field "${layered_stem}" shared key-file)" ]] || layered_ok=1
 # (b) Each entry states the decision surface it speaks: the repository's
 #     shared entry names one, and the local entry, silent, resolves to the
 #     systemone default.
-[[ "$(provider_field "${layered_stem}" shared decisions-flavor)" == "decisions" ]] || layered_ok=1
-[[ "$(provider_field "${layered_stem}" local decisions-flavor)" == "systemone" ]] || layered_ok=1
+[[ "$(provider_field "${layered_stem}" shared decision-api)" == "decisions" ]] || layered_ok=1
+[[ "$(provider_field "${layered_stem}" local decision-api)" == "systemone" ]] || layered_ok=1
 # (c) both layers in precedence order, each with what it holds.
 [[ "$(layers "${layered_stem}")" == 2 ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 1 path)" == "${repo}/.kbase" ]] || layered_ok=1
-[[ "$(layer_field "${layered_stem}" 1 source)" == "repository" ]] || layered_ok=1
+[[ "$(layer_field "${layered_stem}" 1 layer)" == "repository" ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 1 exists)" == true ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 1 providers-exists)" == true ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 1 config-exists)" == true ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 2 path)" == "${layered}/home/.config/kbase" ]] || layered_ok=1
-[[ "$(layer_field "${layered_stem}" 2 source)" == "global" ]] || layered_ok=1
+[[ "$(layer_field "${layered_stem}" 2 layer)" == "global" ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 2 exists)" == true ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 2 providers-exists)" == true ]] || layered_ok=1
 [[ "$(layer_field "${layered_stem}" 2 config-exists)" == true ]] || layered_ok=1
@@ -277,10 +277,10 @@ tilde_ok=0
 grep -qx 'outcome: "done"' "${tilde_stem}.out" || tilde_ok=1
 [[ "$(layers "${tilde_stem}")" == 1 ]] || tilde_ok=1
 [[ "$(layer_field "${tilde_stem}" 1 path)" == "${home_cfg}" ]] || tilde_ok=1
-[[ "$(layer_field "${tilde_stem}" 1 source)" == "explicit" ]] || tilde_ok=1
+[[ "$(layer_field "${tilde_stem}" 1 layer)" == "explicit" ]] || tilde_ok=1
 [[ "$(diagnostics "${tilde_stem}")" == 0 ]] || tilde_ok=1
 [[ "$(provider_field "${tilde_stem}" homekey usable)" == true ]] || tilde_ok=1
-[[ "$(provider_field "${tilde_stem}" homekey key)" == file ]] || tilde_ok=1
+[[ "$(provider_field "${tilde_stem}" homekey key-source)" == file ]] || tilde_ok=1
 [[ "$(provider_field "${tilde_stem}" homekey key-file)" == '~/keys/home.txt' ]] || tilde_ok=1
 if grep -qF "${file_key}" "${tilde_stem}.out"; then tilde_ok=1; fi
 report "${tilde_stem}" "${tilde_ok}" "show-config --config-dir '~/cfg'"
@@ -295,7 +295,7 @@ tilde_env_ok=0
 grep -qx 'outcome: "done"' "${tilde_env_stem}.out" || tilde_env_ok=1
 [[ "$(layers "${tilde_env_stem}")" == 1 ]] || tilde_env_ok=1
 [[ "$(layer_field "${tilde_env_stem}" 1 path)" == "${home_cfg}" ]] || tilde_env_ok=1
-[[ "$(layer_field "${tilde_env_stem}" 1 source)" == "environment" ]] || tilde_env_ok=1
+[[ "$(layer_field "${tilde_env_stem}" 1 layer)" == "environment" ]] || tilde_env_ok=1
 [[ "$(diagnostics "${tilde_env_stem}")" == 0 ]] || tilde_env_ok=1
 report "${tilde_env_stem}" "${tilde_env_ok}" "KBASE_CONFIG_DIR='~/cfg' show-config"
 # 8. ~ alone is the home directory: the layer is the staged home, holding
@@ -361,11 +361,11 @@ for home_value in "" "relative/home"; do
     grep -qx 'outcome: "done"' "${stem}.out" || ok=1
     [[ "$(layers "${stem}")" == 1 ]] || ok=1
     [[ "$(layer_field "${stem}" 1 path)" == '~/cfg' ]] || ok=1
-    [[ "$(layer_field "${stem}" 1 source)" == "explicit" ]] || ok=1
+    [[ "$(layer_field "${stem}" 1 layer)" == "explicit" ]] || ok=1
     [[ "$(layer_field "${stem}" 1 exists)" == false ]] || ok=1
     report "${stem}" "${ok}" "show-config --config-dir '~/cfg' with HOME='${home_value}'"
 done
-# 11. configure-providers --local in a repository writes <repo>/.kbase
+# 11. configure-providers --layer repository in a repository writes <repo>/.kbase
 #     whether or not it stands, creating providers.toml holding the entry
 #     written and no other. The name folds to lowercase. No key is stored, so
 #     nothing is dialled and next names the two steps that follow;
@@ -384,7 +384,7 @@ scrub=(-u KBASE_CONFIG_DIR "HOME=${chome}")
 unreachable='http://127.0.0.1:1/v1'
 create_stem="${docs}/15-configure-providers-local"
 set +e
-( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers Local --base-url "${unreachable}" --local ) > "${create_stem}.out" 2> "${create_stem}.log"
+( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers Local --base-url "${unreachable}" --layer repository ) > "${create_stem}.out" 2> "${create_stem}.log"
 printf '%s\n' "$?" > "${create_stem}.exit"
 set -e
 create_ok=0
@@ -401,7 +401,7 @@ grep -qx '\[local\]' "${crepo}/.kbase/providers.toml" || create_ok=1
 grep -qxF "baseUrl = \"${unreachable}\"" "${crepo}/.kbase/providers.toml" || create_ok=1
 # Nothing else is written: no config.toml, and no harnesses.toml.
 [[ ! -e "${crepo}/.kbase/config.toml" && ! -e "${crepo}/.kbase/harnesses.toml" ]] || create_ok=1
-report "${create_stem}" "${create_ok}" "configure-providers Local --local" "created ${crepo}/.kbase/providers.toml holding [local] alone, next steps named"
+report "${create_stem}" "${create_ok}" "configure-providers Local --layer repository" "created ${crepo}/.kbase/providers.toml holding [local] alone, next steps named"
 created_show="${docs}/16-configure-created-layer"
 set +e
 ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" show-config ) > "${created_show}.out" 2> "${created_show}.log"
@@ -411,12 +411,12 @@ created_show_ok=0
 [[ "$(cat "${created_show}.exit")" -eq 0 ]] || created_show_ok=1
 [[ "$(layers "${created_show}")" == 2 ]] || created_show_ok=1
 [[ "$(layer_field "${created_show}" 1 path)" == "${crepo}/.kbase" ]] || created_show_ok=1
-[[ "$(layer_field "${created_show}" 1 source)" == repository ]] || created_show_ok=1
+[[ "$(layer_field "${created_show}" 1 layer)" == repository ]] || created_show_ok=1
 [[ "$(layer_field "${created_show}" 1 exists)" == true ]] || created_show_ok=1
 [[ "$(layer_field "${created_show}" 1 providers-exists)" == true ]] || created_show_ok=1
 [[ "$(layer_field "${created_show}" 1 config-exists)" == false ]] || created_show_ok=1
 [[ "$(selection_field "${created_show}.out" provider)" == local ]] || created_show_ok=1
-[[ "$(selection_field "${created_show}.out" rule)" == sole-provider ]] || created_show_ok=1
+[[ "$(selection_field "${created_show}.out" provider-rule)" == sole-provider ]] || created_show_ok=1
 # No layer names a model, which is exactly the fresh-install diagnostic: one
 # item per role, naming models.<role>.
 [[ "$(diagnostics "${created_show}")" == 3 ]] || created_show_ok=1
@@ -438,14 +438,14 @@ if grep -qx 'outcome: "refused"' "${created_models}.out"; then created_models_ok
 report "${created_models}" "${created_models_ok}" "models over the created pool" "the sole entry local selected"
 again_stem="${docs}/18-configure-unchanged"
 set +e
-( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers local --base-url "${unreachable}" --local ) > "${again_stem}.out" 2> "${again_stem}.log"
+( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers local --base-url "${unreachable}" --layer repository ) > "${again_stem}.out" 2> "${again_stem}.log"
 printf '%s\n' "$?" > "${again_stem}.exit"
 set -e
 again_ok=0
 [[ "$(cat "${again_stem}.exit")" -eq 0 ]] || again_ok=1
 grep -qx 'outcome: "unchanged"' "${again_stem}.out" || again_ok=1
 grep -qx 'written: \[\]' "${again_stem}.out" || again_ok=1
-report "${again_stem}" "${again_ok}" "configure-providers local --local, second call" "the entry already holds what it would write"
+report "${again_stem}" "${again_ok}" "configure-providers local --layer repository, second call" "the entry already holds what it would write"
 # 32. A file a user left in the layer is theirs: a configure command adds
 #     nothing to it and removes nothing. The file here is the
 #     harnesses.toml an older kbase seeded: it is read by nothing, and the
@@ -455,7 +455,7 @@ printf '%s\n' '# mine' '' '[only-mine]' 'command = ["mine", "{prompt}"]' > "${us
 cp "${user_harnesses}" "${out}/harnesses-expected.toml"
 hseed_stem="${docs}/18b-configure-existing-file"
 set +e
-( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers local --base-url "${unreachable}" --local ) > "${hseed_stem}.out" 2> "${hseed_stem}.log"
+( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers local --base-url "${unreachable}" --layer repository ) > "${hseed_stem}.out" 2> "${hseed_stem}.log"
 printf '%s\n' "$?" > "${hseed_stem}.exit"
 set -e
 hseed_ok=0
@@ -463,7 +463,7 @@ hseed_ok=0
 grep -qx 'outcome: "unchanged"' "${hseed_stem}.out" || hseed_ok=1
 grep -qx 'written: \[\]' "${hseed_stem}.out" || hseed_ok=1
 cmp -s "${user_harnesses}" "${out}/harnesses-expected.toml" || hseed_ok=1
-report "${hseed_stem}" "${hseed_ok}" "configure-providers local --local over a leftover harnesses.toml" "nothing written and the leftover untouched"
+report "${hseed_stem}" "${hseed_ok}" "configure-providers local --layer repository over a leftover harnesses.toml" "nothing written and the leftover untouched"
 hshow_stem="${docs}/18c-harnesses-leftover"
 set +e
 ( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" show-config ) > "${hshow_stem}.out" 2> "${hshow_stem}.log"
@@ -480,14 +480,14 @@ report "${hshow_stem}" "${hshow_ok}" "show-config over a layer holding a leftove
 # 12. configure-models naming a provider the stack it writes into does not
 #     hold refuses before anything is dialled or written: the item is keyed by
 #     the role's flag and names the written layer's providers.toml — the
-#     repository's, under --local — by its absolute path, says the flag names
+#     repository's, under --layer repository — by its absolute path, says the flag names
 #     a provider no providers.toml this call reads holds, and gives the configure-providers
-#     call that adds it, carrying --local. The
+#     call that adds it, carrying --layer repository. The
 #     repository layer is unchanged and gains no config.toml.
 pool_before="$(cksum "${crepo}/.kbase/providers.toml")"
 unknown_stem="${docs}/19-configure-models-unknown-provider"
 set +e
-( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-models --local --decision NoSuch/d ) > "${unknown_stem}.out" 2> "${unknown_stem}.log"
+( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-models --layer repository --decision NoSuch/d ) > "${unknown_stem}.out" 2> "${unknown_stem}.log"
 printf '%s\n' "$?" > "${unknown_stem}.exit"
 set -e
 unknown_ok=0
@@ -497,17 +497,17 @@ grep -qx 'outcome: "refused"' "${unknown_stem}.out" || unknown_ok=1
 [[ "$(item_field "${unknown_stem}.out" refusals check)" == provider ]] || unknown_ok=1
 [[ "$(item_field "${unknown_stem}.out" refusals path)" == "${crepo}/.kbase/providers.toml" ]] || unknown_ok=1
 [[ "$(item_field "${unknown_stem}.out" refusals key)" == --decision ]] || unknown_ok=1
-[[ "$(item_field "${unknown_stem}.out" refusals remedy)" == '`kbase configure-providers nosuch --base-url <url> --local`; `kbase show-config` reports how the configuration resolves' ]] || unknown_ok=1
+[[ "$(item_field "${unknown_stem}.out" refusals remedy)" == '`kbase configure-providers nosuch --base-url <url> --layer repository`; `kbase show-config` reports how the configuration resolves' ]] || unknown_ok=1
 grep -qF 'names provider `nosuch`, which no providers.toml this call reads holds' "${unknown_stem}.out" || unknown_ok=1
 [[ "$(cksum "${crepo}/.kbase/providers.toml")" == "${pool_before}" ]] || unknown_ok=1
 [[ ! -e "${crepo}/.kbase/config.toml" ]] || unknown_ok=1
-report "${unknown_stem}" "${unknown_ok}" "configure-models --local --decision NoSuch/d" "refused against the absolute repository providers.toml, nothing written"
-# 13. --config-dir and --local name different directories, so together they
-#     are refused as usage, naming --local, and nothing is created.
+report "${unknown_stem}" "${unknown_ok}" "configure-models --layer repository --decision NoSuch/d" "refused against the absolute repository providers.toml, nothing written"
+# 13. --config-dir and --layer repository name different directories, so
+#     together they are refused as usage, naming --layer, and nothing is created.
 conflict="${cdir}/conflict"
 conflict_stem="${docs}/20-configure-conflict"
 set +e
-( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers lab --base-url "${unreachable}" --local \
+( cd "${crepo}/nested" && env "${scrub[@]}" "${kbase}" configure-providers lab --base-url "${unreachable}" --layer repository \
     --config-dir "${conflict}" ) > "${conflict_stem}.out" 2> "${conflict_stem}.log"
 printf '%s\n' "$?" > "${conflict_stem}.exit"
 set -e
@@ -515,10 +515,10 @@ conflict_ok=0
 [[ "$(cat "${conflict_stem}.exit")" -eq 1 ]] || conflict_ok=1
 grep -qx 'outcome: "refused"' "${conflict_stem}.out" || conflict_ok=1
 [[ "$(item_field "${conflict_stem}.out" refusals check)" == usage ]] || conflict_ok=1
-[[ "$(item_field "${conflict_stem}.out" refusals key)" == --local ]] || conflict_ok=1
+[[ "$(item_field "${conflict_stem}.out" refusals key)" == --layer ]] || conflict_ok=1
 [[ ! -e "${conflict}" ]] || conflict_ok=1
-report "${conflict_stem}" "${conflict_ok}" "configure-providers --local --config-dir" "refused naming --local, no directory created"
-# 14. With no location flag, --config-dir names the directory written: an
+report "${conflict_stem}" "${conflict_ok}" "configure-providers --layer repository --config-dir" "refused naming --layer, no directory created"
+# 14. Without --layer, --config-dir names the directory written: an
 #     empty one gains providers.toml holding the entry, layer explicit. And
 #     with neither --config-dir nor KBASE_CONFIG_DIR, the default is the
 #     global directory, even from inside a repository whose .kbase stands.
@@ -547,15 +547,15 @@ grep -qx 'layer: "global"' "${global_stem}.out" || global_ok=1
 grep -qx "    - \"${chome}/.config/kbase/providers.toml\"" "${global_stem}.out" || global_ok=1
 grep -qx '\[shared\]' "${chome}/.config/kbase/providers.toml" || global_ok=1
 [[ "$(cksum "${crepo}/.kbase/providers.toml")" == "${pool_before}" ]] || global_ok=1
-report "${global_stem}" "${global_ok}" "configure-providers shared, no location flag, inside the repository" "written into the global providers.toml"
-# 15. --local outside a worktree refuses, naming the start directory and
+report "${global_stem}" "${global_ok}" "configure-providers shared, without --layer, inside the repository" "written into the global providers.toml"
+# 15. --layer repository outside a worktree refuses, naming the start directory and
 #     the git init the tool does not run, and creates nothing. The run
 #     directory is a mktemp tree, somewhere under no repository at all — the
 #     project's own transient directory sits in one.
 outside="$(mktemp -d)"
 outside_stem="${docs}/22-configure-outside-worktree"
 set +e
-( cd "${outside}" && env "${scrub[@]}" "${kbase}" configure-models --local --decision local/d ) > "${outside_stem}.out" 2> "${outside_stem}.log"
+( cd "${outside}" && env "${scrub[@]}" "${kbase}" configure-models --layer repository --decision local/d ) > "${outside_stem}.out" 2> "${outside_stem}.log"
 printf '%s\n' "$?" > "${outside_stem}.exit"
 set -e
 outside_ok=0
@@ -566,7 +566,7 @@ grep -qx 'outcome: "refused"' "${outside_stem}.out" || outside_ok=1
 [[ "$(item_field "${outside_stem}.out" refusals remedy)" == "git init" ]] || outside_ok=1
 [[ ! -e "${outside}/.kbase" ]] || outside_ok=1
 rm -rf "${outside}"
-report "${outside_stem}" "${outside_ok}" "configure-models --local outside a worktree" "refused on worktree, nothing created"
+report "${outside_stem}" "${outside_ok}" "configure-models --layer repository outside a worktree" "refused on worktree, nothing created"
 # 16. configure-models over an entry whose catalogue cannot be listed fails,
 #     naming the provider's failure, and writes nothing: the config.toml it
 #     would edit is byte-identical afterwards. Then configure-providers
@@ -668,14 +668,14 @@ mcp_ok=0
 [[ -n "${call}" ]] || mcp_ok=1
 [[ "${call}" == *'"isError":false'* ]] || mcp_ok=1
 [[ "${call}" == *"\"path\":\"${dirs}/both\""* ]] || mcp_ok=1
-[[ "${call}" == *'"source":"environment"'* ]] || mcp_ok=1
+[[ "${call}" == *"\"layer\":\"environment\",\"path\":\"${dirs}/both\""* ]] || mcp_ok=1
 [[ "${call}" == *'"providers-exists":true'* ]] || mcp_ok=1
 [[ "${call}" == *'"config-exists":true'* ]] || mcp_ok=1
 [[ "$(grep -o '"check":"provider"' <<< "${call}" | wc -l | tr -d ' ')" == 2 ]] || mcp_ok=1
 printf 'tools/call show-config\t-\t%s\t%s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "${out}/mcp.actual.jsonl" >> "${out}/config.tsv"
 printf '  %s tools/call show-config over MCP: exit %s\n' "$([[ "${mcp_ok}" -eq 0 ]] && echo pass || echo fail)" "$(cat "${out}/mcp.exit")"
 [[ "${mcp_ok}" -eq 0 ]] || status=1
-OUT_DIR="${out}" RECIPE="test-integration-config" INVOCATION="three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env HOME=${CONFIG_OUT_DIR}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the source wanted, pass or fail, and its document; each checked for outcome done, exactly one layer naming the directory with its source and whether it and each of its two files stand, its diagnostic count, and that the key-file value appears nowhere on stdout; the both legs are checked further for the roles record: provider, model and the layer that supplied the model and the key\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key none, no key-file), both layers in precedence order with path, source, exists, providers-exists and config-exists, and each role's own provider, model, endpoint and the layer that supplied each field: repository for the decision role's entry and id, global for the text and scoring roles the repository left alone, whose entry names no key\nconfigure/: a staged git repository with an empty home, and the configuration legs run under it — KBASE_CONFIG_DIR unset, HOME on configure/home; every entry's base URL is http://127.0.0.1:1/v1, where nothing listens, and no key is stored. docs/15-configure-providers-local.out is configure-providers Local --base-url <it> --local from configure/repo/nested, checked for outcome done, provider local, layer repository, configure/repo/.kbase/providers.toml written holding [local] alone, next naming the auth add pipe and kbase models --provider local, no models key, and no config.toml or harnesses.toml created; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, source repository, exists and providers-exists true and config-exists false, selection local by sole-provider, and the three diagnostics no [models] value leaves (models.decision, models.text, models.scoring); docs/17-configure-models.out is models --timeout 300ms over that pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is configure-providers local --base-url <it> --local again, checked for unchanged with an empty written list; docs/18b-configure-existing-file.out and docs/18c-harnesses-leftover.out put back the harnesses.toml an older kbase seeded and check that the same call writes nothing over it and show-config reports the layer's two files and nothing of that one, a file nothing reads; docs/19-configure-models-unknown-provider.out is configure-models --local --decision NoSuch/d, checked for one provider refusal keyed --decision naming the absolute configure/repo/.kbase/providers.toml, a detail saying --decision names provider \`nosuch\`, which no providers.toml this call reads holds, the remedy kbase configure-providers nosuch --base-url <url> --local then show-config, the repository's providers.toml unchanged by cksum and no config.toml created; docs/20-configure-conflict.out is configure-providers lab --base-url <it> --local --config-dir <dir>, checked for one usage refusal keyed --local with no directory created; docs/21-configure-config-dir.out is configure-providers lab --base-url <it> --config-dir configure/flagdir, an empty directory, checked for layer explicit and providers.toml alone written there; docs/21b-configure-global-default.out is configure-providers shared --base-url <it> from configure/repo/nested with no location flag, checked for layer global, configure/home/.config/kbase/providers.toml written holding [shared], and the repository's providers.toml unchanged; docs/22-configure-outside-worktree.out is configure-models --local --decision local/d from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\ndocs/23-configure-models-failed-listing.out is configure-models --config-dir configure/flagdir --decision lab/d --timeout 300ms over a config.toml holding a comment and text = \"lab/kept\", checked for exit 3, failed, and the file byte-identical; docs/24-configure-providers-remove.out is configure-providers LAB --remove --config-dir configure/flagdir, checked for done and no table left, and docs/24-configure-providers-remove-again.out the same removal as lab, checked for exit 1 and one provider refusal naming flagdir/providers.toml, no provider \`lab\` and the remedy kbase show-config\nsampling/: three configuration directories, each read by one show-config --config-dir <dir> from work/ with HOME on home/: docs/25-sampling-openai.out over an openai entry whose config.toml states [sampling.text] temperature 0.3 and thinking low, checked for exit 0, done, no diagnostics, the text role's temperature 0.3 and thinking low each sourced explicit, and the scoring role's temperature null; docs/26-sampling-decision.out over a config.toml holding [sampling.decision] temperature 0.5, checked for exit 1, refused, and a refusal naming unknown key sampling.decision.temperature; docs/27-sampling-anthropic-range.out over an anthropic entry whose [sampling.text] states temperature 1.5, checked for exit 0, done, and exactly one diagnostic keyed sampling.text.temperature\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and source, both files present, and the same diagnostic count" \
+OUT_DIR="${out}" RECIPE="test-integration-config" INVOCATION="three staged configurations under configs/: absent (no directory), pool (providers.toml only) and both (the same providers.toml plus config.toml); the pool holds an entry that drops for want of a baseUrl, and one supplying its key from key.txt seeded mode 0644. home/ is the staged home directory every invocation runs under, left empty so a leg naming a directory reads that one layer only\nper invocation NN-<state>-<route>: from work/, a directory holding no KB, env HOME=${CONFIG_OUT_DIR}/home KBASE_CONFIG_DIR=<dir> ${kbase} show-config (route environment) or ${kbase} show-config --config-dir <dir> (route flag), stdout to docs/NN-<state>-<route>.out\nconfig.tsv: per invocation the arguments, the layer wanted, pass or fail, and its result; each checked for outcome done, exactly one layer naming the directory with its layer name and whether it and each of its two files stand, its diagnostic count, and that the key-file value appears nowhere on stdout; the both legs are checked further for the roles record: provider, model and the layer that supplied the model and the key\nlayered/: a staged git repository whose .kbase/providers.toml adds [local] and overrides the global [shared], and whose .kbase/config.toml overrides models.decision; layered/home/.config/kbase holds the global pool and config.toml. docs/08-layered.out is show-config run from layered/repo/nested with HOME=layered/home, checked for the merged pool in name order with each entry's layer, whole-entry replacement (shared's URL from the repository, key-source none, no key-file), both layers in precedence order with path, layer, exists, providers-exists and config-exists, and each role's own provider, model, endpoint and the layer that supplied each field: repository for the decision role's entry and id, global for the text and scoring roles the repository left alone, whose entry names no key\nconfigure/: a staged git repository with an empty home, and the configuration legs run under it — KBASE_CONFIG_DIR unset, HOME on configure/home; every entry's base URL is http://127.0.0.1:1/v1, where nothing listens, and no key is stored. docs/15-configure-providers-local.out is configure-providers Local --base-url <it> --layer repository from configure/repo/nested, checked for outcome done, provider local, layer repository, configure/repo/.kbase/providers.toml written holding [local] alone, next naming the auth add pipe and kbase models --provider local, no models key, and no config.toml or harnesses.toml created; docs/16-configure-created-layer.out is show-config over it, checked for two layers with the repository one first, layer repository, exists and providers-exists true and config-exists false, selection local by sole-provider, and the three diagnostics no [models] value leaves (models.decision, models.text, models.scoring); docs/17-configure-models.out is models --timeout 300ms over that pool, checked for provider local and no refusal, so the sole entry is what selected; docs/18-configure-unchanged.out is configure-providers local --base-url <it> --layer repository again, checked for unchanged with an empty written list; docs/18b-configure-existing-file.out and docs/18c-harnesses-leftover.out put back the harnesses.toml an older kbase seeded and check that the same call writes nothing over it and show-config reports the layer's two files and nothing of that one, a file nothing reads; docs/19-configure-models-unknown-provider.out is configure-models --layer repository --decision NoSuch/d, checked for one provider refusal keyed --decision naming the absolute configure/repo/.kbase/providers.toml, a detail saying --decision names provider \`nosuch\`, which no providers.toml this call reads holds, the remedy kbase configure-providers nosuch --base-url <url> --layer repository then show-config, the repository's providers.toml unchanged by cksum and no config.toml created; docs/20-configure-conflict.out is configure-providers lab --base-url <it> --layer repository --config-dir <dir>, checked for one usage refusal keyed --layer with no directory created; docs/21-configure-config-dir.out is configure-providers lab --base-url <it> --config-dir configure/flagdir, an empty directory, checked for layer explicit and providers.toml alone written there; docs/21b-configure-global-default.out is configure-providers shared --base-url <it> from configure/repo/nested without --layer, checked for layer global, configure/home/.config/kbase/providers.toml written holding [shared], and the repository's providers.toml unchanged; docs/22-configure-outside-worktree.out is configure-models --layer repository --decision local/d from a mktemp directory under no repository (removed after the run), checked for one worktree refusal naming that directory with remedy git init and no .kbase created\ndocs/23-configure-models-failed-listing.out is configure-models --config-dir configure/flagdir --decision lab/d --timeout 300ms over a config.toml holding a comment and text = \"lab/kept\", checked for exit 3, failed, and the file byte-identical; docs/24-configure-providers-remove.out is configure-providers LAB --remove --config-dir configure/flagdir, checked for done and no table left, and docs/24-configure-providers-remove-again.out the same removal as lab, checked for exit 1 and one provider refusal naming flagdir/providers.toml, no provider \`lab\` and the remedy kbase show-config\nsampling/: three configuration directories, each read by one show-config --config-dir <dir> from work/ with HOME on home/: docs/25-sampling-openai.out over an openai entry whose config.toml states [sampling.text] temperature 0.3 and thinking low, checked for exit 0, done, no diagnostics, the text role's temperature 0.3 and thinking low each sourced explicit, and the scoring role's temperature null; docs/26-sampling-decision.out over a config.toml holding [sampling.decision] temperature 0.5, checked for exit 1, refused, and a refusal naming unknown key sampling.decision.temperature; docs/27-sampling-anthropic-range.out over an anthropic entry whose [sampling.text] states temperature 1.5, checked for exit 0, done, and exactly one diagnostic keyed sampling.text.temperature\nmcp.requests.jsonl, mcp.actual.jsonl: a tools/call of show-config with no arguments to ${kbase} mcp from work/, checked for isError false, the both directory's path and layer, both files present, and the same diagnostic count" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-config): a config check failed — see config.tsv\n'

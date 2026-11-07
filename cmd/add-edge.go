@@ -31,9 +31,11 @@ naming the relations that do.
 `+manuallyScoredHelp("bearing", false, " of a "+markedRelations()+"\nedge")+`
 `+oneLineHelp("context")+`
 
-An edge of that "source", "target" and "relation" already standing is
-refused, whatever its values (edge exists; remedy: edit-edge, which changes
-them). A scoring edge (`+proseSeries(kb.ScoringRelations, "or")+`)
+Over an edge of that "source", "target" and "relation" already standing, an
+identical add — its "context" the edge's, omitted or "" where the edge has
+none, and its "bearing" the edge's where a person set it, omitted where it is
+pending and unmarked — is unchanged; any other is refused (edge exists;
+remedy: edit-edge, which changes the values). A scoring edge (`+proseSeries(kb.ScoringRelations, "or")+`)
 that would close a cycle among the scoring edges is refused
 (check: dependency-cycle), the detail naming the cycle in edge direction:
 remove another edge of it first. A "relation" of demoted is refused:

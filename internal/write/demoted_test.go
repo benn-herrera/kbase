@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"kbase/internal/argmark"
 	"kbase/internal/index"
 	"kbase/internal/kb"
 	"kbase/internal/result"
@@ -35,6 +36,35 @@ func demotedGraph() kb.Graph {
 
 func restore(source, target string) string {
 	return "entry:\n- source: " + source + "\n  target: " + target + "\n  relation: " + kb.RelationDemoted + "\n"
+}
+
+// TestARefusedRestoreNamesTheStandingEdge: a restore refused "no edge" where a
+// scoring edge from source to target stands — one written directly, or one
+// an earlier restore put back — names that edge and the edges call that reads
+// it in its remedy; one where none stands keeps the no-edge remedy.
+func TestARefusedRestoreNamesTheStandingEdge(t *testing.T) {
+	root := recordKB(t, demotedGraph())
+	if res := runRecordOp(t, root, RestoreDemoted, restore(demotedC, demotedA), ProvenanceCaller); res.Outcome != result.Done {
+		t.Fatalf("restoring %s → %s: %+v", demotedC, demotedA, res)
+	}
+	for _, tc := range []struct{ source, target, relation string }{
+		{demotedA, demotedB, kb.RelationSupports},
+		{demotedC, demotedA, kb.RelationRefutes},
+	} {
+		res := runRecordOp(t, root, RestoreDemoted, restore(tc.source, tc.target), ProvenanceCaller)
+		if res.Outcome != result.Refused || len(res.Refusals) != 1 {
+			t.Fatalf("restoring %s → %s: %+v, want one refusal", tc.source, tc.target, res)
+		}
+		remedy := res.Refusals[0].Remedy
+		if !strings.Contains(remedy, index.EdgeName(tc.relation, tc.source, tc.target)) ||
+			!strings.Contains(remedy, argmark.Call("edges", map[string]any{"id": tc.source, "direction": "out"})) {
+			t.Errorf("restoring %s → %s: remedy %q, want it naming the standing %s edge and the edges call", tc.source, tc.target, remedy, tc.relation)
+		}
+	}
+	res := runRecordOp(t, root, RestoreDemoted, restore(demotedB, demotedC), ProvenanceCaller)
+	if len(res.Refusals) != 1 || res.Refusals[0].Remedy != noEdgeRemedy(RestoreDemoted) {
+		t.Errorf("restoring %s → %s, no edge standing: %+v, want the no-edge remedy", demotedB, demotedC, res)
+	}
 }
 
 // TestRestoreDemoted: a restore writes the replaced edge exactly — its

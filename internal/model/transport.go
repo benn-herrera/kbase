@@ -85,7 +85,8 @@ func statusError(resp *http.Response, apiKey secret.Key) error {
 		body = body[:max(0, len(body)-(keyLen-1))]
 	}
 	return StatusError{
-		Code: resp.StatusCode,
-		Body: body[:min(len(body), errorBodyLimit)],
+		Code:       resp.StatusCode,
+		Body:       body[:min(len(body), errorBodyLimit)],
+		RetryAfter: resp.Header.Get("Retry-After"),
 	}
 }

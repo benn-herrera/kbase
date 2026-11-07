@@ -797,24 +797,24 @@ func TestLookResolvesLines(t *testing.T) {
 			why: []string{"line 4 is not one the call shows"}},
 		{name: "no line zero", field: "0", why: []string{"line 0 is not one the call shows"}},
 		{name: "a span of text", field: "the map",
-			why: []string{`field "the map" names no line`, "one line number or a range N-M"}},
+			why: []string{"field names no line", "one line number"}},
 		{name: "a range backwards", field: "2-1", why: []string{"runs backwards"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, why := ct.look(tc.field)
+			got, fault := ct.look(tc.field)
 			if len(tc.why) > 0 {
-				if why == "" {
+				if fault == nil {
 					t.Fatalf("look(%q) = %+v, want a refusal", tc.field, got)
 				}
 				for _, want := range tc.why {
-					if !strings.Contains(why, want) {
-						t.Errorf("the refusal %q does not name %q", why, want)
+					if !strings.Contains(fault.why, want) {
+						t.Errorf("the refusal %q does not name %q", fault.why, want)
 					}
 				}
 				return
 			}
-			if why != "" {
-				t.Fatalf("look(%q): %s", tc.field, why)
+			if fault != nil {
+				t.Fatalf("look(%q): %s", tc.field, fault.why)
 			}
 			if tc.want.lines != "" && (got.lines != tc.want.lines || got.lo != tc.want.lo || got.hi != tc.want.hi) {
 				t.Errorf("look(%q) names %+v, want %+v", tc.field, got, tc.want)
@@ -840,13 +840,13 @@ func TestLookRefusesAGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNumbered(t, ct)
-	if got, why := ct.look("4"); why != "" {
-		t.Errorf("look(4): %s", why)
+	if got, fault := ct.look("4"); fault != nil {
+		t.Errorf("look(4): %s", fault.why)
 	} else if got.citation != "three" {
 		t.Errorf("look(4) quotes %q, want the last line", got.citation)
 	}
-	if got, why := ct.look("2-3"); why != "" {
-		t.Errorf("look(2-3): %s", why)
+	if got, fault := ct.look("2-3"); fault != nil {
+		t.Errorf("look(2-3): %s", fault.why)
 	} else if got.citation != "two\n# Next" {
 		t.Errorf("look(2-3) quotes %q, want the two lines it names", got.citation)
 	}
@@ -854,8 +854,8 @@ func TestLookRefusesAGap(t *testing.T) {
 		{"1-2", "crosses a gap"},
 		{"2-4", "crosses a gap"},
 	} {
-		if _, why := ct.look(tc.field); !strings.Contains(why, tc.crosses) {
-			t.Errorf("look(%q) = %q, want a refusal naming what it crosses", tc.field, why)
+		if _, fault := ct.look(tc.field); fault == nil || !strings.Contains(fault.why, tc.crosses) {
+			t.Errorf("look(%q) = %+v, want a refusal naming what it crosses", tc.field, fault)
 		}
 	}
 }

@@ -214,7 +214,7 @@ test-integration-build-arxiv: (prep-test-integration-arxiv BUILD_ARXIV_IDS) buil
     @mkdir -p "{{BUILD_ARXIV_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" BUILD_ARXIV_IDS="{{BUILD_ARXIV_IDS}}" BUILD_ARXIV_SPECIAL_ID="{{BUILD_ARXIV_SPECIAL_ID}}" BUILD_ARXIV_OUT_DIR="{{BUILD_ARXIV_OUT_DIR}}" tools/scripts/test-integration-build-arxiv.sh 2>&1 | tee "{{BUILD_ARXIV_OUT_DIR}}/log.txt"
 
-[doc("LIVE; NEEDS the configured endpoint, pandoc and python3 (excluded from test-integration): ./bin/kbase build and score over the BUILD_ARXIV_SPECIAL_ID paper; config: a --config-dir")]
+[doc("LIVE; NEEDS the configured endpoint, pandoc and python3 (excluded from test-integration): ./bin/kbase build, then a full score, over the BUILD_ARXIV_SPECIAL_ID paper; config: a --config-dir")]
 test-integration-build-live-arxiv config="": (prep-test-integration-arxiv BUILD_ARXIV_SPECIAL_ID) build
     @mkdir -p "{{BUILD_LIVE_ARXIV_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" BUILD_ARXIV_SPECIAL_ID="{{BUILD_ARXIV_SPECIAL_ID}}" BUILD_LIVE_ARXIV_OUT_DIR="{{BUILD_LIVE_ARXIV_OUT_DIR}}" CONFIG="{{config}}" tools/scripts/test-integration-build-live-arxiv.sh 2>&1 | tee "{{BUILD_LIVE_ARXIV_OUT_DIR}}/log.txt"
@@ -238,7 +238,7 @@ test-integration-monitor-arxiv: (prep-test-integration-arxiv MONITOR_ARXIV_ID) b
     @mkdir -p "{{MONITOR_ARXIV_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" MONITOR_ARXIV_ID="{{MONITOR_ARXIV_ID}}" MONITOR_ARXIV_OUT_DIR="{{MONITOR_ARXIV_OUT_DIR}}" tools/scripts/test-integration-monitor-arxiv.sh 2>&1 | tee "{{MONITOR_ARXIV_OUT_DIR}}/log.txt"
 
-[doc("hermetic: every maintenance subcommand, status, cancel, probe --decision and score's scoring role through ./bin/kbase over the results fixture KB, each result parsed against its documented keys")]
+[doc("hermetic: every maintenance subcommand, status, cancel, probe --role decision and score's scoring role through ./bin/kbase over the results fixture KB, each result parsed against its documented keys")]
 test-integration-results-fixture: build
     @mkdir -p "{{RESULTS_FIXTURE_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" RESULTS_FIXTURE_DIR="{{RESULTS_FIXTURE_DIR}}" RESULTS_FIXTURE_OUT_DIR="{{RESULTS_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-results-fixture.sh 2>&1 | tee "{{RESULTS_FIXTURE_OUT_DIR}}/log.txt"
@@ -261,10 +261,14 @@ dice-doc monolith out map="": _docdicer
 dice-docs manifest src work: _docdicer
     @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
 
-[doc("check every relative link and #anchor under PROJECT_DOCS and the top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
+[doc("write a diced tree (the directory holding its entry-point.md) back out as one markdown document at monolith, which must not exist, then check it dices back to the same tree")]
+undice tree monolith: _docdicer
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer undice "{{tree}}" "{{monolith}}"
+
+[doc("check every relative link and #anchor in PROJECT_DOCS, docs and top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
 check-links: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS *.md
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS NEW_MCP_CLI_DESIGN NEW_MCP_CLI_PLAN
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS docs *.md
+    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS
 
 [private]
 _docdicer:
@@ -285,7 +289,7 @@ test-integration-mcp-build: build
     @mkdir -p "{{MCP_BUILD_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" MCP_TRANSCRIPT_DIR="{{MCP_TRANSCRIPT_DIR}}" MCP_BUILD_OUT_DIR="{{MCP_BUILD_OUT_DIR}}" tools/scripts/test-integration-mcp-build.sh 2>&1 | tee "{{MCP_BUILD_OUT_DIR}}/log.txt"
 
-[doc("hermetic, a measurement and no gate: ./bin/release/kbase mcp, the release build, under no repository; surface.yaml holds its sizes, run/served/ every resource read, the other modes and every --help")]
+[doc("hermetic, no gate: ./bin/release/kbase mcp, the release build, under no repository; surface.yaml its sizes, tools-list-chars-located with a default project; run/served/ each resource, mode and --help")]
 measure-mcp-surface: build-release
     @mkdir -p "{{MEASURE_MCP_SURFACE_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}/release" MEASURE_MCP_SURFACE_OUT_DIR="{{MEASURE_MCP_SURFACE_OUT_DIR}}" tools/scripts/measure-mcp-surface.sh 2>&1 | tee "{{MEASURE_MCP_SURFACE_OUT_DIR}}/log.txt"
@@ -414,5 +418,3 @@ update-dependencies:
     go mod tidy
     go get -u ./...
     go mod tidy
-
-import? '.claude/skills/kbase/kb-tools/runner-snippets/kb.just'

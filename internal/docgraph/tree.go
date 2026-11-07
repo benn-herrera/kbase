@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"kbase/internal/kb"
+	"kbase/internal/kbwrite"
 )
 
 // The names the tree carries.
@@ -581,13 +582,13 @@ func writeTrees(trees []*volumeTree, kbRoot string) error {
 		listing[i] = fmt.Sprintf("- [%s](%s)", t.title, t.index.path)
 	}
 	entry := fmt.Sprintf("# %s\n\n%s\n", entryPointTitle, strings.Join(listing, "\n"))
-	return writeFile(filepath.Join(kbRoot, kb.EntryPointFile), []byte(entry))
+	return writeFile(kbRoot, filepath.Join(kbRoot, kb.EntryPointFile), []byte(entry))
 }
 
 // writeTree writes the volume's documents and its copied assets.
 func writeTree(t *volumeTree, kbRoot string) error {
 	for _, n := range t.index.walk() {
-		if err := writeFile(filepath.Join(kbRoot, filepath.FromSlash(n.path)), []byte(render(n))); err != nil {
+		if err := writeFile(kbRoot, filepath.Join(kbRoot, filepath.FromSlash(n.path)), []byte(render(n))); err != nil {
 			return err
 		}
 	}
@@ -602,19 +603,18 @@ func writeTree(t *volumeTree, kbRoot string) error {
 			return fmt.Errorf("copying asset %s: %w", s, err)
 		}
 		dest := filepath.Join(kbRoot, filepath.FromSlash(path.Dir(t.index.path)), assetDir, t.assets[s])
-		if err := writeFile(dest, data); err != nil {
+		if err := writeFile(kbRoot, dest, data); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func writeFile(p string, data []byte) error {
+// writeFile writes p, a path under kbRoot, making its directory where none
+// stands.
+func writeFile(kbRoot, p string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p, data, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", p, err)
-	}
-	return nil
+	return kbwrite.Inside(kbRoot, p, data)
 }

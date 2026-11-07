@@ -7,8 +7,8 @@
 # nearest `.git` upward, and without one the copy would resolve to this
 # repository's own kb-root); it is committed and converted by update-format
 # first, since every write over a KB whose conversion is pending is refused
-# before the redirect is read. The result document is parsed against
-# edit-claim's keys and the refused outcome by TestResultDocument.
+# before the redirect is read. The result is parsed against
+# edit-claim's keys and the refused outcome by TestResult.
 #
 # Inputs (environment): BIN_DIR; REFUSED_WRITE_OUT_DIR, the evidence directory.
 set -euo pipefail
@@ -44,7 +44,7 @@ function run() {
   set +e
   ( cd "${repo}" && "${kbase}" "${verb}" "$@" ) > "${stem}.out" 2> "${stem}.log"
   printf '%s\n' "${?}" > "${stem}.exit"
-  go test -count=1 -run '^TestResultDocument$' ./cmd -args -result.doc="${stem}.out" -result.verb="${verb}" \
+  go test -count=1 -run '^TestResult$' ./cmd -args -result.file="${stem}.out" -result.verb="${verb}" \
     -result.outcome="${want}" > "${stem}.keys.log" 2>&1
   rc=${?}
   set -e
@@ -63,7 +63,7 @@ if ! diff -r "${out}/snapshot" "${repo}/kb-root" > "${out}/tree.diff" 2>&1; then
   status=1
 fi
 
-OUT_DIR="${out}" RECIPE="test-integration-refused-write-adjagent-sheet" INVOCATION="cp -R internal/formats/testdata/adjagent-sheet-2.0.1/kb-root repo/ (with a bare .git), git add kb-root and commit, from repo/: ${kbase} update-format > update-format.out, then kb-root/CLAUDE.md rewritten as a line other than the redirect, kb-root/ copied to snapshot/\nfrom repo/: ${kbase} edit-claim --values values.yaml > docs/01-edit-claim.out, 2> docs/01-edit-claim.log, exit in docs/01-edit-claim.exit\ngo test -count=1 -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/01-edit-claim.out -result.verb=edit-claim -result.outcome=refused > docs/01-edit-claim.keys.log; docs/01-edit-claim.out holds check agents-redirect\ndiff -r snapshot repo/kb-root > tree.diff (empty when kb-root is unchanged)" \
+OUT_DIR="${out}" RECIPE="test-integration-refused-write-adjagent-sheet" INVOCATION="cp -R internal/formats/testdata/adjagent-sheet-2.0.1/kb-root repo/ (with a bare .git), git add kb-root and commit, from repo/: ${kbase} update-format > update-format.out, then kb-root/CLAUDE.md rewritten as a line other than the redirect, kb-root/ copied to snapshot/\nfrom repo/: ${kbase} edit-claim --values values.yaml > docs/01-edit-claim.out, 2> docs/01-edit-claim.log, exit in docs/01-edit-claim.exit\ngo test -count=1 -run '^TestResult\$' ./cmd -args -result.file=docs/01-edit-claim.out -result.verb=edit-claim -result.outcome=refused > docs/01-edit-claim.keys.log; docs/01-edit-claim.out holds check agents-redirect\ndiff -r snapshot repo/kb-root > tree.diff (empty when kb-root is unchanged)" \
   tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
   printf 'integration(test-integration-refused-write-adjagent-sheet): the write was not refused with kb-root unchanged — see checks.tsv and tree.diff\n'

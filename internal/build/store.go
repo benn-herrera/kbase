@@ -14,6 +14,7 @@ import (
 	"kbase/internal/atomicfile"
 	"kbase/internal/buildstore"
 	"kbase/internal/filelock"
+	"kbase/internal/kbwrite"
 	"kbase/internal/result"
 	"kbase/internal/write"
 )
@@ -36,7 +37,7 @@ func writeReport(path string, report result.Record) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
 		return err
 	}
-	return atomicfile.Write(path, b.Bytes(), nil)
+	return atomicfile.Write(path, b.Bytes())
 }
 
 // takeOperationLock is the repository's operation lock, recording stateDir; a
@@ -119,16 +120,25 @@ func runningRefusal(path string) ([]result.Item, error) {
 
 // awaitWriters waits out a write op or refresh already holding the KB's
 // write lock; one that takes it later finds the operation lock and refuses.
+// Holding that lock, it removes the kb-temp a killed writer left.
 func awaitWriters(kbRoot string) error {
-	release, err := write.LockKB(kbRoot)
+	err := removeTemps(kbRoot)
 	if errors.Is(err, filelock.ErrHeld) {
 		return buildstore.Retry{{Check: buildstore.CheckLock, Path: filepath.Dir(kbRoot), Detail: "a write op or update-format holds the KB's write lock"}}
 	}
+	return err
+}
+
+// removeTemps removes kbRoot's kb-temp under the KB write lock: at a build's
+// start, the one a killed writer left, and at its end, the one its own writes
+// made.
+func removeTemps(kbRoot string) error {
+	release, err := write.LockKB(kbRoot)
 	if err != nil {
 		return err
 	}
-	release()
-	return nil
+	defer release()
+	return kbwrite.RemoveTemps(kbRoot)
 }
 
 // takeLock is the state store's holder lock, its holder record written; a
@@ -231,10 +241,10 @@ func (p *progress) rotateProgress(dir string) (err error) {
 	}
 	last := bytes.LastIndexByte(data[:len(data)-1], '\n') + 1
 	name := "progress-" + p.now().UTC().Format("20060102T150405.000000000Z") + ".jsonl"
-	if err := atomicfile.Write(filepath.Join(dir, name), data[:last], nil); err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, name), data[:last]); err != nil {
 		return err
 	}
-	if err := atomicfile.Write(live, data[last:], nil); err != nil {
+	if err := atomicfile.Write(live, data[last:]); err != nil {
 		return err
 	}
 	rotated, err := filepath.Glob(filepath.Join(dir, "progress-*.jsonl"))

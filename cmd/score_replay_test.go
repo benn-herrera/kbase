@@ -20,9 +20,10 @@ import (
 )
 
 // replayedReplies are the replies a run over the score fixture's rigor set is
-// answered with, in its order — ana-aaaaaa, clm-aaaaaa, clm-bbbbbb, exp-aaaaaa:
-// the second is no answer, so the run records one failed item.
-var replayedReplies = []string{"none", "about half", "flt-underspecified: 2", "none"}
+// answered with, in its order — ana-aaaaaa, clm-aaaaaa and its re-ask,
+// clm-bbbbbb, exp-aaaaaa: clm-aaaaaa's two replies are no answer, so the run
+// records one failed item.
+var replayedReplies = []string{"none", "about half", "about half", "flt-underspecified: 2", "none"}
 
 // replayedRun is a rigor run over the score fixture answered with
 // replayedReplies: the repository, the state store and the run's id.
@@ -40,7 +41,7 @@ func replayedRun(t *testing.T) (repo, state, run string) {
 // replayIn drives one replay over repo with its state under state, its client
 // from client. The flags it was given are --replay, and --failed and --limit
 // where opts sets them.
-func replayIn(t *testing.T, repo, state string, opts scoreReplayOptions, client func() model.Client) (resultDoc, string) {
+func replayIn(t *testing.T, repo, state string, opts scoreReplayOptions, client func() model.Client) (parsedResult, string) {
 	t.Helper()
 	opts.Given = []string{"replay"}
 	if opts.Failed {
@@ -69,14 +70,14 @@ func replayIn(t *testing.T, repo, state string, opts scoreReplayOptions, client 
 }
 
 // comparisons is the comparison.jsonl of the replay doc reports.
-func comparisons(t *testing.T, doc resultDoc) []map[string]any {
+func comparisons(t *testing.T, doc parsedResult) []map[string]any {
 	t.Helper()
-	dir, _ := doc.Values["dir"].(string)
+	dir, _ := doc.Values["ledger"].(string)
 	return jsonLines(t, filepath.Join(dir, "comparison.jsonl"))
 }
 
 // comparedItems is the items a replay's comparison names, in its order.
-func comparedItems(t *testing.T, doc resultDoc) []string {
+func comparedItems(t *testing.T, doc parsedResult) []string {
 	t.Helper()
 	var out []string
 	for _, c := range comparisons(t, doc) {
@@ -122,7 +123,7 @@ func TestScoreReplayReproducesTheRun(t *testing.T) {
 func TestScoreReplayCountsAChangedItem(t *testing.T) {
 	repo, state, run := replayedRun(t)
 	replies := slices.Clone(replayedReplies)
-	replies[2] = "none"
+	replies[3] = "none" // clm-bbbbbb's
 	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run}, func() model.Client { return scoring(replies...) })
 	if doc.Outcome != toolresult.Done || doc.Values["changed"] != 1 {
 		t.Fatalf("the replay: outcome %s, changed %v; want done with one item changed\n%s", doc.Outcome, doc.Values["changed"], stdout)
@@ -156,18 +157,18 @@ func TestScoreReplayCancelledNamesTheFirstItemNotAsked(t *testing.T) {
 	}
 }
 
-// TestScoreReplayDocumentKeys: the replay's result document carries its keys in
+// TestScoreReplayResultKeys: the replay's result carries its keys in
 // their order, the closing record its outcome names last.
-func TestScoreReplayDocumentKeys(t *testing.T) {
+func TestScoreReplayResultKeys(t *testing.T) {
 	repo, state, run := replayedRun(t)
 	doc, _ := replayIn(t, repo, state, scoreReplayOptions{Run: run}, func() model.Client { return scoring(replayedReplies...) })
-	if want := []string{"outcome", "state-dir", "run", "replay", "dir", "counts", "changed"}; !slices.Equal(doc.Keys, want) {
+	if want := []string{"outcome", "state-dir", "run", "replay", "ledger", "counts", "changed"}; !slices.Equal(doc.Keys, want) {
 		t.Errorf("keys %q, want %q", doc.Keys, want)
 	}
 	if got := mappingKeys(doc.Nodes["counts"]); !slices.Equal(got, []string{"total", "done", "failed", "skipped"}) {
 		t.Errorf("counts keys %q, want total, done, failed, skipped", got)
 	}
-	dir, _ := doc.Values["dir"].(string)
+	dir, _ := doc.Values["ledger"].(string)
 	if replay, _ := doc.Values["replay"].(string); !filepath.IsAbs(dir) || filepath.Base(dir) != replay ||
 		filepath.Dir(dir) != filepath.Join(state, "score", run, "replays") {
 		t.Errorf("dir %q, replay %v; want the replay's own directory under the run's replays/, absolute", dir, doc.Values["replay"])
@@ -253,7 +254,7 @@ func TestScoreReplayWritesOnlyItsDirectory(t *testing.T) {
 // the run's ledger last records failed.
 func TestScoreReplayFailedSelectsTheFailedItems(t *testing.T) {
 	repo, state, run := replayedRun(t)
-	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, Failed: true}, func() model.Client { return scoring("about half") })
+	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, Failed: true}, func() model.Client { return scoring("about half", "about half") })
 	if doc.Outcome != toolresult.Done {
 		t.Fatalf("the replay: outcome %s\n%s", doc.Outcome, stdout)
 	}
@@ -267,7 +268,7 @@ func TestScoreReplayFailedSelectsTheFailedItems(t *testing.T) {
 func TestScoreReplayLimitCutsInItemOrder(t *testing.T) {
 	repo, state, run := replayedRun(t)
 	doc, stdout := replayIn(t, repo, state, scoreReplayOptions{Run: run, Limit: 2},
-		func() model.Client { return scoring(replayedReplies[:2]...) })
+		func() model.Client { return scoring(replayedReplies[:3]...) })
 	if doc.Outcome != toolresult.Done {
 		t.Fatalf("the replay: outcome %s\n%s", doc.Outcome, stdout)
 	}

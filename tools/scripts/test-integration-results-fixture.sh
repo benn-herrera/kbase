@@ -64,7 +64,7 @@ run() {
     set +e
     ( cd "${repo}" && "${kbase}" "$@" ) > "${stem}.out" 2> "${stem}.log"
     printf '%s\n' "$?" > "${stem}.exit"
-    go test -count=1 -run '^TestResultDocument$' ./cmd -args -result.doc="${root}/${stem}.out" -result.verb="${verb}" \
+    go test -count=1 -run '^TestResult$' ./cmd -args -result.file="${root}/${stem}.out" -result.verb="${verb}" \
         -result.outcome="${want}" > "${stem}.keys.log" 2>&1
     local rc=$?
     set -e
@@ -92,23 +92,24 @@ sheet=not-drawn
 command -v dot > /dev/null && sheet=drawn
 grep -qx "sheet: \"${sheet}\"" "${LAST}" || { printf '  fail: update-format does not report sheet %s\n' "${sheet}"; status=1; }
 run verify done verify
-# The lines the claims and the analysis are placed on; a re-issued add is
-# refused, the node standing.
+# The lines the claims and the analysis are placed on; an identical re-issued
+# add is unchanged, reporting the ids the add minted.
 cat "${fixture}/values/statements.md" >> "${repo}/kb-root/a.md"
-# The README's write-batch example, the first fenced yaml block under
-# "## Maintaining a KB" with its fence's indent removed, placed on a.md's line
-# 6 and run dry: the batch the README shows is one kbase takes.
+# The docs' write-batch example, the first fenced yaml block under
+# "# Maintaining a KB" (docs/maintaining.md) with its fence's indent removed,
+# placed on a.md's line 6 and run dry: the batch the docs show is one kbase takes.
 readme_batch="${root}/${out}/readme-batch.yaml"
-awk '/^## Maintaining a KB$/ { f = 1; next } f && /^## / { exit } f && !y && /^ *```yaml$/ { y = 1; ind = index($0, "`"); next }
-    y && /^ *```$/ { exit } y { print substr($0, ind) }' "${root}/README.md" \
+awk '/^# Maintaining a KB$/ { f = 1; next } f && /^## / { exit } f && !y && /^ *```yaml$/ { y = 1; ind = index($0, "`"); next }
+    y && /^ *```$/ { exit } y { print substr($0, ind) }' "${root}/docs/maintaining.md" \
     | sed -E -e 's/^( *)document: .*/\1document: a.md/' -e 's/^( *)line: .*/\1line: 6/' -e 's/^( *)snippet: .*/\1snippet: first result/' \
     > "${readme_batch}"
 grep -qx '    document: a.md' "${readme_batch}" || { printf '  fail: no README batch example placed on a.md — see %s\n' "${readme_batch}"; status=1; }
 run write done write --dry-run --values "${readme_batch}"
 run add-claim done add-claim --values "${fixture}/values/add-claim.yaml"
 added="${LAST}"
-run add-claim refused add-claim --values "${fixture}/values/add-claim.yaml"
-grep -q '^      detail: "node exists: clm-' "${LAST}" || { printf '  fail: the re-issued add is not refused as node exists\n'; status=1; }
+run add-claim unchanged add-claim --values "${fixture}/values/add-claim.yaml"
+[[ "$(tools/scripts/entry-ids.sh "${LAST}" "")" == "$(tools/scripts/entry-ids.sh "${added}" "")" ]] \
+    || { printf '  fail: the identical re-issued add does not report the ids the add minted\n'; status=1; }
 # The nodes and edges every later leg reads: a work, an analysis, then one
 # edge of each relation a public op writes, pending and numeric bearings both,
 # from the fixture's values files with the minted ids substituted — ${ID1}
@@ -126,7 +127,7 @@ staged() {
         "${fixture}/values/${1}" > "${out}/values/${1}"
     printf '%s' "${root}/${out}/values/${1}"
 }
-# holds <what> <command...>: a check on the last document; a failure names what.
+# holds <what> <command...>: a check on the last result; a failure names what.
 holds() {
     local what="$1"
     shift
@@ -193,7 +194,7 @@ if grep -qF file-text "${file_ledger}/ledger.jsonl"; then printf '  fail: the le
 
 # Probe's decision selection asks the surface its entry declares. The stub
 # answers /systemone and refuses every other path, so a probe that took the
-# chat path is answered 400 and its leg fails; the document is parsed
+# chat path is answered 400 and its leg fails; the result is parsed
 # against the probe keys, and a surface that streams nothing reports no
 # first token and no finish reason.
 go build -o "${out}/probestub" ./tools/probestub
@@ -210,8 +211,8 @@ probe_config="${root}/${out}/probe-config"
 mkdir -p "${probe_config}"
 printf '%s\n' '[stub]' "baseUrl = \"${probe_url}\"" > "${probe_config}/providers.toml"
 printf '%s\n' '[models]' 'decision = "stub/d"' > "${probe_config}/config.toml"
-run probe done probe --config-dir "${probe_config}" --decision
-grep -qx 'selection: "decision"' "${LAST}" || { printf '  fail: the probe did not ask the decision selection\n'; status=1; }
+run probe done probe --role decision --config-dir "${probe_config}"
+grep -qx 'probed: "decision"' "${LAST}" || { printf '  fail: the probe did not ask the decision selection\n'; status=1; }
 grep -qx 'first-token-ms: 0' "${LAST}" || { printf '  fail: a decision surface reports no first token\n'; status=1; }
 grep -qx 'finish-reason: null' "${LAST}" || { printf '  fail: a decision surface reports no finish reason\n'; status=1; }
 kill "${stub_pid}" 2>/dev/null || true
@@ -267,7 +268,7 @@ holds 'edges lists not one demoted row' grep -qx 'count: 1' "${LAST}"
 holds 'the demoted row is not the cut edge' grep -qxF "    - source: \"${ids[0]}\"" "${LAST}"
 holds 'the demoted row is not the cut edge' grep -qxF "      target: \"${ids[2]}\"" "${LAST}"
 run stats done stats
-holds 'stats counts not one demoted edge' grep -qx '    demoted_edges: 1' "${LAST}"
+holds 'stats counts not one demoted edge' grep -qx '    demoted-edges: 1' "${LAST}"
 holds 'stats relations counts not one demoted edge' test "$(sed -n '/^        demoted:$/{n;p;}' "${LAST}")" = '            edges: 1'
 run restore-demoted refused restore-demoted --values "$(staged demoted-edge.yaml)"
 holds 'restore is not refused as closing the cycle' grep -qx '    - check: "dependency-cycle"' "${LAST}"
@@ -276,7 +277,7 @@ run verify done verify
 holds 'verify still lists a finding after the remove' grep -qx 'findings: \[\]' "${LAST}"
 run status done status --state-dir "${root}/${out}/state"
 run cancel refused cancel --state-dir "${root}/${out}/state"
-OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); kb-root committed (git add -A kb-root; git commit) before each update-format that must find it clean\n${RESULTS_FIXTURE_DIR}/values/statements.md appended to repo/kb-root/a.md after the conversion, before add-claim places the claims on its lines\nreadme-batch.yaml: README.md's first fenced yaml block under \"## Maintaining a KB\", its fence's indent removed, document, line and snippet set to a.md, 6 and first result; ${kbase} write --dry-run --values readme-batch.yaml, wanting done\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResultDocument\$' ./cmd -args -result.doc=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files add-edge, restore-demoted and remove-edge read, \${ID1} and \${ID2} substituted by the added claims' ids in id order, \${WORK1} by the work's and \${ID3} by the analysis's, each read from its add's result\nthe cycle leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify and update-format each refused, check metadata naming the edge, the edge records unchanged (edges.yaml.cycle), then the edit undone from edges.yaml.before-cycle\nthe demoted leg: a demoted record of that supports edge appended instead; update-format done, verify done with a demoted finding, edges --relation demoted and stats (demoted_edges and its relations) showing it, restore-demoted refused dependency-cycle and remove-edge, relation demoted, done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and, --node \${ID1} bounding each run to that one item, a failed run whose roles record states provider-rule flag and the flag's model; then, with config.toml naming different text and scoring models on that entry, a run naming no model by flag and its directory as ../score-config from repo/: failed on the one item --node names, the roles record naming the entry, provider-rule config and the scoring model, the ledger's line naming it, the text model nowhere on stdout (resume included) or in the ledger, and resume writing --config-dir absolute\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --decision asks it and its document carries the decision selection, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its document" \
+OUT_DIR="${out}" RECIPE="test-integration-results-fixture" INVOCATION="cp -R ${RESULTS_FIXTURE_DIR}/kb-root repo/ (with a bare .git); kb-root committed (git add -A kb-root; git commit) before each update-format that must find it clean\n${RESULTS_FIXTURE_DIR}/values/statements.md appended to repo/kb-root/a.md after the conversion, before add-claim places the claims on its lines\nreadme-batch.yaml: README.md's first fenced yaml block under \"## Maintaining a KB\", its fence's indent removed, document, line and snippet set to a.md, 6 and first result; ${kbase} write --dry-run --values readme-batch.yaml, wanting done\nper invocation NN-<verb>, from repo/: ${kbase} <args> > docs/NN-<verb>.out, parsed by go test -run '^TestResult\$' ./cmd -args -result.file=docs/NN-<verb>.out -result.verb=<verb> -result.outcome=<outcome> > docs/NN-<verb>.keys.log\nvalues/: the fixture's values files add-edge, restore-demoted and remove-edge read, \${ID1} and \${ID2} substituted by the added claims' ids in id order, \${WORK1} by the work's and \${ID3} by the analysis's, each read from its add's result\nthe cycle leg: a supports record from \${ID1} into \${ID3} appended to repo/kb-root/.index/edges.yaml, closing a cycle with the analysis's lifts; verify and update-format each refused, check metadata naming the edge, the edge records unchanged (edges.yaml.cycle), then the edit undone from edges.yaml.before-cycle\nthe demoted leg: a demoted record of that supports edge appended instead; update-format done, verify done with a demoted finding, edges --relation demoted and stats (demoted-edges and its relations) showing it, restore-demoted refused dependency-cycle and remove-edge, relation demoted, done, verify done with no finding\nscore-config/: a pool entry whose endpoint is a closed loopback port, and a config.toml naming decision and text but no scoring; score legs over it: refused naming models.scoring without a flag, the flag supplying the unset role and reaching the pool's entry, refused naming --scoring-model for a provider the pool lacks with the pool listed, and, --node \${ID1} bounding each run to that one item, a failed run whose roles record states provider-rule flag and the flag's model; then, with config.toml naming different text and scoring models on that entry, a run naming no model by flag and its directory as ../score-config from repo/: failed on the one item --node names, the roles record naming the entry, provider-rule config and the scoring model, the ledger's line naming it, the text model nowhere on stdout (resume included) or in the ledger, and resume writing --config-dir absolute\nprobe-config/ with probestub (built from tools/probestub): a pool entry the stub listens on, named as the decision role's model; ${kbase} probe --role decision asks it and its result's probed names the decision role, no first token and no finish reason, and the stub's chat path refuses any probe that took it\nchecks.tsv: per invocation its arguments, the outcome wanted, pass or fail, and its result" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-results-fixture): a result did not parse as documented — see checks.tsv\n'

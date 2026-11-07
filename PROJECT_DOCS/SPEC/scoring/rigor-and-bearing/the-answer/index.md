@@ -1,6 +1,6 @@
 ## The answer
 
-The ask states this contract, so that a reply is not lost to a spelling the ask never named. kbase
+The prompt states this contract, so that a reply is not lost to a format the prompt never named. kbase
 reads the reply and nothing else.
 
 Contents:

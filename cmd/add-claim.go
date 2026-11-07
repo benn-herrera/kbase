@@ -10,9 +10,11 @@ import (
 // the identity an add checks, what a given rigor's mark does, and where the
 // marker goes. prose is the op's own prose keys, each held to one line.
 func hostedAddHelp(prose ...string) string {
-	return `An add of a "title" a node of its kind already carries is refused (node
-exists: <id>; remedy: drop this entry and use that id wherever you would have
-named the new node, or give a title no node of its kind carries); nothing is
+	return `An add of a "title" a node of its kind already carries is unchanged where
+it is identical — the same values, and that node's marker already where the
+add places it — and reports that node's id. Any other is refused (node exists:
+<id>; remedy: drop this entry and use that id wherever you would have named
+the new node, or give a title no node of its kind carries); nothing is
 adopted.
 ` + oneLineHelp(prose...) + `
 

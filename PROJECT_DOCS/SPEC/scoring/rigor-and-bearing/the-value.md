@@ -13,19 +13,19 @@ The weight is charged **per occurrence**, each occurrence separately, and the ta
 text that commits a fault three times loses three weights. The parse enforces no count at all, and
 the only mechanical pressure on one is that two occurrences of one id need two line sets that do not
 coincide. A shared id has the same weight under either rigor vocabulary, so the price of a line that
-carries only shared ids is the same whichever table read it; a line carrying `flt-underspecified`,
-`flt-unaddressed`, `flt-equivocation` or any method-only id is priced by the table that holds it, and
+contains only shared ids is the same whichever table read it; a line containing `flt-underspecified`,
+`flt-unaddressed`, `flt-equivocation` or any method-only id is priced by the table that contains it, and
 the item's class fixes which that is.
 
-A count is bounded only where the row's own occurrence unit is an enumeration of a closed set, and
+A count is bounded only where the row's own occurrence unit is an enumeration of a fixed set, and
 there the bound is what *one occurrence* means rather than a ceiling the table adds.
-`flt-unaddressed`'s respects are the closed list of three — the steps, the result, the link to the
+`flt-unaddressed`'s respects are the fixed list of three — the steps, the result, the link to the
 conclusion — so it has three. `flt-overreach`'s
-respects are the closed list of three, so it has three. `flt-inapplicable`'s parts are the source
+respects are the fixed list of three, so it has three. `flt-inapplicable`'s parts are the source
 argument's own — its stretches of reasoning — which the text fixes in outline and no field counts. A
 charge beyond such a bound is not a further
 occurrence: it is one of them written a second time. The parse cannot see that, because no respect and
-no part is a ledger field; the reader can, holding the reply's line sets against the text.
+no part is a ledger field; the reader can, comparing the reply's line sets against the text.
 
 The floor at zero is the domain's, not a rule of its own: a list whose weights reach `M` is a text
 with nothing left to carry the assertion, and `0` is what the register says for that. Every weight is

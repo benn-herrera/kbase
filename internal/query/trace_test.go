@@ -30,7 +30,7 @@ func diamondGraph() kb.Graph {
 // contribution" lines, checking each row is an edges row then its three keys.
 func traceRows(t *testing.T, records []result.Record) []string {
 	t.Helper()
-	want := []string{"source", "target", "relation", "bearing", "context", manuallyScoredKey, "replaced_relation", "depth", "strength", "contribution"}
+	want := []string{"source", "target", "relation", "bearing", "context", kb.ManuallyScoredKey, "replaced-relation", "depth", "strength", "contribution"}
 	var out []string
 	for _, r := range records {
 		var keys []string

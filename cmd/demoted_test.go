@@ -40,10 +40,10 @@ func graphRecords(t *testing.T, repo string) kb.Graph {
 // its demoted record resolves it; a second removal is refused, no edge.
 func TestDemotedRing(t *testing.T) {
 	repo, state := buildRepoWith(t, ringPaper)
-	run := func(want string, args ...string) resultDoc {
+	run := func(want string, args ...string) parsedResult {
 		t.Helper()
 		out, code := kbase(t, repo, args...)
-		d := checkDocument(t, args[0], out)
+		d := checkResult(t, args[0], out)
 		if d.Outcome != want || code != toolresult.ExitCode(want) {
 			t.Fatalf("%q: outcome %s, exit %d; want %s\n%s", args, d.Outcome, code, want, out)
 		}
@@ -64,8 +64,8 @@ func TestDemotedRing(t *testing.T) {
 		!strings.HasPrefix(findings[0]["detail"].(string), a+" → "+b+", demoted from "+kb.RelationSupports) {
 		t.Errorf("verify findings %v, want the demoted edge %s → %s", findings, a, b)
 	}
-	if stats := run("done", "stats").Values["results"].(map[string]any); stats["demoted_edges"] != 1 {
-		t.Errorf("stats demoted_edges = %v, want 1", stats["demoted_edges"])
+	if stats := run("done", "stats").Values["results"].(map[string]any); stats["demoted-edges"] != 1 {
+		t.Errorf("stats demoted-edges = %v, want 1", stats["demoted-edges"])
 	}
 
 	// restore-demoted and remove-edge name the cut as its edges row does.
@@ -94,7 +94,7 @@ func TestDemotedRing(t *testing.T) {
 	if f := run("done", "verify").items("findings"); len(f) != 0 {
 		t.Errorf("findings after both resolutions %v, want none", f)
 	}
-	if stats := run("done", "stats").Values["results"].(map[string]any); stats["demoted_edges"] != 0 {
-		t.Errorf("stats demoted_edges = %v, want 0", stats["demoted_edges"])
+	if stats := run("done", "stats").Values["results"].(map[string]any); stats["demoted-edges"] != 0 {
+		t.Errorf("stats demoted-edges = %v, want 0", stats["demoted-edges"])
 	}
 }

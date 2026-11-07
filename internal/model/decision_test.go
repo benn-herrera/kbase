@@ -33,14 +33,20 @@ func decisionRequest() model.DecisionRequest {
 	}
 }
 
-// slotDecision makes one decision call as a consumer makes it: through the Slot
-// of the one item on a queue of one, ctx being the call's own.
+// slotDecision is slotDecisionOn over a quickQueue.
 func slotDecision(t *testing.T, ctx context.Context, c model.Client, req model.DecisionRequest) (model.DecisionResponse, error) {
+	t.Helper()
+	return slotDecisionOn(t, quickQueue(), ctx, c, req)
+}
+
+// slotDecisionOn makes one decision call as a consumer makes it: through the
+// Slot of the one item on q, ctx being the call's own.
+func slotDecisionOn(t *testing.T, q *model.Queue, ctx context.Context, c model.Client, req model.DecisionRequest) (model.DecisionResponse, error) {
 	t.Helper()
 	var resp model.DecisionResponse
 	var err error
 	var wg sync.WaitGroup
-	if goErr := model.NewQueue(1).Go(context.Background(), &wg, func(s *model.Slot) func() {
+	if goErr := q.Go(context.Background(), &wg, func(s *model.Slot) func() {
 		resp, err = s.Decision(ctx, c, req)
 		return nil
 	}); goErr != nil {
@@ -308,18 +314,91 @@ func TestSystemOne4xxNoRetry(t *testing.T) {
 	}
 }
 
+// TestSystemOneAttemptsExhausted: a call none of whose attempts gets through is
+// put on the wire the retry's attempts times, each re-issue after its pause.
 func TestSystemOneAttemptsExhausted(t *testing.T) {
-	s := newDecisionServer(t, decisionNilBody, decisionNilBody, decisionNilBody)
+	const base = 10 * time.Millisecond
+	s := newDecisionServer(t, decisionNilBody)
 	c := model.NewOpenAIClient(newTestEndpoint(s.srv.URL))
-	_, err := slotDecision(t, context.Background(), c, decisionRequest())
+	started := time.Now()
+	_, err := slotDecisionOn(t, queueOf(base, longest), context.Background(), c, decisionRequest())
 	if err == nil {
 		t.Fatal("expected error after exhausted attempts, got nil")
 	}
-	if s.saw() != model.ChatAttempts {
-		t.Errorf("requests: got %d, want %d", s.saw(), model.ChatAttempts)
+	if s.saw() != attempts {
+		t.Errorf("requests: got %d, want %d", s.saw(), attempts)
 	}
-	if !strings.Contains(err.Error(), "3 attempts") {
-		t.Errorf("error does not name the attempt count: %v", err)
+	if want := base * time.Duration(1<<(attempts-1)-1); time.Since(started) < want {
+		t.Errorf("took %v, want at least the %d pauses, %v in all, before the re-issues", time.Since(started), attempts-1, want)
+	}
+	if want := fmt.Sprintf("%d attempts", attempts); !strings.Contains(err.Error(), want) {
+		t.Errorf("error does not name the attempt count %q: %v", want, err)
+	}
+}
+
+// TestDecisionEndsWhereRetryAfterOutlivesTheDeadline: a 503 whose Retry-After
+// HTTP-date lies an hour out asks for a pause a 2 s deadline cannot cover, so
+// the call ends at once on its one attempt, naming the delay the server asked
+// for, though the drawn pause would have fitted.
+func TestDecisionEndsWhereRetryAfterOutlivesTheDeadline(t *testing.T) {
+	var mu sync.Mutex
+	var seen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		mu.Lock()
+		seen++
+		mu.Unlock()
+		w.Header().Set("Retry-After", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	_, err := slotDecision(t, ctx, model.NewOpenAIClient(newTestEndpoint(srv.URL)), decisionRequest())
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the attempts it made rather than the deadline", err)
+	}
+	if !strings.Contains(err.Error(), "1 attempt") || !strings.Contains(err.Error(), "the server asking a 59m") {
+		t.Errorf("error = %v, want the one attempt and the server's delay of about an hour", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if seen != 1 {
+		t.Errorf("requests: got %d, want the one attempt", seen)
+	}
+	if took := time.Since(started); took >= 2*time.Second {
+		t.Errorf("gave up after %v, want well inside the 2s deadline", took)
+	}
+}
+
+// TestDecisionGivesUpWhereThePauseOutlivesTheDeadline: a pause of an hour
+// inside a 2 s deadline — the call ends on its one attempt, naming it, rather
+// than waiting out the deadline.
+func TestDecisionGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
+	s := newDecisionServer(t, decisionStatus(503))
+	c := model.NewOpenAIClient(newTestEndpoint(s.srv.URL))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	_, err := slotDecisionOn(t, queueOf(time.Hour, longest), ctx, c, decisionRequest())
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the attempts it made rather than the deadline", err)
+	}
+	if !strings.Contains(err.Error(), "1 attempt") {
+		t.Errorf("error does not name the one attempt: %v", err)
+	}
+	var se model.StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusServiceUnavailable {
+		t.Errorf("err = %v, want the last attempt's StatusError wrapped", err)
+	}
+	if s.saw() != 1 {
+		t.Errorf("requests: got %d, want the one attempt", s.saw())
+	}
+	if took := time.Since(started); took >= 2*time.Second {
+		t.Errorf("gave up after %v, want well inside the 2s deadline", took)
 	}
 }
 

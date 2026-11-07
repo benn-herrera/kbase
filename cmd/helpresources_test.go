@@ -92,8 +92,11 @@ func boundCommandsOf(root *cobra.Command) []*cobra.Command {
 // `kbase <command> --help` the usage line, the shared body, the argument list
 // and the CLI note; kbase://help/<command> the shared body, the argument list
 // and the MCP note; and the description of a tool the command alone binds its
-// summary, its MCP note and where its full help is — with the notes each
-// command declares, and with both notes replaced.
+// summary, its MCP note where the command is probe or update-format, the
+// commands mcp.NoteEveryCall marks, and where its full help is — with the
+// notes each command declares, and with both notes replaced. With every
+// command noted, a mark on any other command, or none on either, fails its
+// description.
 func TestHelpRenderingsAreTheirParts(t *testing.T) {
 	bound := boundCommandsOf(rootCmd)
 	if len(bound) == 0 {
@@ -138,7 +141,7 @@ func TestHelpRenderingsAreTheirParts(t *testing.T) {
 				continue
 			}
 			want := c.Short + ". "
-			if mcpNote != "" {
+			if mcpNote != "" && (c == probeCmd || c.Name() == "update-format") {
 				want += mcpNote + " "
 			}
 			want = mcpHelpSpelled(want + "Full help: " + mcp.HelpURIPrefix + c.Name() + ".")
@@ -225,7 +228,7 @@ func TestTheRootHelpIsItsParts(t *testing.T) {
 
 // TestTheWriteHelpListsTheBatchAsEachSurfaceTakesIt: `kbase write --help`
 // lists dry-run and commit as the flags the command takes, and entry, a key of
-// the values document and never a flag, bare and typed a list, not repeatable;
+// the batch and never a flag, bare and typed a list, not repeatable;
 // kbase://help/write lists all three bare, as the write tool takes them.
 func TestTheWriteHelpListsTheBatchAsEachSurfaceTakesIt(t *testing.T) {
 	cli, code := kbase(t, realPath(t, t.TempDir()), "write", "--help")

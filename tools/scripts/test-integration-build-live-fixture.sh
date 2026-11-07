@@ -2,7 +2,7 @@
 # LIVE: a build over a caller-named fixture repository, never a path this file
 # knows. The build reads the fixture's own .kbase/*.toml; no configuration
 # directory is passed. Before the build, the fixture's own kbase
-# (.kbase/kbase) probe --decision and probe --text run
+# (.kbase/kbase) probe --role decision and probe --role text run
 # from the fixture, and either failing stops the run naming its role. The
 # arguments go to the fixture's own kbase build as given, run from the
 # fixture: MODE staged takes at least one, the volume roots relative to the
@@ -135,7 +135,7 @@ function run_build() {
     # The endpoint first: an unreachable role fails here, by name, and no build
     # is started against it. The roles probed are the ones the build dials.
     for role in decision text; do
-        capture "${out}/probe-${role}" "${dir}" "${kbase}" probe "--${role}"
+        capture "${out}/probe-${role}" "${dir}" "${kbase}" probe --role "${role}"
         if [[ "$(rc "${out}/probe-${role}")" -ne 0 ]]; then
             printf 'integration(%s): the %s role is unreachable — see %s\n' \
                 "${label}" "${role}" "${out}/probe-${role}.out"

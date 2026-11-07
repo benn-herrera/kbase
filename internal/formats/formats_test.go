@@ -5,9 +5,9 @@ import (
 	"slices"
 	"testing"
 
-	"kbase/internal/formats/format100"
-	"kbase/internal/formats/format200"
-	"kbase/internal/formats/format300"
+	"kbase/internal/formats/format10"
+	"kbase/internal/formats/format20"
+	"kbase/internal/formats/format30"
 )
 
 // TestChainReachesAPatchBeyondTheLastConverter: a patch above the form the last
@@ -16,7 +16,7 @@ import (
 // step left them rather than naming a gap.
 func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
 	files := Files{"kb-root/a.md": []byte("prose")}
-	out, obsolete, _, err := Chain(format100.Version100, "2.0.1", files)
+	out, obsolete, _, err := Chain(format10.Version, "2.0.1", files)
 	if err != nil {
 		t.Fatalf("Chain(1.0.0, 2.0.1): %v", err)
 	}
@@ -28,7 +28,7 @@ func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
 	}
 	// The same target one step short: the same files, so a patch above the form
 	// changes no file's form.
-	short, _, _, err := Chain(format100.Version100, format200.Version200, files)
+	short, _, _, err := Chain(format10.Version, format20.Version, files)
 	if err != nil {
 		t.Fatalf("Chain(1.0.0, 2.0.0): %v", err)
 	}
@@ -42,11 +42,11 @@ func TestChainReachesAPatchBeyondTheLastConverter(t *testing.T) {
 // does.
 func TestChainConvertsEveryPatchOfAMinor(t *testing.T) {
 	files := Files{"kb-root/leaf.md": []byte("---\nkind: leaf\npath-stable: true\n---\n# A Leaf\n")}
-	want, _, _, err := Chain(format200.Version200, format300.Version300, files)
+	want, _, _, err := Chain(format20.Version, format30.Version, files)
 	if err != nil {
 		t.Fatalf("Chain(2.0.0, 3.0.0): %v", err)
 	}
-	got, _, _, err := Chain("2.0.1", format300.Version300, files)
+	got, _, _, err := Chain("2.0.1", format30.Version, files)
 	if err != nil {
 		t.Fatalf("Chain(2.0.1, 3.0.0): %v", err)
 	}
@@ -87,7 +87,7 @@ func TestCompareMinor(t *testing.T) {
 // 2→3 step warns of reaches the chain's caller.
 func TestChainCarriesItsStepsWarnings(t *testing.T) {
 	files := Files{"kb-root/leaf.md": []byte("---\nkind: leaf\npath-stable: true\n---\n# A Leaf\n")}
-	_, _, warnings, err := Chain(format100.Version100, format300.Version300, files)
+	_, _, warnings, err := Chain(format10.Version, format30.Version, files)
 	if err != nil {
 		t.Fatalf("Chain(1.0.0, 3.0.0): %v", err)
 	}
@@ -101,7 +101,7 @@ func TestChainCarriesItsStepsWarnings(t *testing.T) {
 func TestChainRefusesAGap(t *testing.T) {
 	identity := func(f Files) (Files, []string, []Warning, error) { return f, nil, nil, nil }
 	steps := append(slices.Clone(converters), converter{From: "1.0.0", To: "1.1.0", Convert: identity})
-	_, _, _, err := chain(steps, format100.Version100, "1.2.0", Files{})
+	_, _, _, err := chain(steps, format10.Version, "1.2.0", Files{})
 	if err == nil || err.Error() != "migrate: no converter leads from 1.1.0 toward 1.2.0" {
 		t.Errorf("err = %v, want the gap at 1.1.0 named", err)
 	}

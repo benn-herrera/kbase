@@ -1,15 +1,6 @@
 ### A refused key
 
-Nothing checks a key before a call. A provider that answers a call 401 or 403
-has refused the call's key — a missing key and a wrong one alike — and the call fails as any
-provider refusal does ([§8](../8-maintenance-subcommands/index.md), `provider-refused`). Its failure item carries `remedy`
-`<command-that-prints-the-key> | kbase auth add <provider>`, `<provider>` the provider the call
-dialled: the user runs it, or an agent runs it with the command the user names or `show-config`'s
-`upgrade` gives; its `detail` ends, before the outcome's ask, by saying so, and that no one asks
-for the key, so it never enters a conversation. The call
-failures that carry it are a build's — the `inference-failed` stop of a claim-graph stage and the
-overview's `inference` failure — a scoring run's `failures` (from the attempt's ledger line, [§8](../8-maintenance-subcommands/index.md)),
-`probe`'s failure, and `models`' and `configure-models`' failure to list a catalogue. A call ended by any
-other status carries no such remedy, and neither does `configure-providers`' dial, whose failure is
-its `next` ([§9](provider-commands.md), "Provider commands").
+Nothing checks a key before a call. A provider that answers a call 401 or 403 has refused the call's key, a missing key and a wrong one alike, and the call fails as any provider refusal does ([§8](../8-maintenance-subcommands/score/a-provider-call-s-failure-names-what-ended-it.md), `provider-refused`). Its failure item has `remedy` `<command-that-prints-the-key> | kbase auth add <provider>`, `<provider>` the provider the call sent its request to. The user runs the remedy, or an agent runs it with the command the user names or the `upgrade` that `show-config` gives. The item's `detail` ends, before the outcome's ask, by saying so, and that no one asks for the key, so it never enters a conversation.
+
+The call failures that have it are a build's (the `inference-failed` stop of a claim-graph stage and the overview's `inference` failure), a scoring run's `failures` (from the attempt's ledger line, [§8](../8-maintenance-subcommands/score/the-ledger-and-resume.md)), `probe`'s failure, and the failure of `models` and `configure-models` to list a catalogue. A call ended by any other status has no such remedy. Neither does `configure-providers`' request, whose failure is its `next` ([Provider commands](provider-commands.md)).
 

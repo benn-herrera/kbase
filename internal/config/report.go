@@ -31,12 +31,12 @@ type Entry struct {
 	// Protocol is the chat wire protocol the entry speaks, its default filled
 	// in: a report states what the entry resolves to, not whether it said so.
 	Protocol string
-	// DecisionsFlavor is the decision surface the entry speaks, its default
+	// DecisionAPI is the decision API the entry speaks, its default
 	// filled in: a report states what the entry resolves to, not whether it
 	// said so.
-	DecisionsFlavor string
-	Key             KeyKind
-	KeyFile         string // the apiKeyFile the entry states, when Key is KeyKindFile
+	DecisionAPI string
+	Key         KeyKind
+	KeyFile     string // the apiKeyFile the entry states, when Key is KeyKindFile
 	// Upgrade is the command that moves a KeyKindFile key into the store,
 	// values filled in; the store then outranks the file.
 	Upgrade string
@@ -84,7 +84,7 @@ func Report(cfg Config, providers Providers, faults []ProviderFault, layers []La
 	for _, name := range providerNames(providers) {
 		p := providers[name]
 		dir := layerDir(layers, p.Layer)
-		e := Entry{Name: name, BaseURL: p.BaseURL, Protocol: p.Protocol(), DecisionsFlavor: p.Flavor(), Key: keyKind(p), Layer: p.Layer, Usable: true,
+		e := Entry{Name: name, BaseURL: p.BaseURL, Protocol: p.Protocol(), DecisionAPI: p.EffectiveDecisionAPI(), Key: keyKind(p), Layer: p.Layer, Usable: true,
 			Fault: strings.Join(warned[name], "; ")}
 		switch {
 		case e.Key == KeyKindFile:

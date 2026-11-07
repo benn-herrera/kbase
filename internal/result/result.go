@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -37,7 +39,7 @@ func ExitCode(outcome string) int { return exitCodes[outcome] }
 // IsError reports whether the outcome is an error: its exit code is not 0.
 func IsError(outcome string) bool { return ExitCode(outcome) != 0 }
 
-// Field is one key of a result document. Value is nil, a string, a Verbatim,
+// Field is one key of a result. Value is nil, a string, a Verbatim,
 // a bool, an int, a float64, a []string, a Record, a []Record, an Item or an
 // []Item.
 type Field struct {
@@ -45,7 +47,7 @@ type Field struct {
 	Value any
 }
 
-// Verbatim is text a document carries as it stands on every surface: KB
+// Verbatim is text a result carries as it stands on every surface: KB
 // content a result passes through — a title, a rationale, a context, a line of
 // a leaf. Only the text kbase composes is spelled; KB text holding what reads
 // as a marker is the author's, and is never rewritten.
@@ -54,12 +56,28 @@ type Verbatim string
 // Record is one mapping in a list, its keys in the order given.
 type Record []Field
 
-// The keys that close a document, chosen by its outcome.
+// The keys that close a result, chosen by its outcome.
 const (
 	RefusalsKey  = "refusals"
 	FailuresKey  = "failures"
 	CancelledKey = "cancelled"
 )
+
+var closingKeys = []string{RefusalsKey, FailuresKey, CancelledKey}
+
+// WarningsKey is the key of a verb's warnings: one item per fault the verb
+// noted and carried on past.
+const WarningsKey = "warnings"
+
+// WithWarnings is a copy of fields with warnings placed last among the verb's
+// own keys: before the key that closes the result, where fields end on one.
+func WithWarnings(fields []Field, warnings Field) []Field {
+	at := len(fields)
+	if at > 0 && slices.Contains(closingKeys, fields[at-1].Key) {
+		at--
+	}
+	return slices.Insert(slices.Clone(fields), at, warnings)
+}
 
 // Item is one refusal, failure or verify finding. A zero key is omitted;
 // Detail is always written, and an item names at least one of Check, Path
@@ -85,12 +103,12 @@ func (it Item) record() Record {
 			if v == "" {
 				continue
 			}
-		case int:
-			if v == 0 {
-				continue
-			}
 		case []string:
 			if v == nil {
+				continue
+			}
+		default:
+			if text, ok := integerText(v); ok && text == "0" {
 				continue
 			}
 		}
@@ -123,7 +141,7 @@ type Refusal []Item
 func (r Refusal) Error() string { return Items(r).Error() }
 
 // What a retry and a failed outcome ask of the caller: each ends the detail of
-// every item that closes a document with that outcome.
+// every item that closes a result with that outcome.
 const (
 	RetryAsk  = "re-issue the identical call later"
 	FailedAsk = "re-issuing the identical call will not fix it"
@@ -136,7 +154,7 @@ var closingAsks = map[string]struct{ key, ask string }{
 	Failed: {FailuresKey, FailedAsk},
 }
 
-// Emit writes one result document: outcome, then fields in order. Under retry
+// Emit writes one result: outcome, then fields in order. Under retry
 // and failed, every closing item's detail ends with the outcome's ask; the
 // caller's fields and items are left as given.
 func Emit(w io.Writer, outcome string, fields ...Field) error {
@@ -181,11 +199,11 @@ func endWithAsk(detail, ask string) string {
 	return detail + "; " + ask
 }
 
-// Spelled is w spelling, by s, every string of a document Write puts on it —
+// Spelled is w spelling, by s, every string of a result Write puts on it —
 // the surface the call w answers came through — but a Verbatim, and any other
 // text written on it, such as what cobra prints from a command's summary and
 // flag usages. A w already spelled keeps its spelling, settled where the call
-// came in. A document written on any other writer keeps the marked form, as a
+// came in. A result written on any other writer keeps the marked form, as a
 // record does until it is emitted again.
 func Spelled(w io.Writer, s argmark.Spelling) io.Writer {
 	if _, ok := w.(spelledWriter); ok {
@@ -211,9 +229,9 @@ func (sw spelledWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// spellingOf is the spelling of w's documents, none where it is no Spelled
-// writer, and the writer a document spelled by it is written on: a Spelled
-// writer's own, so the encoded document, its strings spelled already, is not
+// spellingOf is the spelling of w's results, none where it is no Spelled
+// writer, and the writer a result spelled by it is written on: a Spelled
+// writer's own, so the encoded result, its strings spelled already, is not
 // spelled again whole and a Verbatim keeps its text.
 func spellingOf(w io.Writer) (func(string) string, io.Writer) {
 	if sw, ok := w.(spelledWriter); ok {
@@ -233,13 +251,13 @@ func Write(w io.Writer, fields ...Field) error {
 	return encodeNode(out, doc)
 }
 
-// Reemit writes on w the document doc, which Write wrote on a writer that
-// spelled nothing — a document recorded for a later reader — with each string
+// Reemit writes on w the result doc, which Write wrote on a writer that
+// spelled nothing — a result recorded for a later reader — with each string
 // spelled as w spells it.
 func Reemit(w io.Writer, doc []byte) error {
 	var node yaml.Node
 	if err := yaml.Unmarshal(doc, &node); err != nil {
-		return fmt.Errorf("reading the recorded document: %w", err)
+		return fmt.Errorf("reading the stored result: %w", err)
 	}
 	spell, out := spellingOf(w)
 	var walk func(n *yaml.Node)
@@ -309,8 +327,6 @@ func encode(v any, spell func(string) string) (*yaml.Node, error) {
 		return quoted(spell(x)), nil
 	case Verbatim:
 		return quoted(string(x)), nil
-	case int:
-		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprint(x)}, nil
 	case []string:
 		seq := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, s := range x {
@@ -318,7 +334,23 @@ func encode(v any, spell func(string) string) (*yaml.Node, error) {
 		}
 		return seq, nil
 	}
+	if text, ok := integerText(v); ok {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: text}, nil
+	}
 	return nil, fmt.Errorf("unsupported value type %T", v)
+}
+
+// integerText is the decimal text of v when its kind is any signed or unsigned
+// integer, a named type included.
+func integerText(v any) (string, bool) {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(rv.Int(), 10), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(rv.Uint(), 10), true
+	}
+	return "", false
 }
 
 // floatText spells a float so YAML 1.1 and 1.2 readers both take it for one:

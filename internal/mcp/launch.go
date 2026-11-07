@@ -45,7 +45,7 @@ type Launch struct {
 	// capturePrefix begins the names of the files capturing the run's output.
 	capturePrefix string
 	// started is whether the run pid has started in the store at stateDir, and
-	// the fields its done document carries after the placement.
+	// the fields its done result carries after the placement.
 	started func(stateDir string, pid int) (bool, []result.Field, error)
 }
 
@@ -84,6 +84,10 @@ func scoreStarted(stateDir string, pid int) (bool, []result.Field, error) {
 	return true, []result.Field{{Key: "run", Value: run}, {Key: "ledger", Value: filepath.Join(score.RunsDir(stateDir), run)}}, nil
 }
 
+// noWarnings is the warnings a launch refusal carries: it is returned before
+// the launch reads the configuration, so no configuration fault is known.
+func noWarnings() result.Field { return result.Field{Key: result.WarningsKey, Value: []result.Item{}} }
+
 // launchTool is cmd run by l as this executable in a process of its own,
 // returning once the run has started or exited.
 func launchTool(cmd *cobra.Command, l Launch, s serving, globals Globals) (ProjectTool, error) {
@@ -95,8 +99,8 @@ func launchTool(cmd *cobra.Command, l Launch, s serving, globals Globals) (Proje
 	call := func(p Project, args map[string]any) (string, map[string]any, bool, error) {
 		var out bytes.Buffer
 		if refusal := commaInMapping(mappings, args); refusal != nil {
-			if err := result.Emit(result.Spelled(&out, s.spelling), result.Refused,
-				result.Field{Key: result.RefusalsKey, Value: []result.Item{*refusal}}); err != nil {
+			refusals := []result.Field{{Key: result.RefusalsKey, Value: []result.Item{*refusal}}}
+			if err := result.Emit(result.Spelled(&out, s.spelling), result.Refused, result.WithWarnings(refusals, noWarnings())...); err != nil {
 				return "", nil, false, err
 			}
 			return ToolResult(out.Bytes())
@@ -129,22 +133,25 @@ func commaInMapping(mappings map[string][]string, args map[string]any) *result.I
 // start starts `<this executable> verb <args>` from the root of the project p
 // — in its own process group, stdin closed, stdout and stderr captured under
 // the state store's reports, the environment and globals inherited, SurfaceEnv
-// telling it its document is read over MCP, and --project-dir where the call
-// named p — and writes on out the start document once the run has started,
-// the run's own document where it exits first, or, where it does neither
-// within launchStarting, a done document saying it is still starting. A
-// relative state-dir is the project root's, as the volume roots are in the
-// run's working directory.
+// telling it its result is read over MCP, and --project-dir where the call
+// named p — and writes on out the start result once the run has started,
+// the run's own result where it exits first, or, where it does neither
+// within launchStarting, a done result saying it is still starting. Either
+// done result's warnings is the configuration as s.configWarnings read it
+// before the start. A relative state-dir is the project root's, as the volume
+// roots are in the run's working directory.
 func (l Launch) start(verb string, positionals []Positional, mappings map[string][]string, args map[string]any, p Project, s serving, globals Globals, out io.Writer) error {
 	args = maps.Clone(args)
 	stateFlag, _ := args[stateDirFlag].(string)
 	kbRoot, stateDir, outcome, fields := buildstore.Locate(buildstore.MonitorOptions{StateDir: stateFlag, WorkDir: p.Root, Logger: s.lg, DefaultStore: true})
 	if outcome != "" {
-		return result.Emit(out, outcome, fields...)
+		return result.Emit(out, outcome, result.WithWarnings(fields, noWarnings())...)
 	}
 	if stateFlag != "" {
 		args[stateDirFlag] = stateDir
 	}
+	runDir := filepath.Dir(kbRoot)
+	warnings := result.Field{Key: result.WarningsKey, Value: s.configWarnings(runDir)}
 	positionalArgv, flags := CommandLine(positionals, mappings, args)
 	argv := []string{verb}
 	for _, f := range flags {
@@ -193,7 +200,7 @@ func (l Launch) start(verb string, positionals []Positional, mappings map[string
 	defer stderr.Close()
 
 	child := exec.Command(exe, argv...)
-	child.Dir = filepath.Dir(kbRoot)
+	child.Dir = runDir
 	child.Env = append(os.Environ(), SurfaceEnv+"="+SurfaceMCP)
 	child.Stdout, child.Stderr = stdout, stderr
 	child.SysProcAttr = detachedProcess()
@@ -222,20 +229,21 @@ func (l Launch) start(verb string, positionals []Positional, mappings map[string
 				return err
 			}
 			if len(bytes.TrimSpace(doc)) == 0 {
-				return fmt.Errorf("%s (pid %d) exited (%v) with no result document; its stderr is %s", l.noun, pid, waitErr, stderrPath)
+				return fmt.Errorf("%s (pid %d) exited (%v) with no result; its stderr is %s", l.noun, pid, waitErr, stderrPath)
 			}
 			_, err = out.Write(doc)
 			return err
 		case <-deadline.C:
-			return result.Emit(out, result.Done, result.Field{Key: "state", Value: "starting"},
-				result.Field{Key: "state-dir", Value: stateDir}, result.Field{Key: "pid", Value: pid}, wait)
+			return result.Emit(out, result.Done, result.WithWarnings([]result.Field{
+				{Key: "kb-root", Value: kbRoot}, {Key: "state", Value: "starting"},
+				{Key: "state-dir", Value: stateDir}, {Key: "pid", Value: pid}, wait}, warnings)...)
 		case <-poll.C:
 			started, done, err := l.started(stateDir, pid)
 			if err != nil {
 				return err
 			}
 			if started {
-				return result.Emit(out, result.Done, append(append(placement, done...), wait)...)
+				return result.Emit(out, result.Done, result.WithWarnings(append(append(placement, done...), wait), warnings)...)
 			}
 		}
 	}

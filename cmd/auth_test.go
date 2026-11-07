@@ -92,7 +92,7 @@ func TestAuthAddRefusesBeforeWriting(t *testing.T) {
 			stdin := strings.NewReader(tc.stdin)
 			out := runAuth(t, "auth add", authAdd, authOptions{Provider: tc.provider, Dir: dir, Configured: tc.configured,
 				Stdin: stdin, StdinIsTerminal: tc.terminal})
-			d := checkDocument(t, "auth add", out)
+			d := checkResult(t, "auth add", out)
 			items := d.items(toolresult.RefusalsKey)
 			if d.Outcome != toolresult.Refused || len(items) != 1 {
 				t.Fatalf("outcome %s with %d refusals, want one refusal", d.Outcome, len(items))
@@ -120,7 +120,7 @@ func TestAuthAddAcceptsTheBound(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "auth")
-			d := checkDocument(t, "auth add", runAuth(t, "auth add", authAdd, authOptions{Provider: "p", Dir: dir,
+			d := checkResult(t, "auth add", runAuth(t, "auth add", authAdd, authOptions{Provider: "p", Dir: dir,
 				Configured: []string{"p"}, Stdin: strings.NewReader(tc.stdin)}))
 			if d.Outcome != toolresult.Done {
 				t.Fatalf("outcome %s, want done", d.Outcome)
@@ -139,7 +139,7 @@ func TestAuthAddAcceptsTheBound(t *testing.T) {
 func TestAuthAddListRemoveRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "auth")
 	for _, p := range []string{"zeta", "alpha"} {
-		d := checkDocument(t, "auth add", runAuth(t, "auth add", authAdd, authOptions{Provider: p, Dir: dir,
+		d := checkResult(t, "auth add", runAuth(t, "auth add", authAdd, authOptions{Provider: p, Dir: dir,
 			Configured: []string{"alpha", "zeta"}, Stdin: strings.NewReader("\n" + authSentinelKey + p + "\n")}))
 		if d.Outcome != toolresult.Done || d.Values["provider"] != p {
 			t.Fatalf("add %s: outcome %s provider %v", p, d.Outcome, d.Values["provider"])
@@ -153,7 +153,7 @@ func TestAuthAddListRemoveRoundTrip(t *testing.T) {
 		t.Errorf("the stored key does not match the piped one trimmed: length %d, want %d", len(got.Reveal()), len(authSentinelKey+"alpha"))
 	}
 	list := func() []any {
-		d := checkDocument(t, "auth list", runAuth(t, "auth list", authList, authOptions{Dir: dir}))
+		d := checkResult(t, "auth list", runAuth(t, "auth list", authList, authOptions{Dir: dir}))
 		names, _ := d.Values["providers"].([]any)
 		return names
 	}
@@ -161,7 +161,7 @@ func TestAuthAddListRemoveRoundTrip(t *testing.T) {
 		t.Errorf("list %v, want [alpha zeta]", names)
 	}
 	for _, want := range []string{toolresult.Done, toolresult.Refused} {
-		d := checkDocument(t, "auth remove", runAuth(t, "auth remove", authRemove, authOptions{Provider: "alpha", Dir: dir}))
+		d := checkResult(t, "auth remove", runAuth(t, "auth remove", authRemove, authOptions{Provider: "alpha", Dir: dir}))
 		if d.Outcome != want {
 			t.Errorf("remove alpha: outcome %s, want %s", d.Outcome, want)
 		}
@@ -210,7 +210,7 @@ func TestAuthKeyAppearsNowhere(t *testing.T) {
 	} {
 		opts.Stdin = strings.NewReader(input)
 		out := runAuth(t, "auth add", authAdd, opts)
-		if d := checkDocument(t, "auth add", out); d.Outcome != toolresult.Refused {
+		if d := checkResult(t, "auth add", out); d.Outcome != toolresult.Refused {
 			t.Errorf("an input of length %d: outcome %s, want refused", len(input), d.Outcome)
 		}
 		stdout += out
@@ -236,7 +236,7 @@ func TestAuthKeyAppearsNowhere(t *testing.T) {
 }
 
 // executeAuth runs the real root over args with stdin, and renders what it
-// returns as main does: the document on stdout, the error on stderr.
+// returns as main does: the result on stdout, the error on stderr.
 func executeAuth(t *testing.T, stdin string, args ...string) (stdout, stderr string) {
 	t.Helper()
 	rootCmd.SetIn(strings.NewReader(stdin))
@@ -434,7 +434,7 @@ func TestAuthRemoveClearsAnUnconfiguredName(t *testing.T) {
 		}
 	})
 	stdout, _ := executeAuth(t, "", "auth", "remove", provider, "--config-dir", authConfigDir(t, ""))
-	if d := checkDocument(t, "auth remove", stdout); d.Outcome != toolresult.Done {
+	if d := checkResult(t, "auth remove", stdout); d.Outcome != toolresult.Done {
 		t.Errorf("outcome %s, want done", d.Outcome)
 	}
 	if names, err := store.List(); err != nil || slices.Contains(names, provider) {
@@ -456,14 +456,14 @@ func TestAuthFoldsTheProviderName(t *testing.T) {
 	})
 	configDir := authConfigDir(t, "[Auth-Folded]\nbaseUrl = \"http://folded.example/v1\"\n")
 	stdout, _ := executeAuth(t, authSentinelKey, "auth", "add", "AUTH-folded", "--config-dir", configDir)
-	if d := checkDocument(t, "auth add", stdout); d.Outcome != toolresult.Done || d.Values["provider"] != provider {
+	if d := checkResult(t, "auth add", stdout); d.Outcome != toolresult.Done || d.Values["provider"] != provider {
 		t.Fatalf("add: outcome %s provider %v, want done naming %s", d.Outcome, d.Values["provider"], provider)
 	}
 	if got, err := store.Read(provider); err != nil || got.Reveal() != authSentinelKey {
 		t.Fatalf("the key is not stored under %s: %v", provider, err)
 	}
 	stdout, _ = executeAuth(t, "", "auth", "remove", "Auth-FOLDED", "--config-dir", configDir)
-	if d := checkDocument(t, "auth remove", stdout); d.Outcome != toolresult.Done || d.Values["provider"] != provider {
+	if d := checkResult(t, "auth remove", stdout); d.Outcome != toolresult.Done || d.Values["provider"] != provider {
 		t.Fatalf("remove: outcome %s provider %v, want done naming %s", d.Outcome, d.Values["provider"], provider)
 	}
 	stdout, _ = executeAuth(t, "", "auth", "remove", provider, "--config-dir", configDir)
@@ -482,7 +482,7 @@ func TestAuthFoldsTheProviderName(t *testing.T) {
 // providers, and touches nothing.
 func TestAuthRemoveRefusesAnUnusableName(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "auth")
-	d := checkDocument(t, "auth remove", runAuth(t, "auth remove", authRemove, authOptions{Provider: "a/b", Dir: dir}))
+	d := checkResult(t, "auth remove", runAuth(t, "auth remove", authRemove, authOptions{Provider: "a/b", Dir: dir}))
 	items := d.items(toolresult.RefusalsKey)
 	if d.Outcome != toolresult.Refused || len(items) != 1 {
 		t.Fatalf("outcome %s with %d refusals, want one refusal", d.Outcome, len(items))

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"maps"
 	"path"
 	"slices"
@@ -57,6 +59,7 @@ func TestExecPolicy(t *testing.T) {
 		for i, m := range files {
 			pkg[i] = m.f
 		}
+		info := packageInfo(fset, pkg)
 		for _, m := range files {
 			owner, binary := m.rel, execOwners[m.rel]
 			if binary == "" {
@@ -69,7 +72,7 @@ func TestExecPolicy(t *testing.T) {
 			if binary == "" {
 				continue
 			}
-			for _, s := range execSites(m.f, pkg) {
+			for _, s := range execSites(m.f, pkg, info) {
 				named[owner] = true
 				switch s.binary {
 				case binary:
@@ -118,10 +121,11 @@ type execSite struct {
 }
 
 // execSites lists every execNamers call in f, resolving its binary argument
-// over pkg, the files of f's package, f among them.
-func execSites(f *ast.File, pkg []*ast.File) []execSite {
+// over pkg, the files of f's package, f among them, as info resolves their
+// names (packageInfo).
+func execSites(f *ast.File, pkg []*ast.File, info *types.Info) []execSite {
 	imports := importedAs(f)
-	r := binaryResolver{pkg: pkg, visiting: map[*ast.Field]bool{}}
+	r := binaryResolver{pkg: pkg, info: info, visiting: map[*ast.Field]bool{}}
 	var sites []execSite
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -153,9 +157,10 @@ func execSites(f *ast.File, pkg []*ast.File) []execSite {
 // assignment of which names the same binary; a function's parameter every
 // call in the package passes the same binary; exec.LookPath's path for the
 // binary it looks up; os.Executable's path, kbase itself. Any other form
-// names none.
+// names none. A name is resolved through info, across the package.
 type binaryResolver struct {
 	pkg      []*ast.File
+	info     *types.Info
 	visiting map[*ast.Field]bool
 }
 
@@ -181,20 +186,58 @@ func (r binaryResolver) resolve(f *ast.File, e ast.Expr) string {
 			return r.resolve(f, x.Args[0])
 		}
 	case *ast.Ident:
-		return r.resolveIdent(f, x)
+		return r.resolveIdent(x)
 	}
 	return ""
 }
 
-func (r binaryResolver) resolveIdent(f *ast.File, id *ast.Ident) string {
-	obj := id.Obj
+// is is whether e is an identifier naming obj.
+func (r binaryResolver) is(e ast.Expr, obj types.Object) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && r.info.ObjectOf(id) == obj
+}
+
+// declaration is the node of the package that declares obj — a value spec,
+// a field or an assignment — and the file it stands in; nil where none does.
+func (r binaryResolver) declaration(obj types.Object) (*ast.File, ast.Node) {
+	for _, g := range r.pkg {
+		var decl ast.Node
+		ast.Inspect(g, func(n ast.Node) bool {
+			var names []ast.Expr
+			switch d := n.(type) {
+			case *ast.ValueSpec:
+				for _, name := range d.Names {
+					names = append(names, name)
+				}
+			case *ast.Field:
+				for _, name := range d.Names {
+					names = append(names, name)
+				}
+			case *ast.AssignStmt:
+				names = d.Lhs
+			}
+			if decl == nil && slices.ContainsFunc(names, func(e ast.Expr) bool { id, ok := e.(*ast.Ident); return ok && r.info.Defs[id] == obj }) {
+				decl = n
+			}
+			return decl == nil
+		})
+		if decl != nil {
+			return g, decl
+		}
+	}
+	return nil, nil
+}
+
+func (r binaryResolver) resolveIdent(id *ast.Ident) string {
+	obj := r.info.ObjectOf(id)
 	if obj == nil {
 		return ""
 	}
+	f, decl := r.declaration(obj)
 	var values []string
-	switch d := obj.Decl.(type) {
+	switch d := decl.(type) {
 	case *ast.ValueSpec:
-		if obj.Kind != ast.Con {
+		if _, constant := obj.(*types.Const); !constant {
 			return ""
 		}
 		names := make([]ast.Expr, len(d.Names))
@@ -210,7 +253,7 @@ func (r binaryResolver) resolveIdent(f *ast.File, id *ast.Ident) string {
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		a, ok := n.(*ast.AssignStmt)
-		if !ok || !slices.ContainsFunc(a.Lhs, func(l ast.Expr) bool { i, ok := l.(*ast.Ident); return ok && i.Obj == obj }) {
+		if !ok || !slices.ContainsFunc(a.Lhs, func(l ast.Expr) bool { return r.is(l, obj) }) {
 			return true
 		}
 		if a.Tok != token.DEFINE && a.Tok != token.ASSIGN {
@@ -225,9 +268,9 @@ func (r binaryResolver) resolveIdent(f *ast.File, id *ast.Ident) string {
 
 // resolveAssigned is the binary obj takes from rhs, where obj is one of lhs:
 // rhs's own element, or the first result of the one call rhs holds.
-func (r binaryResolver) resolveAssigned(f *ast.File, lhs, rhs []ast.Expr, obj *ast.Object) string {
+func (r binaryResolver) resolveAssigned(f *ast.File, lhs, rhs []ast.Expr, obj types.Object) string {
 	for i, l := range lhs {
-		if id, ok := l.(*ast.Ident); !ok || id.Obj != obj {
+		if !r.is(l, obj) {
 			continue
 		}
 		switch {
@@ -244,7 +287,7 @@ func (r binaryResolver) resolveAssigned(f *ast.File, lhs, rhs []ast.Expr, obj *a
 // resolveParam is the binary every call of field's function in the package
 // passes for obj; the function must be one f declares, with no receiver, and
 // named nowhere but in a call.
-func (r binaryResolver) resolveParam(f *ast.File, field *ast.Field, obj *ast.Object) string {
+func (r binaryResolver) resolveParam(f *ast.File, field *ast.Field, obj types.Object) string {
 	if r.visiting[field] {
 		return ""
 	}
@@ -260,7 +303,7 @@ func (r binaryResolver) resolveParam(f *ast.File, field *ast.Field, obj *ast.Obj
 		at := 0
 		for _, p := range fd.Type.Params.List {
 			for j, n := range p.Names {
-				if p == field && n.Obj == obj {
+				if p == field && r.info.Defs[n] == obj {
 					fn, idx = fd, at+j
 				}
 			}
@@ -273,6 +316,10 @@ func (r binaryResolver) resolveParam(f *ast.File, field *ast.Field, obj *ast.Obj
 	if _, variadic := field.Type.(*ast.Ellipsis); variadic {
 		return ""
 	}
+	fnObj := r.info.Defs[fn.Name]
+	if fnObj == nil {
+		return ""
+	}
 	var values []string
 	for _, g := range r.pkg {
 		called := map[*ast.Ident]bool{}
@@ -281,7 +328,7 @@ func (r binaryResolver) resolveParam(f *ast.File, field *ast.Field, obj *ast.Obj
 			if !ok {
 				return true
 			}
-			if name, ok := call.Fun.(*ast.Ident); ok && name.Name == fn.Name.Name {
+			if name, ok := call.Fun.(*ast.Ident); ok && r.info.Uses[name] == fnObj {
 				called[name] = true
 				if idx < len(call.Args) && !call.Ellipsis.IsValid() {
 					values = append(values, r.resolve(g, call.Args[idx]))
@@ -292,7 +339,7 @@ func (r binaryResolver) resolveParam(f *ast.File, field *ast.Field, obj *ast.Obj
 			return true
 		})
 		ast.Inspect(g, func(n ast.Node) bool {
-			if name, ok := n.(*ast.Ident); ok && name.Name == fn.Name.Name && name != fn.Name && !called[name] {
+			if name, ok := n.(*ast.Ident); ok && r.info.Uses[name] == fnObj && !called[name] {
 				values = append(values, "")
 			}
 			return true
@@ -342,6 +389,30 @@ func TestViolations(t *testing.T) {
 	}
 }
 
+// TestExecSitesResolveAcrossThePackage: a constant another file of the
+// package declares names its binary, and a local of the same name shadows it.
+func TestExecSitesResolveAcrossThePackage(t *testing.T) {
+	fset := token.NewFileSet()
+	var pkg []*ast.File
+	for i, src := range []string{
+		`package p; import "os/exec"; func f() { exec.Command(bin) }; func g() { bin := "sh"; exec.Command(bin) }`,
+		`package p; const bin = "git"`,
+	} {
+		f, err := parser.ParseFile(fset, fmt.Sprintf("p%d.go", i), src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pkg = append(pkg, f)
+	}
+	var got []string
+	for _, s := range execSites(pkg[0], pkg, packageInfo(fset, pkg)) {
+		got = append(got, s.binary)
+	}
+	if want := []string{"git", "sh"}; !slices.Equal(got, want) {
+		t.Errorf("binaries = %q, want %q", got, want)
+	}
+}
+
 func TestExecSites(t *testing.T) {
 	for _, tc := range []struct {
 		name, src string
@@ -368,12 +439,14 @@ func TestExecSites(t *testing.T) {
 		{"another package's Command", `package p; import "x"; func f() { x.Command("sh") }`, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, err := parser.ParseFile(token.NewFileSet(), "p.go", tc.src, 0)
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "p.go", tc.src, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
+			pkg := []*ast.File{f}
 			var got []string
-			for _, s := range execSites(f, []*ast.File{f}) {
+			for _, s := range execSites(f, pkg, packageInfo(fset, pkg)) {
 				got = append(got, s.binary)
 			}
 			if !slices.Equal(got, tc.want) {

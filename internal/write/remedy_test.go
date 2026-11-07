@@ -21,7 +21,7 @@ func TestAnEdgeRemedyCallsEdgesAsTheSurfaceDoes(t *testing.T) {
 	})
 	for _, tc := range []struct{ name, entry string }{
 		{"cycle", edgeEntry(AddEdge, "clm-bbbbbb", "clm-aaaaaa", kb.RelationSupports)},
-		{"edge exists", edgeEntry(AddEdge, "clm-aaaaaa", "clm-bbbbbb", kb.RelationSupports)},
+		{"edge exists", edgeEntry(AddEdge, "clm-aaaaaa", "clm-bbbbbb", kb.RelationSupports, "context: by it")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			res := runEdges(t, root, tc.entry)

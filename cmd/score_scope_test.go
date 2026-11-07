@@ -46,8 +46,8 @@ func scopeRepo(t *testing.T) string {
 	return repo
 }
 
-// refusedAt is the one refusal a document carries, failing t unless the
-// document is refused with exactly one item, keyed at key under check.
+// refusedAt is the one refusal a result carries, failing t unless the
+// result is refused with exactly one item, keyed at key under check.
 func refusedAt(t *testing.T, got scoreResult, check, key string) map[string]any {
 	t.Helper()
 	items := got.doc.items(toolresult.RefusalsKey)

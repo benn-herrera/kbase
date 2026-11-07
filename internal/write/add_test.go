@@ -291,36 +291,68 @@ func TestAnAddPlacesItsMarkerOnTheNamedLine(t *testing.T) {
 	}
 }
 
-// TestARepeatedAddIsRefused: an add re-issued is refused, node exists, with
-// kb-root byte-identical; a batch adding one node twice is refused at the
-// repeat, writing nothing.
-func TestARepeatedAddIsRefused(t *testing.T) {
-	adds := map[string]string{
-		"add-claim":      "- title: T\n  rationale: ''\n  document: leaf.md\n  line: 5\n  snippet: bound\n",
-		"add-analysis":   "- title: T\n  rationale: ''\n  document: leaf.md\n  line: 5\n  snippet: bound\n",
-		"add-experiment": "- title: T\n  status: run\n  document: leaf.md\n  line: 5\n  snippet: bound\n",
-		"add-work":       "- label: Smith2020\n  title: T\n  rationale: ''\n",
-		"add-axiom":      "- label: S1\n  title: T\n",
+// TestARepeatedAdd: an add re-issued differing in a value, in its rigor or in
+// where it marks the node is refused, node exists, writing nothing; an
+// add-axiom re-issued identically is unchanged, reporting the existing id and
+// its heading marked (TestIdempotence re-issues the other adds identically).
+// Within one batch an identical second entry is unchanged and a differing one
+// refused at the repeat.
+func TestARepeatedAdd(t *testing.T) {
+	hosted := func(rest string) string { return "- title: T\n" + rest + "  document: leaf.md\n" }
+	cases := []struct {
+		op, values string
+		differing  []string
+	}{
+		{"add-claim", hosted("  rationale: ''\n") + "  line: 5\n  snippet: bound\n", []string{
+			hosted("  rationale: Other.\n") + "  line: 5\n  snippet: bound\n",
+			hosted("  rationale: ''\n  rigor: 0.5\n") + "  line: 5\n  snippet: bound\n",
+			hosted("  rationale: ''\n") + "  line: 11\n  snippet: bound\n",
+		}},
+		{"add-analysis", hosted("  rationale: ''\n  rigor: 0.5\n") + "  line: 5\n  snippet: bound\n", []string{
+			hosted("  rationale: ''\n") + "  line: 5\n  snippet: bound\n",
+		}},
+		{"add-experiment", hosted("  status: run\n") + "  line: 5\n  snippet: bound\n", []string{
+			hosted("  status: planned\n") + "  line: 5\n  snippet: bound\n",
+		}},
+		{"add-work", "- label: Smith2020\n  title: T\n  rationale: ''\n", []string{
+			"- label: Smith2020\n  title: U\n  rationale: ''\n",
+			"- label: Jones2021\n  title: T\n  rationale: ''\n",
+		}},
+		{"add-axiom", "- label: S1\n  title: T\n", []string{"- label: S1\n  title: U\n", "- label: S2\n  title: T\n"}},
 	}
-	for op, values := range adds {
-		t.Run(op, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.op, func(t *testing.T) {
 			root := addKB(t, kb.Graph{})
-			id := onlyEntry(t, run(t, root, op, "entry:\n"+values)).ID
+			first := onlyEntry(t, run(t, root, c.op, "entry:\n"+c.values))
 			before := snapshot(t, root)
-			res := run(t, root, op, "entry:\n"+values)
-			if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Detail != "node exists: "+id {
-				t.Errorf("re-issue = %+v, want refused, node exists: %s", res, id)
+			if c.op == AddAxiom {
+				res := run(t, root, c.op, "entry:\n"+c.values)
+				if res.Outcome != result.Unchanged || len(res.Entries) != 1 || res.Entries[0].ID != first.ID ||
+					res.Entries[0].Heading != axiomHeadingMarked {
+					t.Errorf("identical re-issue = %+v, want unchanged, id %s, heading %s: its heading stands marked", res, first.ID, axiomHeadingMarked)
+				}
+			}
+			for _, values := range c.differing {
+				res := run(t, root, c.op, "entry:\n"+values)
+				if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Detail != "node exists: "+first.ID {
+					t.Errorf("differing re-issue %q = %+v, want refused, node exists: %s", values, res, first.ID)
+				}
 			}
 			if !maps.Equal(before, snapshot(t, root)) {
 				t.Error("a re-issued add changed kb-root")
 			}
 
 			fresh := addKB(t, kb.Graph{})
+			res := run(t, fresh, c.op, "entry:\n"+c.values+c.values)
+			if res.Outcome != result.Done || len(res.Entries) != 2 || res.Entries[1].Outcome != result.Unchanged || res.Entries[1].ID != res.Entries[0].ID {
+				t.Errorf("one batch adding twice = %+v, want the repeat unchanged with the first entry's id", res)
+			}
+			fresh = addKB(t, kb.Graph{})
 			before = snapshot(t, fresh)
-			res = run(t, fresh, op, "entry:\n"+values+values)
+			res = run(t, fresh, c.op, "entry:\n"+c.values+c.differing[0])
 			if res.Outcome != result.Refused || len(res.Refusals) != 1 || res.Refusals[0].Entry != 2 ||
 				!strings.HasPrefix(res.Refusals[0].Detail, "node exists: ") {
-				t.Errorf("one batch adding twice = %+v, want refused at entry 2, node exists", res)
+				t.Errorf("one batch adding a differing repeat = %+v, want refused at entry 2, node exists", res)
 			}
 			if !maps.Equal(before, snapshot(t, fresh)) {
 				t.Error("a refused batch wrote")

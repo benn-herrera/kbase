@@ -11,10 +11,14 @@ import (
 // its tokens from the moment Go takes it until the item returns.
 type Queue struct {
 	tokens chan struct{}
+	// Retry is how every call made through the queue's slots re-issues a
+	// request that did not get through; a slot takes it as Go issues it.
+	Retry Retry
 }
 
-// NewQueue is a queue of n tokens. n is user input, checked where it is read.
-func NewQueue(n int) *Queue { return &Queue{tokens: make(chan struct{}, n)} }
+// NewQueue is a queue of n tokens retrying by DefaultRetry. n is user input,
+// checked where it is read.
+func NewQueue(n int) *Queue { return &Queue{tokens: make(chan struct{}, n), Retry: DefaultRetry()} }
 
 // Go waits for a free token, then starts one goroutine that runs item with a
 // Slot, through which the item makes every call it needs. The token is
@@ -37,7 +41,7 @@ func (q *Queue) Go(ctx context.Context, wg *sync.WaitGroup, item func(*Slot) (af
 		return ctx.Err()
 	case q.tokens <- struct{}{}:
 	}
-	s := &Slot{live: true, waited: time.Since(started)}
+	s := &Slot{live: true, waited: time.Since(started), retry: q.Retry}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -67,6 +71,7 @@ type Slot struct {
 	mu     sync.Mutex
 	live   bool // Go issued it and its item has not returned
 	waited time.Duration
+	retry  Retry
 }
 
 var errSlotNotLive = errors.New("model: the slot is spent or was not issued by Queue.Go")
@@ -89,13 +94,11 @@ func (s *Slot) refusal() error {
 // Waited is how long Go blocked before it took this slot's token.
 func (s *Slot) Waited() time.Duration { return s.waited }
 
-// ChatRequest is one chat call: the model, the system prompt, the prompt, and
-// the backoff the call pauses by between attempts.
+// ChatRequest is one chat call: the model, the system prompt and the prompt.
 type ChatRequest struct {
-	Model   string
-	System  string
-	Prompt  string
-	Backoff []time.Duration
+	Model  string
+	System string
+	Prompt string
 }
 
 // ChatResult is a chat call's attempts in the order they were made, the last
@@ -117,7 +120,7 @@ func (s *Slot) Chat(ctx context.Context, c Client, req ChatRequest) (ChatResult,
 	}
 	var res ChatResult
 	var err error
-	res.Final, err = chat(ctx, c, req.Model, req.System, req.Prompt, req.Backoff, func(a ChatAttempt) {
+	res.Final, err = chat(ctx, c, s.retry, req.Model, req.System, req.Prompt, func(a ChatAttempt) {
 		res.Attempts = append(res.Attempts, a)
 	})
 	return res, err
@@ -130,5 +133,5 @@ func (s *Slot) Decision(ctx context.Context, c Client, req DecisionRequest) (Dec
 	if err := s.refusal(); err != nil {
 		return DecisionResponse{}, err
 	}
-	return c.decision(ctx, req)
+	return c.decision(ctx, s.retry, req)
 }

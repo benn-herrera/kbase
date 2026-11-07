@@ -29,6 +29,11 @@ const DemoteClaimEdge = "demote-claim-edge"
 // analysis. Only the build issues it, so it is no subcommand.
 const SplitClaim = "split-claim"
 
+// CiteBareIDs is update-format's citing: every bare id of a node, in every
+// document but the summary pages, replaced by the node's citation in the
+// naming form. Only update-format issues it, so it is no subcommand.
+const CiteBareIDs = "cite-bare-ids"
+
 // The edge writes: each names one edge by its source, target and relation.
 // RestoreDemoted restores the edge a demoted record replaced.
 const (
@@ -115,6 +120,7 @@ var writeOps = map[string]opSpec{
 	AddCitation:     {edit: &recordEdit{apply: addCitation}},
 	DemoteClaimEdge: {edit: &recordEdit{apply: demoteEdge}, buildOnly: true, overCycles: true},
 	SplitClaim:      {edit: &recordEdit{apply: splitClaim, machine: true}, buildOnly: true},
+	CiteBareIDs:     {edit: &recordEdit{apply: citeBareIDs}, buildOnly: true},
 }
 
 // Ops is every write op a caller may issue, by name, sorted.
@@ -169,9 +175,9 @@ func WritesEdge(op string) bool { return writeOps[op].edge }
 // op under operation.
 const Batch = "write"
 
-// Options is one batch over the KB at KBRoot, its values document Values.
-// DryRun does everything but write, as the document's dry-run does. Commit
-// makes the batch a committing one, as the document's commit does; the
+// Options is one batch over the KB at KBRoot, the batch Values. DryRun does
+// everything but write, as the batch's dry-run does. Commit makes the batch a
+// committing one, as the batch's commit does; the
 // commits are the caller's. Preflight runs once a committing batch's entries
 // and derivation are known, before its first write, a dry run's included; it
 // is told whether the batch is a dry run, on which the caller commits nothing.
@@ -208,7 +214,7 @@ const (
 // ran, and Drawn whether it drew the sheets, which it does not without
 // Graphviz dot. Migration is what the load converted, nil on a KB at the
 // current version. Commit is whether the batch commits, by Options.Commit or
-// the document's commit.
+// the batch's commit.
 type Result struct {
 	Outcome   string
 	DryRun    bool
@@ -235,7 +241,8 @@ type Result struct {
 // and Link the citing document, the 1-based line and the link it wrote there.
 // An edit-work entry that changes the work's label carries Rewritten, every
 // line it rewrote a reference on, [] where none; it is nil on every other
-// entry.
+// entry. A cite-bare-ids entry's Cited is each bare id it cited, in document
+// and line order.
 type EntryResult struct {
 	Entry        int
 	Operation    string
@@ -252,6 +259,15 @@ type EntryResult struct {
 	Line         int
 	Link         string
 	Rewritten    []Rewritten
+	Cited        []Cited
+}
+
+// Cited is one bare id a cite-bare-ids entry cited: the kb-root-relative path
+// of its document, its 1-based line and the id.
+type Cited struct {
+	Path string
+	Line int
+	ID   string
 }
 
 // Rewritten is one line a work's label change rewrote a reference on: its
@@ -341,10 +357,10 @@ func Run(op string, opts Options) Result {
 	return res
 }
 
-// DocumentDryRun is whether the values document of op says dry-run: true, as
-// Run reads it. Refusals are ignored, so it is false where the document does
-// not parse as far as the option.
-func DocumentDryRun(op string, values []byte) bool {
+// BatchDryRun is whether the batch of op says dry-run: true, as Run reads it.
+// Refusals are ignored, so it is false where the batch does not parse as far
+// as the option.
+func BatchDryRun(op string, values []byte) bool {
 	b, _ := parseValues(values, op)
 	return b.dryRun
 }
@@ -376,7 +392,7 @@ func runOverSource(op string, opts Options, src *kb.Source, b batch) Result {
 			if !stillMatches(src, c.target, c.disk) {
 				return &Result{Outcome: result.Retry, Refusals: []result.Item{{Check: kb.CheckLock, Path: src.Repo(), Key: c.subject,
 					Remedy: RetryRemedy(op),
-					Detail: "changed between the read and the replace; a concurrent writer intervened. The values were correct and nothing was written"}}}
+					Detail: "changed between the read and the replace; a concurrent writer intervened. The batch was valid and nothing was written"}}}
 			}
 		}
 		return nil

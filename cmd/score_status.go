@@ -8,10 +8,10 @@ import (
 	"kbase/internal/score"
 )
 
-// persistScoreResult writes the run's result document beside its ledger, so a
-// waiter reads the document the verb reported. A run that named no ledger
+// persistScoreResult writes the run's stored result beside its ledger, so a
+// waiter reads the stored result the verb reported. A run that named no ledger
 // writes nothing. It runs on the way out of a verb that cannot report an error
-// there and that has already built the document it emits, so a write that fails
+// there and that has already built the result it emits, so a write that fails
 // is recorded against the run rather than lost.
 func persistScoreResult(lg log.Logger, fields []toolresult.Field, outcome string) {
 	var dir string
@@ -24,8 +24,8 @@ func persistScoreResult(lg log.Logger, fields []toolresult.Field, outcome string
 	if dir == "" {
 		return
 	}
-	if err := score.WriteResultDocument(dir, outcome, fields); err != nil {
-		lg.Error("the run's result document was not written", "ledger", dir, "error", err)
+	if err := score.WriteStoredResult(dir, outcome, fields); err != nil {
+		lg.Error("the run's stored result was not written", "ledger", dir, "error", err)
 	}
 }
 

@@ -160,7 +160,7 @@ func (c *AnthropicClient) ListModels(ctx context.Context) ([]ModelInfo, error) {
 // decision refuses: the Messages protocol has no decision surface. The registry
 // gives the decision role an OpenAIClient whatever its entry's api, so nothing
 // in kbase reaches this.
-func (c *AnthropicClient) decision(ctx context.Context, req DecisionRequest) (DecisionResponse, error) {
+func (c *AnthropicClient) decision(ctx context.Context, _ Retry, req DecisionRequest) (DecisionResponse, error) {
 	name := c.endpoint.Name
 	if name == "" {
 		name = c.endpoint.BaseURL

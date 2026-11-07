@@ -37,7 +37,7 @@ func TestProjectDirNamesTheRepository(t *testing.T) {
 		resetProjectDir(t)
 		repo := realPath(t, maintenanceRepo(t))
 		out, code := kbase(t, t.TempDir(), "--project-dir", repo, "verify")
-		d := checkDocument(t, "verify", out)
+		d := checkResult(t, "verify", out)
 		if d.Outcome != toolresult.Done || code != 0 || d.Values["kb-root"] != filepath.Join(repo, kb.KBDir) {
 			t.Errorf("outcome %s, exit %d, kb-root %v; want done, 0, the repository's kb-root\n%s", d.Outcome, code, d.Values["kb-root"], out)
 		}

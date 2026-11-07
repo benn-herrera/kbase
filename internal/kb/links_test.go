@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"kbase/internal/formats/format400"
+	"kbase/internal/formats/format40"
 )
 
 func TestRebaseInlineLinks(t *testing.T) {
@@ -41,7 +41,7 @@ func TestTextCitations(t *testing.T) {
 	text := "# Doc\n\n" + line + "\nInline `" + cite + "` here.\n\n```\n" + cite + "\n```\n"
 	start := strings.Index(line, cite)
 	dest := start + len("[cited](")
-	want := []TextCitation{{Line: 2, Link: format400.Link{Start: start, End: start + len(cite), DestStart: dest, DestEnd: dest + len("a.md#s"),
+	want := []TextCitation{{Line: 2, Link: format40.Link{Start: start, End: start + len(cite), DestStart: dest, DestEnd: dest + len("a.md#s"),
 		Text: "cited", Destination: "a.md#s", Title: "clm-aaaaaa"}}}
 	if got := TextCitations(text); !slices.Equal(got, want) {
 		t.Errorf("TextCitations = %+v, want %+v", got, want)

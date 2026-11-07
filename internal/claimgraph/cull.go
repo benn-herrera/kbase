@@ -375,12 +375,12 @@ func shownOrder(l link, pos map[string]position) (first, second string) {
 }
 
 // askCull is one pass of co-linearity asks, one group per key of groups in
-// ascending order, its id the pass and the key, the pass one ask batch. Each
+// ascending order, its id the pass and the key, the pass one wave of calls. Each
 // answer is mapped from the order the claims were shown in onto the link's id
 // order; a defaulted ask is distinct, and a fallback. Each group is a unit of
-// progress. Answers, units and fallbacks are taken once the batch has
+// progress. Answers, units and fallbacks are taken once the wave has
 // drained. It returns the pass's answers, entries and group records, and the
-// batch's elapsed time.
+// wave's elapsed time.
 func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cullAsk, g *AuthoredGraph, say func(ClaimNode) string, pos map[string]position) ([]cullAnswer, []buildrecords.CullEntry, []asks.GroupRecord, time.Duration, error) {
 	var answers []cullAnswer
 	var entries []buildrecords.CullEntry
@@ -395,7 +395,7 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 		return buildrecords.VerdictBAddsNothing
 	}
 	name := func(id string) string { return fmt.Sprintf("p%d-%s", pass, id) }
-	batch := opts.batch(ctx)
+	wave := opts.wave(ctx)
 	for _, id := range ids {
 		items := make([]asks.ColinearItem, len(groups[id]))
 		for i, a := range groups[id] {
@@ -404,11 +404,11 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 			sn, _ := g.node(second)
 			items[i] = asks.ColinearItem{Key: a.key, First: askClaim(fn), Second: askClaim(sn), FirstText: say(fn), SecondText: say(sn)}
 		}
-		if err := batch.AskGroup(asks.Colinear, name(id), asks.ColinearAsks(items)); err != nil {
+		if err := wave.AskGroup(asks.Colinear, name(id), asks.ColinearAsks(items)); err != nil {
 			break
 		}
 	}
-	records, err := batch.Wait()
+	records, err := wave.Wait()
 	if err != nil {
 		return nil, nil, records, 0, err
 	}
@@ -431,13 +431,13 @@ func askCull(ctx context.Context, opts Options, pass int, groups map[string][]cu
 				n, _ := g.node(a.key)
 				if err := opts.Progress.fallback(result.Item{Check: checkDefaulted, Path: n.Document,
 					Detail: fmt.Sprintf("the co-linearity ask over %s and %s was answered with no offered letter twice: it is recorded distinct and both claims keep", a.a, a.b)}); err != nil {
-					return answers, entries, records, batch.Elapsed(), err
+					return answers, entries, records, wave.Elapsed(), err
 				}
 			}
 		}
 		if err := opts.Progress.unit(name(id)); err != nil {
-			return answers, entries, records, batch.Elapsed(), err
+			return answers, entries, records, wave.Elapsed(), err
 		}
 	}
-	return answers, entries, records, batch.Elapsed(), nil
+	return answers, entries, records, wave.Elapsed(), nil
 }

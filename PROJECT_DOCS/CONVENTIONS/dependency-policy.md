@@ -1,6 +1,6 @@
 ## Dependency Policy
 
-Stdlib-first; a new module requires a ruling. Sanctioned:
+Minimal dependencies: stdlib-first; a new module requires a ruling. Sanctioned:
 
 - `github.com/spf13/cobra` and `github.com/spf13/pflag` — the CLI.
 - `github.com/BurntSushi/toml` — configuration files.

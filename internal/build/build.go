@@ -153,12 +153,12 @@ type walk struct {
 	// inStage is the stage whose rows are running.
 	inStage string
 
-	// through is the resolved bound; resumed, restored and walked are set as
+	// through is the resolved bound; resumed, reset and walked are set as
 	// the walk reaches them, and stay nil where it never did.
-	through  string
-	resumed  *bool
-	restored []string
-	walked   []result.Record
+	through string
+	resumed *bool
+	reset   []string
+	walked  []result.Record
 
 	// recordedBoundary is whether this invocation recorded a stage boundary.
 	recordedBoundary bool
@@ -230,6 +230,9 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	}
 	if err == nil {
 		outcome, err = w.run(through)
+		if err := removeTemps(w.kbRoot); err != nil {
+			opts.Logger.Warn("kb-temp outlived the build; the next writer removes it", "kb-root", w.kbRoot, "error", err)
+		}
 	}
 	end := buildstore.EndingOf(outcome, err)
 	if err := w.progress.emit(end.Event()); err != nil {
@@ -238,12 +241,12 @@ func Run(ctx context.Context, opts Options) (string, []result.Field) {
 	return w.result(end)
 }
 
-// result is the build's document: what the walk reached, in the order the
+// result is the build's result: what the walk reached, in the order the
 // contract gives, then why it ended where it did not succeed.
 func (w *walk) result(end buildstore.Ending) (string, []result.Field) {
 	var fields []result.Field
 	// walked is whether this invocation recorded a boundary: one that recorded
-	// none walked no stage, and its document names neither the bound nor the
+	// none walked no stage, and its result names neither the bound nor the
 	// stages.
 	walked := w.walked != nil
 	if w.kbRoot != "" {
@@ -262,8 +265,8 @@ func (w *walk) result(end buildstore.Ending) (string, []result.Field) {
 	if w.resumed != nil {
 		fields = append(fields, result.Field{Key: "resumed", Value: *w.resumed})
 	}
-	if w.restored != nil {
-		fields = append(fields, result.Field{Key: "restored", Value: w.restored})
+	if w.reset != nil {
+		fields = append(fields, result.Field{Key: "reset", Value: w.reset})
 	}
 	if walked {
 		fields = append(fields, result.Field{Key: "stages", Value: w.walked})
@@ -355,11 +358,11 @@ func (w *walk) run(through buildstore.Stage) (string, error) {
 		}
 		return result.Bounded, nil
 	}
-	restored, err := w.prepare(remaining[0], recorded)
+	reset, err := w.prepare(remaining[0], recorded)
 	if err != nil {
 		return "", err
 	}
-	w.restored = restored
+	w.reset = reset
 	w.walked = []result.Record{}
 	for _, s := range remaining {
 		rec, err := w.stage(s)

@@ -81,7 +81,7 @@ var (
 	// conversion leaves, which 2.0.1's show did not carry, by id.
 	parityRationales = map[string]string{"ana-aaa007": "Fixture.", "wrk-omcjwo": "Fixture Press."}
 	// parityModelScoredEdges is the conversion's edges carrying a
-	// manually_scored flag, every one false: its scorable and demoted edges.
+	// manually-scored flag, every one false: its scorable and demoted edges.
 	parityModelScoredEdges = 9
 )
 
@@ -208,23 +208,62 @@ var goldenRules = []struct {
 	{"show names a node's host, host_anchor and summary entry in place of its canonical path and anchor, a work's and an axiom's label, its 2.0.1 key or label, and an analysis's and a work's rationale", (*conversionFacts).showIdentity},
 	{"show reads a pending rigor or strength *pending*", (*conversionFacts).showPending},
 	{"find does not page, a row its id, node_type, title, label (null on a claim), host, strength (*pending* where pending) and dependents; a case asks --kind claim --title, the claims by title 2.0.1's find listed", (*conversionFacts).findRows},
-	{"a node's band is keyed strength_band", (*conversionFacts).strengthBandKey},
+	{"a node's band is keyed strength-band", (*conversionFacts).strengthBandKey},
 	{"every work's and axiom's id is minted: a 2.0.1 work or axiom id, its key or label now its label, reads as the id parity-minted-ids.tsv states the conversion mints it", (*conversionFacts).mintedIDs},
+	{"result keys are kebab-case: node_type is kind, premise_count premises, the other snake-case keys hyphenated, and stats' strength-bands is keyed by band slug, *pending* as unknown", (*conversionFacts).currentKeys},
 }
 
-// strengthBandKey renames every build_band key of an answer strength_band.
+// strengthBandKey renames every build_band key of an answer strength-band.
 func (f *conversionFacts) strengthBandKey(_ []string, doc *yaml.Node) bool {
 	moved := false
 	var walk func(n *yaml.Node)
 	walk = func(n *yaml.Node) {
 		if i := keyAt(n, "build_band"); i >= 0 {
-			n.Content[i].Value, moved = "strength_band", true
+			n.Content[i].Value, moved = "strength-band", true
 		}
 		for _, c := range n.Content {
 			walk(c)
 		}
 	}
 	walk(doc)
+	return moved
+}
+
+// parityCurrentKeys is the current key of each 2.0.1 snake-case result key.
+var parityCurrentKeys = map[string]string{
+	"node_type": "kind", "premise_count": "premises", "host_anchor": "host-anchor", "build_status": "build-status",
+	"strength_band": "strength-band", "manually_scored": "manually-scored", "replaced_relation": "replaced-relation",
+	"demoted_edges": "demoted-edges", "subtree_aggregates": "subtree-aggregates", "rigor_manual": "rigor-manual",
+	"rigor_model": "rigor-model", "bearing_manual": "bearing-manual", "bearing_model": "bearing-model",
+	"strength_bands": "strength-bands", "highest_leverage": "highest-leverage",
+}
+
+// currentKeys renames every key of an answer parityCurrentKeys names, and
+// keys stats' strength-bands by each band's slug, the pending band's
+// kb.UnknownBandSlug, in place of its label.
+func (f *conversionFacts) currentKeys(_ []string, doc *yaml.Node) bool {
+	moved := false
+	for _, m := range mappings(doc) {
+		for i := 0; i < len(m.Content); i += 2 {
+			if to, ok := parityCurrentKeys[m.Content[i].Value]; ok {
+				m.Content[i].Value, moved = to, true
+			}
+		}
+	}
+	bands := value(value(doc, "results"), "strength-bands")
+	if bands == nil || bands.Kind != yaml.MappingNode {
+		return moved
+	}
+	slugs := map[string]string{kb.PendingLiteral: kb.UnknownBandSlug}
+	for _, b := range kb.StrengthBandLadder {
+		slugs[b.Label] = b.Slug
+	}
+	for i := 0; i < len(bands.Content); i += 2 {
+		if slug, ok := slugs[bands.Content[i].Value]; ok {
+			*bands.Content[i] = *key(slug)
+			moved = true
+		}
+	}
 	return moved
 }
 
@@ -253,8 +292,8 @@ var answerRules = []struct {
 	apply func(a *answerFacts, args []string, doc *yaml.Node) string
 }{
 	{"a converted, unsaved KB's answer carries its migration record after kb-root", (*answerFacts).migrationRecord},
-	{"stats' relations after bearing_model, as 3.0.0 adds it", (*answerFacts).statsRelations},
-	{"manually_scored after a show record's rigor; stats' four flag counts", (*answerFacts).manuallyScored},
+	{"stats' relations after bearing-model, as 3.0.0 adds it", (*answerFacts).statsRelations},
+	{"manually-scored after a show record's rigor; stats' four flag counts", (*answerFacts).manuallyScored},
 }
 
 type parityCase struct {
@@ -346,7 +385,7 @@ func setNull(n *yaml.Node) { *n = *null() }
 
 func setInt(n *yaml.Node, v int) { *n = *integer(v) }
 
-// quoted is s as a result document emits a string; key is s as a mapping key.
+// quoted is s as a result emits a string; key is s as a mapping key.
 func quoted(s string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: s}
 }
@@ -511,7 +550,7 @@ func (f *conversionFacts) summaryPageAnchors(_ []string, doc *yaml.Node) bool {
 	return moved
 }
 
-// cliNoArgumentCalls spells marked text as the answers, CLI documents, carry
+// cliNoArgumentCalls spells marked text as the answers, CLI results, carry
 // it, for a remedy whose calls take no argument: such a call is `kbase
 // <command>` whatever the command tree. A call with arguments stays marked, so
 // the answer differs from the golden and says so.
@@ -652,7 +691,7 @@ func (f *conversionFacts) findRows(args []string, doc *yaml.Node) bool {
 // KB's answers before any rule removes a key.
 type answerFacts struct {
 	migration    string          // the first answer's migration record, encoded
-	flaggedNodes map[string]bool // ids whose show record carries manually_scored
+	flaggedNodes map[string]bool // ids whose show record carries manually-scored
 	encode       func(*yaml.Node) string
 }
 
@@ -667,7 +706,7 @@ func gatherAnswerFacts(t *testing.T, answers []parityCase) *answerFacts {
 			}
 		}
 		results := value(c.doc, "results")
-		if c.args[0] == "show" && results != nil && results.Kind == yaml.MappingNode && value(results, "manually_scored") != nil {
+		if c.args[0] == "show" && results != nil && results.Kind == yaml.MappingNode && value(results, kb.ManuallyScoredKey) != nil {
 			a.flaggedNodes[c.args[1]] = true
 		}
 	}
@@ -688,15 +727,15 @@ func (a *answerFacts) migrationRecord(_ []string, doc *yaml.Node) string {
 }
 
 // statsRelations removes stats' relations, which stands directly after
-// bearing_model and holds one record per relation in kb.Relations order.
+// bearing-model and holds one record per relation in kb.Relations order.
 func (a *answerFacts) statsRelations(args []string, doc *yaml.Node) string {
 	results := value(doc, "results")
 	if args[0] != "stats" || results == nil {
 		return ""
 	}
-	relations := removeAfter(results, "bearing_model", "relations")
+	relations := removeAfter(results, "bearing-model", "relations")
 	if relations == nil || relations.Kind != yaml.MappingNode {
-		return "stats' relations is not a mapping directly after bearing_model"
+		return "stats' relations is not a mapping directly after bearing-model"
 	}
 	var names []string
 	for i := 0; i < len(relations.Content); i += 2 {
@@ -718,19 +757,19 @@ func (a *answerFacts) manuallyScored(args []string, doc *yaml.Node) string {
 	}
 	switch {
 	case args[0] == "show" && results.Kind == yaml.MappingNode && a.flaggedNodes[args[1]]:
-		if v := removeAfter(results, "rigor", "manually_scored"); v == nil || text(v) != "false" {
-			return "show's manually_scored is not false directly after rigor"
+		if v := removeAfter(results, "rigor", kb.ManuallyScoredKey); v == nil || text(v) != "false" {
+			return "show's " + kb.ManuallyScoredKey + " is not false directly after rigor"
 		}
 	case args[0] == "stats":
 		want := []struct {
 			key   string
 			count int
-		}{{"rigor_manual", 0}, {"rigor_model", len(a.flaggedNodes)}, {"bearing_manual", 0}, {"bearing_model", parityModelScoredEdges}}
-		// Each key removed, the next stands directly after subtree_aggregates.
+		}{{"rigor-manual", 0}, {"rigor-model", len(a.flaggedNodes)}, {"bearing-manual", 0}, {"bearing-model", parityModelScoredEdges}}
+		// Each key removed, the next stands directly after subtree-aggregates.
 		for _, w := range want {
-			v := removeAfter(results, "subtree_aggregates", w.key)
+			v := removeAfter(results, "subtree-aggregates", w.key)
 			if v == nil || text(v) != strconv.Itoa(w.count) {
-				return fmt.Sprintf("stats' %s is not %d in its place after subtree_aggregates", w.key, w.count)
+				return fmt.Sprintf("stats' %s is not %d in its place after subtree-aggregates", w.key, w.count)
 			}
 		}
 	}

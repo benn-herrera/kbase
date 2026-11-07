@@ -143,7 +143,7 @@ func scenario(t *testing.T) Inputs {
 		Cfg: Config{Models: ModelMap{Decision: "lab/d3", Text: "lab/qwen", Scoring: "cloud/clef"},
 			Sources: Sources{Decision: LayerSourceRepository, Text: LayerSourceGlobal, Scoring: LayerSourceRepository}},
 		Providers: Providers{"lab": {Name: "lab", BaseURL: "https://lab.example/v1", APIKey: secret.NewKey("lab-key"),
-			DecisionsFlavor: FlavorDecisions, Layer: LayerSourceRepository}},
+			DecisionAPI: DecisionAPIDecisions, Layer: LayerSourceRepository}},
 		Faults:   []ProviderFault{{Name: "cloud", Path: "/cfg/providers.toml", Reason: "no baseUrl declared"}},
 		WriteDir: dir,
 	}
@@ -158,7 +158,7 @@ func TestResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Endpoint{Role: RoleDecision, Provider: "lab", Model: "d3", Rule: RuleConfig,
-		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", Flavor: FlavorDecisions, Protocol: ProviderAPIAnthropic,
+		Layer: LayerSourceRepository, BaseURL: "https://lab.example/v1", DecisionAPI: DecisionAPIDecisions, Protocol: ProviderAPIAnthropic,
 		APIKey: secret.NewKey("lab-key"), BaseURLSource: LayerSourceRepository, ModelSource: LayerSourceRepository}
 	if !reflect.DeepEqual(ep, want) {
 		t.Errorf("= %+v, want %+v (key left out; len %d, want %d)", shownEndpoint(ep), shownEndpoint(want), len(ep.APIKey.Reveal()), len(want.APIKey.Reveal()))
@@ -322,7 +322,19 @@ func TestCleartextWarning(t *testing.T) {
 		{"loopback by address", "http://127.0.0.1:4000/v1", "k", false},
 		{"loopback v6", "http://[::1]:4000/v1", "k", false},
 		{"https", "https://reaper.local/v1", "k", false},
-		{"non-loopback with key", "http://reaper.local:4000/v1", "secret-key", true},
+		{"public name with key", "http://lab.example/v1", "secret-key", true},
+		{"mDNS name", "http://reaper.local:4000/v1", "k", false},
+		{"mDNS name, mixed case, trailing dot", "http://Reaper.LOCAL.:4000/v1", "k", false},
+		{"private 10/8", "http://10.0.0.5:4000/v1", "k", false},
+		{"private 172.16/12", "http://172.16.3.4/v1", "k", false},
+		{"private 192.168/16", "http://192.168.1.20/v1", "k", false},
+		{"link-local v4", "http://169.254.1.1/v1", "k", false},
+		{"unique-local v6", "http://[fd12::1]/v1", "k", false},
+		{"link-local v6", "http://[fe80::1]/v1", "k", false},
+		{"public address", "http://8.8.8.8/v1", "k", true},
+		{"just outside 172.16/12", "http://172.32.0.1/v1", "k", true},
+		{"bare name", "http://reaper:4000/v1", "k", true},
+		{"local as a middle label", "http://reaper.local.example/v1", "k", true},
 	} {
 		got := CleartextWarning(tc.url, secret.NewKey(tc.key))
 		if (got != "") != tc.warns || strings.Contains(got, "secret-key") || strings.Contains(got, "\n") {

@@ -31,7 +31,7 @@ func spellingTree() *cobra.Command {
 }
 
 // TestSpellingPipesAWriteBatchAtTheCommandLine: a call of kbase write is, at
-// the command line, its values document piped in as a shell user writes it —
+// the command line, its batch piped in as a shell user writes it —
 // printf's format escaping % and \, the word quoted for the shell — with the
 // batch options as flags; over MCP it is the write tool's call, its entries
 // carried whole.

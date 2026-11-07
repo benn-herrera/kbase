@@ -18,24 +18,27 @@ import (
 // Chmod, which does not consult the umask.
 const CreateMode = 0o666
 
-// TempSuffix ends the name of every temp file Write makes. A temp beside a
-// KB document is invisible to the KB's walks, which match *.md and the
-// register's exact name.
-const TempSuffix = ".tmp"
+// tempSuffix ends the name of every temp file a write makes.
+const tempSuffix = ".tmp"
 
-// tempPrefix starts the name of every temp file Write makes for target.
+// tempPrefix starts the name of every temp file a write makes for target.
 func tempPrefix(target string) string { return "." + filepath.Base(target) + "." }
+
+// ignoreFile is the git ignore file a temp directory holds, and ignoreAll its
+// content: it ignores every file in the directory, itself included, so git
+// never lists or commits anything there.
+const (
+	ignoreFile = ".gitignore"
+	ignoreAll  = "*\n"
+)
 
 // Write replaces path's bytes with data through a temp file beside it, synced
 // and renamed into place; the directory must exist. A symlink at path is
 // followed, so the link survives and its target is rewritten. An existing
 // file keeps its mode; a new one is created at CreateMode under the umask.
-//
-// beforeRename, when set, runs with the temp written and the rename not yet
-// done. Calling keep leaves the temp on disk if what follows unwinds, as a
-// killed process would leave it.
-func Write(path string, data []byte, beforeRename func(keep func())) error {
-	return replace(path, followed(path), data, beforeRename, 0)
+func Write(path string, data []byte) error {
+	target := followed(path)
+	return replace(path, target, filepath.Dir(target), data, 0)
 }
 
 // WriteMode is Write for a file whose permission the caller sets: the file
@@ -43,7 +46,8 @@ func Write(path string, data []byte, beforeRename func(keep func())) error {
 // replaces had. Its temp is created at mode, so the bytes are never readable
 // beyond it.
 func WriteMode(path string, data []byte, mode fs.FileMode) error {
-	return replace(path, followed(path), data, nil, mode.Perm())
+	target := followed(path)
+	return replace(path, target, filepath.Dir(target), data, mode.Perm())
 }
 
 // followed is path with a symlink at it resolved, else path itself.
@@ -61,15 +65,33 @@ type LinkError struct{ Detail string }
 
 func (e *LinkError) Error() string { return e.Detail }
 
-// WriteIn is Write for a path that must stay inside root: a path that is a
-// symbolic link is refused with a *LinkError, and so is one whose resolved
-// target leaves root. Neither touches the file the link names.
-func WriteIn(root, path string, data []byte) error {
+// WriteIn is Write for a path that must stay inside root, its temp made in
+// tempDir rather than beside path: tempDir, a directory under root and so on
+// its filesystem, is created where missing, holding ignoreFile. A path that
+// is a symbolic link is refused with a *LinkError, and so is one whose
+// resolved target leaves root. Neither touches the file the link names.
+func WriteIn(root, tempDir, path string, data []byte) error {
 	target, err := resolveIn(root, path)
 	if err != nil {
 		return err
 	}
-	return replace(path, target, data, nil, 0)
+	if err := readyTempDir(tempDir); err != nil {
+		return err
+	}
+	return replace(path, target, tempDir, data, 0)
+}
+
+// readyTempDir creates dir where missing and writes its ignoreFile where that
+// does not hold ignoreAll.
+func readyTempDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	ignore := filepath.Join(dir, ignoreFile)
+	if data, err := os.ReadFile(ignore); err == nil && string(data) == ignoreAll {
+		return nil
+	}
+	return Write(ignore, []byte(ignoreAll))
 }
 
 // resolveIn is path as WriteIn writes it: path itself where nothing on its
@@ -77,7 +99,7 @@ func WriteIn(root, path string, data []byte) error {
 // outside root.
 func resolveIn(root, path string) (string, error) {
 	if info, err := os.Lstat(path); err == nil && info.Mode()&fs.ModeSymlink != 0 {
-		return "", &LinkError{Detail: fmt.Sprintf("%s is a symbolic link, and a document is replaced only where it stands", path)}
+		return "", &LinkError{Detail: fmt.Sprintf("%s is a symbolic link, and a file is replaced only where it stands", path)}
 	}
 	target := path
 	if resolved, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
@@ -93,25 +115,21 @@ func resolveIn(root, path string) (string, error) {
 	return target, nil
 }
 
-// replace installs data at target, the path Write resolved, as path. A zero
-// mode is Write's: an existing file's mode is carried, a new file takes
-// CreateMode under the umask. Any other mode is set exactly.
-func replace(path, target string, data []byte, beforeRename func(keep func()), mode fs.FileMode) error {
+// replace installs data at target, the path Write resolved, as path, through
+// a temp file in tempDir. A zero mode is Write's: an existing file's mode is
+// carried, a new file takes CreateMode under the umask. Any other mode is set
+// exactly.
+func replace(path, target, tempDir string, data []byte, mode fs.FileMode) error {
 	info, statErr := os.Stat(target)
 	createMode := fs.FileMode(CreateMode)
 	if mode != 0 {
 		createMode = mode
 	}
-	tmp, err := createTemp(filepath.Dir(target), tempPrefix(target), createMode)
+	tmp, err := createTemp(tempDir, tempPrefix(target), createMode)
 	if err != nil {
-		return fmt.Errorf("create a temp file beside %s: %w", path, err)
+		return fmt.Errorf("create a temp file for %s: %w", path, err)
 	}
-	keep := false
-	defer func() {
-		if !keep {
-			os.Remove(tmp.Name())
-		}
-	}()
+	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("write %s: %w", path, err)
@@ -133,31 +151,8 @@ func replace(path, target string, data []byte, beforeRename func(keep func()), m
 			return fmt.Errorf("carry %s's mode: %w", path, err)
 		}
 	}
-	if beforeRename != nil {
-		beforeRename(func() { keep = true })
-	}
 	if err := os.Rename(tmp.Name(), target); err != nil {
 		return fmt.Errorf("install %s: %w", path, err)
-	}
-	return nil
-}
-
-// Sweep removes every temp file Write left beside path, as a process killed
-// between the temp and the rename leaves one. The caller must hold whatever
-// excludes path's other writers.
-func Sweep(path string) error {
-	target := followed(path)
-	entries, err := os.ReadDir(filepath.Dir(target))
-	if err != nil {
-		return err
-	}
-	prefix := tempPrefix(target)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), prefix) && strings.HasSuffix(e.Name(), TempSuffix) {
-			if err := os.Remove(filepath.Join(filepath.Dir(target), e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-		}
 	}
 	return nil
 }
@@ -168,7 +163,7 @@ func Sweep(path string) error {
 // off one name.
 func createTemp(dir, prefix string, mode fs.FileMode) (*os.File, error) {
 	for range 1000 {
-		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36)+TempSuffix)
+		name := filepath.Join(dir, prefix+strconv.FormatUint(rand.Uint64(), 36)+tempSuffix)
 		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if errors.Is(err, fs.ErrExist) {
 			continue

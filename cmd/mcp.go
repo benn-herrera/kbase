@@ -46,13 +46,14 @@ func mcpCommand() *cobra.Command {
 		Long: `mcp serves kbase to an agent harness over the Model Context Protocol:
 newline-delimited JSON-RPC on stdin and stdout. Each tool binds one
 subcommand, but for write and query, which each take a family of subcommands
-as operations. A tool takes the subcommand's arguments and returns its result
-document, as text and as structured content, except where its description
+as operations. A tool takes the subcommand's arguments and returns its
+result, as text and as structured content, except where its description
 names a difference: build and score return once their run has started. A
-result whose exit code is not 0 is an error result. Three commands are served
-by no tool: auth, since a key never travels through MCP; wait, since an MCP
-call cannot block, so a session polls status instead; and mcp, the server
-itself. help and completion are the CLI framework's own.
+call whose result has an exit code other than 0 comes back as an MCP error
+(isError true). Three commands are served by no tool: auth, since a key never
+travels through MCP; wait, since an MCP call cannot block, so a session polls
+status instead; and mcp, the server itself. help and completion are the CLI
+framework's own.
 
 Every tool also takes project-dir, the project the call runs in: the absolute
 path of its git worktree root, the directory holding .git, never kb-root/

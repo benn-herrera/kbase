@@ -87,7 +87,7 @@ check 'the finding names the record and the relation it replaced' \
 # find's rows.
 capture find "${kbase}" find
 check 'find done' grep -qx 'outcome: "done"' "${leg}/find.out"
-check 'no title twice within a kind' test -z "$(awk '/^ +node_type: /{k=$2} /^ +title: /{print k, $0}' "${leg}/find.out" | sort | uniq -d)"
+check 'no title twice within a kind' test -z "$(awk '/^ +kind: /{k=$2} /^ +title: /{print k, $0}' "${leg}/find.out" | sort | uniq -d)"
 
 check 'every kb-build: commit holding a KB derives unchanged' \
     tools/scripts/check-build-trail.sh "${leg}/repo" "${leg}" "${kbase}"

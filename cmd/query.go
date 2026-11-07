@@ -95,7 +95,7 @@ that reads *pending* is unscored, not low.`
 var queryHelp = queryReads + "\n" + queryAnswerHelp(" on stdout")
 
 // queryAnswerHelp is where a query's result puts its answer, where naming the
-// channel the document arrives on as the surface reading it states it.
+// channel the result arrives on as the surface reading it states it.
 func queryAnswerHelp(where string) string {
 	return "A query's result is one YAML document" + where + ", the answer under \"" + query.ResultsKey + "\"."
 }

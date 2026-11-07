@@ -1,7 +1,7 @@
 # ACTIVE PLAN — scoring issues
 
 **Status:** active, in outline. Points to address are gathered here first; each becomes a
-dispatchable package under CONVENTIONS' "Plan dispatchability" once it is understood.
+dispatchable package under the `dev-process` skill's Dispatchability rules once it is understood.
 
 ## Objective
 

@@ -35,6 +35,34 @@ func TestEmitRoundTrips(t *testing.T) {
 	}
 }
 
+type namedCount uint16
+
+func TestWriteEncodesEveryIntegerKindAsAnInt(t *testing.T) {
+	encoded := func(v any) string {
+		var buf bytes.Buffer
+		if err := Write(&buf, Field{"n", v}); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	for _, tc := range []struct {
+		name string
+		v    any
+		as   int
+	}{
+		{"int8", int8(-7), -7}, {"int16", int16(300), 300}, {"int32", int32(70000), 70000},
+		{"int64", int64(1) << 40, 1 << 40}, {"uint", uint(5), 5}, {"uint8", uint8(255), 255},
+		{"uint16", uint16(65535), 65535}, {"uint32", uint32(1) << 31, 1 << 31},
+		{"uint64", uint64(1) << 40, 1 << 40}, {"named", namedCount(9), 9}, {"zero uint", uint(0), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, want := encoded(tc.v), encoded(tc.as); got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestEmitEndsClosingItemsWithTheOutcomesAsk(t *testing.T) {
 	given := func() []Item {
 		return []Item{
@@ -125,11 +153,11 @@ func TestFloatTextIsPositional(t *testing.T) {
 	}
 }
 
-// TestADocumentIsSpelledByTheWriterItGoesTo: a document written on a spelled
+// TestAResultIsSpelledByTheWriterItGoesTo: a result written on a spelled
 // writer spells every string by it, items and lists included; one written on
 // any other writer keeps the marked form, and Reemit spells that record as
 // Write would have, byte for byte; the first spelling a writer carries holds.
-func TestADocumentIsSpelledByTheWriterItGoesTo(t *testing.T) {
+func TestAResultIsSpelledByTheWriterItGoesTo(t *testing.T) {
 	fields := []Field{{"note", "pass " + argmark.Flag("state-dir")}, {"words", []string{argmark.Positional("id")}},
 		{RefusalsKey, []Item{{Key: argmark.Flag("limit"), Detail: argmark.Flag("limit") + " needs " + argmark.Flag("sort")}}}}
 	mcp := argmark.Spelling{MCP: true}
@@ -148,7 +176,7 @@ func TestADocumentIsSpelledByTheWriterItGoesTo(t *testing.T) {
 		t.Errorf("spelled:\n%s\nwant:\n%s", spelled.String(), want)
 	}
 	if !argmark.Marked(recorded.String()) {
-		t.Errorf("a document on an unspelled writer lost its markers:\n%s", recorded.String())
+		t.Errorf("a result on an unspelled writer lost its markers:\n%s", recorded.String())
 	}
 	if reemitted.String() != want {
 		t.Errorf("reemitted:\n%s\nwant:\n%s", reemitted.String(), want)
@@ -159,5 +187,43 @@ func TestAnErrorSpellsItsArgumentsAtTheCommandLine(t *testing.T) {
 	err := Refusal{{Detail: argmark.Flag("limit") + " needs " + argmark.Flag("sort")}, {Detail: "no " + argmark.Positional("id")}}
 	if got, want := err.Error(), "--limit needs --sort; no <id>"; got != want {
 		t.Errorf("Error = %q, want %q", got, want)
+	}
+}
+
+// TestWithWarningsPlacesThemBeforeTheClosingKey: the warnings go last among
+// the verb's own keys, before a closing key where the fields end on one, and
+// the fields given are left as they were.
+func TestWithWarningsPlacesThemBeforeTheClosingKey(t *testing.T) {
+	warnings := Field{Key: WarningsKey}
+	for _, tc := range []struct {
+		name string
+		keys []string
+		want []string
+	}{
+		{"no fields", nil, []string{WarningsKey}},
+		{"no closing key", []string{"a", "b"}, []string{"a", "b", WarningsKey}},
+		{"refusals", []string{"a", RefusalsKey}, []string{"a", WarningsKey, RefusalsKey}},
+		{"failures", []string{"a", FailuresKey}, []string{"a", WarningsKey, FailuresKey}},
+		{"cancelled", []string{"a", CancelledKey}, []string{"a", WarningsKey, CancelledKey}},
+		{"closing key alone", []string{RefusalsKey}, []string{WarningsKey, RefusalsKey}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := make([]Field, len(tc.keys), len(tc.keys)+1)
+			for i, k := range tc.keys {
+				fields[i] = Field{Key: k}
+			}
+			var got []string
+			for _, f := range WithWarnings(fields, warnings) {
+				got = append(got, f.Key)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("keys = %q, want %q", got, tc.want)
+			}
+			for i, k := range tc.keys {
+				if fields[i].Key != k {
+					t.Errorf("the fields given became %v", fields)
+				}
+			}
+		})
 	}
 }

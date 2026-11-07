@@ -211,7 +211,7 @@ func TestAnthropicUnsetSamplingSendsTheBaselineBody(t *testing.T) {
 	defer srv.Close()
 
 	c := NewAnthropicClient(Endpoint{BaseURL: srv.URL, Protocol: ProtocolAnthropic})
-	if _, err := chat(context.Background(), c, "claude-x", "the system", "the prompt", nil, nil); err != nil {
+	if _, err := chat(context.Background(), c, quickRetry(), "claude-x", "the system", "the prompt", nil); err != nil {
 		t.Fatalf("chat: %v", err)
 	}
 	if string(raw) != want {
@@ -250,7 +250,7 @@ func TestAnthropicSamplingMapsOntoTheWire(t *testing.T) {
 			defer srv.Close()
 
 			c := NewAnthropicClient(Endpoint{BaseURL: srv.URL, Protocol: ProtocolAnthropic, Sampling: tc.sampling})
-			if _, err := chat(context.Background(), c, "claude-x", "be brief", tc.prompt, nil, nil); err != nil {
+			if _, err := chat(context.Background(), c, quickRetry(), "claude-x", "be brief", tc.prompt, nil); err != nil {
 				t.Fatalf("chat: %v", err)
 			}
 			var wire map[string]json.RawMessage
@@ -434,16 +434,17 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"try later, k
 // TestAnthropicStatusesClassifyThroughChat: a non-2xx response is the same
 // StatusError the OpenAI client returns, so chat.go's handling is unchanged —
 // a 4xx that is not 429 ends the call on the one attempt, and 429/5xx are
-// re-issued up to ChatAttempts.
+// re-issued up to the retry's attempts.
 func TestAnthropicStatusesClassifyThroughChat(t *testing.T) {
+	r := quickRetry()
 	for _, tc := range []struct {
 		code     int
 		requests int
 	}{
 		{http.StatusBadRequest, 1},
 		{http.StatusUnauthorized, 1},
-		{http.StatusTooManyRequests, ChatAttempts},
-		{http.StatusServiceUnavailable, ChatAttempts},
+		{http.StatusTooManyRequests, r.Attempts},
+		{http.StatusServiceUnavailable, r.Attempts},
 	} {
 		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
 			// The error type itself is what classification reads.
@@ -455,7 +456,7 @@ func TestAnthropicStatusesClassifyThroughChat(t *testing.T) {
 			srv, requests := statusServer(t, tc.code)
 			client := NewClient(newAnthropicTestEndpoint(srv.URL))
 
-			got, err := chat(context.Background(), client, "claude-x", "the system", "the prompt", nil, nil)
+			got, err := chat(context.Background(), client, r, "claude-x", "the system", "the prompt", nil)
 			if !errors.Is(err, ErrChatIncomplete) {
 				t.Fatalf("Chat = %v, want an incomplete call", err)
 			}
@@ -511,7 +512,7 @@ func TestAnthropicListModels(t *testing.T) {
 // kbase reaches; it refuses, naming the provider.
 func TestAnthropicDecisionRefuses(t *testing.T) {
 	c := NewAnthropicClient(Endpoint{Name: "claude", BaseURL: "http://claude.example/v1", Protocol: ProtocolAnthropic})
-	_, err := c.decision(context.Background(), DecisionRequest{
+	_, err := c.decision(context.Background(), quickRetry(), DecisionRequest{
 		Model:     "claude-x",
 		State:     "state",
 		Questions: []DecisionQuestion{{Key: "q1", Type: "noul"}},

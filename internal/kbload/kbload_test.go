@@ -57,7 +57,7 @@ func TestOpen(t *testing.T) {
 		refused          string
 		remedy           string
 	}{
-		{name: "current", entryPoint: "---\nkb-format: \"4.0.0\"\n---\n# KB\n", version: kb.FormatVersion},
+		{name: "current", entryPoint: "---\nkb-format: \"4.0.1\"\n---\n# KB\n", version: kb.FormatVersion},
 		{name: "a newer patch", entryPoint: "---\nkb-format: \"4.0.4\"\n---\n# KB\n", version: kb.FormatVersion},
 		{name: "the previous major", entryPoint: "---\nkb-format: \"3.0.0\"\n---\n# KB\n", migrated: true, version: "3.0.0"},
 		{name: "the major before it", entryPoint: "---\nkb-format: \"2.0.0\"\n---\n# KB\n", migrated: true, version: "2.0.0"},
@@ -102,7 +102,7 @@ func TestOpenStampFile(t *testing.T) {
 		version, refused  string
 		remedy, detail    string
 	}{
-		{name: "current", stamp: "kb-format: \"4.0.0\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
+		{name: "current", stamp: "kb-format: \"4.0.1\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
 		{name: "a newer patch", stamp: "kb-format: \"4.0.4\"\n", entryPoint: "# KB\n", version: kb.FormatVersion},
 		{name: "the previous major", stamp: "kb-format: \"3.0.0\"\n", entryPoint: "# KB\n", migrated: true, version: "3.0.0"},
 		{name: "a newer minor", stamp: "kb-format: \"4.1.0\"\n", entryPoint: "# KB\n", refused: CheckFormat, remedy: UpdateRemedy},
@@ -115,7 +115,7 @@ func TestOpenStampFile(t *testing.T) {
 		{name: "an empty file", stamp: "\n", entryPoint: "# KB\n", refused: CheckFormat},
 		{name: "the file over the frontmatter", stamp: "kb-format: \"2.0.0\"\n",
 			entryPoint: "---\nkb-format: \"3.0.0\"\n---\n# KB\n", migrated: true, version: "2.0.0"},
-		{name: "a stamp file and no entry point", stamp: "kb-format: \"4.0.0\"\n", version: kb.FormatVersion},
+		{name: "a stamp file and no entry point", stamp: "kb-format: \"4.0.1\"\n", version: kb.FormatVersion},
 		{name: "stamped in neither place", entryPoint: "# KB\n", refused: CheckFormat,
 			detail: "neither " + kb.FormatFile + " nor " + kb.EntryPointFile + "'s frontmatter"},
 	} {
@@ -200,10 +200,11 @@ func TestOpenRefusesASymlinkedDocument(t *testing.T) {
 	}
 }
 
-// TestOpenConvertsTheReaderFileSet: a conversion holds no document in a
-// directory the reader never descends into, so nothing there is renamed,
-// written or declared obsolete.
-func TestOpenConvertsTheReaderFileSet(t *testing.T) {
+// TestTheConversionsFileSetIsItsFormatsReaders: a conversion converts the
+// files the format it converts from reads, so a document in a directory that
+// format's reader never descends into (tools/, session/) is not renamed,
+// written or declared obsolete, and is read as it stands.
+func TestTheConversionsFileSetIsItsFormatsReaders(t *testing.T) {
 	root := writeEntryPoint(t, "---\nkb-format: \"1.0.0\"\n---\n# KB\n")
 	register := "# Register\n\n## Claim A\n<!-- id: clm-aaaaaa -->\n\n### Quality\n- confidence: 0.70\n"
 	writeFiles(t, root, map[string]string{
@@ -217,7 +218,7 @@ func TestOpenConvertsTheReaderFileSet(t *testing.T) {
 	for _, p := range slices.Concat(src.MigratedFiles(), src.Obsolete()) {
 		for _, dir := range []string{"tools", "session"} {
 			if strings.HasPrefix(p, kb.KBDir+"/"+dir+"/") {
-				t.Errorf("%s is in the conversion's file set, and the reader never reads it", p)
+				t.Errorf("%s is in the conversion's file set, and the format it converts from never reads %s/", p, dir)
 			}
 		}
 	}

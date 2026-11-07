@@ -60,15 +60,38 @@ func statusServer(t *testing.T, code int) (*httptest.Server, func() int) {
 	}
 }
 
-// slotChat makes one chat call to model "m" as a consumer makes it: through the
-// Slot of the one item on a queue of one, ctx being the call's own.
-func slotChat(t *testing.T, ctx context.Context, c model.Client, system, prompt string, backoff []time.Duration) (model.ChatResult, error) {
+// attempts is the most times a queue's call puts its request on the wire.
+var attempts = model.DefaultRetry().Attempts
+
+// queueOf is a queue of one whose calls retry by base and draw, the default
+// attempt count kept.
+func queueOf(base time.Duration, draw func(int64) int64) *model.Queue {
+	q := model.NewQueue(1)
+	q.Retry.Base, q.Retry.Draw = base, draw
+	return q
+}
+
+// longest draws the top of every bound, the longest pause the rule allows.
+func longest(n int64) int64 { return n - 1 }
+
+// quickQueue is a queue of one whose pauses are at most a few milliseconds.
+func quickQueue() *model.Queue { return queueOf(time.Millisecond, longest) }
+
+// slotChat is slotChatOn over a quickQueue.
+func slotChat(t *testing.T, ctx context.Context, c model.Client, system, prompt string) (model.ChatResult, error) {
+	t.Helper()
+	return slotChatOn(t, quickQueue(), ctx, c, system, prompt)
+}
+
+// slotChatOn makes one chat call to model "m" as a consumer makes it: through
+// the Slot of the one item on q, ctx being the call's own.
+func slotChatOn(t *testing.T, q *model.Queue, ctx context.Context, c model.Client, system, prompt string) (model.ChatResult, error) {
 	t.Helper()
 	var res model.ChatResult
 	var err error
 	var wg sync.WaitGroup
-	if goErr := model.NewQueue(1).Go(context.Background(), &wg, func(s *model.Slot) func() {
-		res, err = s.Chat(ctx, c, model.ChatRequest{Model: "m", System: system, Prompt: prompt, Backoff: backoff})
+	if goErr := q.Go(context.Background(), &wg, func(s *model.Slot) func() {
+		res, err = s.Chat(ctx, c, model.ChatRequest{Model: "m", System: system, Prompt: prompt})
 		return nil
 	}); goErr != nil {
 		t.Fatalf("Go: %v", goErr)
@@ -119,11 +142,11 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 		{"answered at once", []string{sseAnswered}, 1, true, model.ChatOK},
 		{"short of [DONE], then answered", []string{sseShortOfDone, sseAnswered}, 2, true, model.ChatOK},
 		{"served nothing, then answered", []string{sseServedNothing, sseAnswered}, 2, true, model.ChatOK},
-		{"never complete", []string{sseShortOfDone}, model.ChatAttempts, false, model.ChatTransportFailure},
+		{"never complete", []string{sseShortOfDone}, attempts, false, model.ChatTransportFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.bodies...)
-			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil)
+			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt")
 			got, observed := lastAttempt(res), attemptOutcomes(res)
 			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, model.ErrChatIncomplete)) {
 				t.Fatalf("Chat = %+v, %v; want ok %t", got, err, tc.ok)
@@ -156,7 +179,7 @@ func TestChatReissuesWhatDidNotComplete(t *testing.T) {
 func TestChatNamesAProviderRefusal(t *testing.T) {
 	srv, requests := statusServer(t, http.StatusBadRequest)
 
-	res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil)
+	res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt")
 	got, observed := lastAttempt(res), attemptOutcomes(res)
 	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -200,14 +223,14 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 		{http.StatusUnauthorized, 1, true},
 		{http.StatusForbidden, 1, true},
 		{http.StatusNotFound, 1, false},
-		{http.StatusInternalServerError, model.ChatAttempts, false},
-		{http.StatusTooManyRequests, model.ChatAttempts, false},
-		{http.StatusServiceUnavailable, model.ChatAttempts, false},
+		{http.StatusInternalServerError, attempts, false},
+		{http.StatusTooManyRequests, attempts, false},
+		{http.StatusServiceUnavailable, attempts, false},
 	} {
 		t.Run(fmt.Sprintf("%d", tc.code), func(t *testing.T) {
 			srv, requests := statusServer(t, tc.code)
 
-			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil)
+			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt")
 			got, observed := lastAttempt(res), res.Attempts
 			if !errors.Is(err, model.ErrChatIncomplete) {
 				t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -233,8 +256,8 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 				}
 				return
 			}
-			if got.Attempt != model.ChatAttempts {
-				t.Errorf("attempt = %d, want the last of %d", got.Attempt, model.ChatAttempts)
+			if got.Attempt != attempts {
+				t.Errorf("attempt = %d, want the last of %d", got.Attempt, attempts)
 			}
 		})
 	}
@@ -247,7 +270,7 @@ func TestChatReissuesOnlyARetryableStatus(t *testing.T) {
 func TestChatIncompleteReasonWithoutAttemptText(t *testing.T) {
 	srv, _ := sseServer(t, sseServedNothing)
 
-	res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil)
+	res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt")
 	got := lastAttempt(res)
 	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -269,7 +292,7 @@ func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	res, err := slotChat(t, context.Background(), openAIAt(url), "the system", "the prompt", nil)
+	res, err := slotChat(t, context.Background(), openAIAt(url), "the system", "the prompt")
 	got, observed := lastAttempt(res), attemptOutcomes(res)
 	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -277,8 +300,8 @@ func TestChatNamesAnUnreachableEndpoint(t *testing.T) {
 	if got.Outcome != model.ChatTransportFailure {
 		t.Errorf("outcome = %q, want %q", got.Outcome, model.ChatTransportFailure)
 	}
-	if len(observed) != model.ChatAttempts {
-		t.Errorf("%d attempts observed, want %d: a transport failure is re-issued", len(observed), model.ChatAttempts)
+	if len(observed) != attempts {
+		t.Errorf("%d attempts observed, want %d: a transport failure is re-issued", len(observed), attempts)
 	}
 }
 
@@ -326,7 +349,7 @@ func TestChatRecordsReasoned(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.sse)
-			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil)
+			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt")
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}
@@ -368,7 +391,7 @@ func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, sseAnswered)
-			if _, err := slotChat(t, context.Background(), openAIAt(srv.URL), tc.system, tc.prompt, nil); err != nil {
+			if _, err := slotChat(t, context.Background(), openAIAt(srv.URL), tc.system, tc.prompt); err != nil {
 				t.Fatal(err)
 			}
 			raw := string(seen()[0])
@@ -384,7 +407,7 @@ func TestChatCarriesAnEmptyMessageContent(t *testing.T) {
 func TestChatStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := slotChat(t, ctx, modeltest.NewScriptedMock([]model.Response{{Content: "A"}}, nil).Client(), "s", "p", nil); !errors.Is(err, context.Canceled) {
+	if _, err := slotChat(t, ctx, modeltest.NewScriptedMock([]model.Response{{Content: "A"}}, nil).Client(), "s", "p"); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat on a cancelled context = %v", err)
 	}
 }
@@ -394,7 +417,7 @@ func TestChatStopsOnCancel(t *testing.T) {
 // failure.
 func TestChatTakesAnEmptyReply(t *testing.T) {
 	m := modeltest.NewScriptedMock([]model.Response{{Content: "", FinishReason: "stop"}}, nil)
-	res, err := slotChat(t, context.Background(), m.Client(), "s", "p", nil)
+	res, err := slotChat(t, context.Background(), m.Client(), "s", "p")
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -412,7 +435,7 @@ func TestChatAccumulatesTheStream(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n"+
 		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6}}\n\n"+
 		"data: [DONE]\n\n")
-	res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "s", "p", nil)
+	res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "s", "p")
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -442,7 +465,7 @@ func TestChatEndsOnACancelMidStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	defer cancel()
-	res, err := slotChat(t, ctx, openAIAt(srv.URL), "s", "p", nil)
+	res, err := slotChat(t, ctx, openAIAt(srv.URL), "s", "p")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Chat = %v, want context.Canceled", err)
 	}
@@ -451,41 +474,74 @@ func TestChatEndsOnACancelMidStream(t *testing.T) {
 	}
 }
 
-// TestChatBacksOffBetweenReissues: each re-issue waits the next pause of the
-// backoff, its last repeating, and a cancel during a pause ends the call.
+// TestChatBacksOffBetweenReissues: the bound of the pause before each
+// re-issue doubles — at the top of every bound, base 10ms waits 10, 20 and
+// 40 ms — and a cancel during a pause ends the call.
 func TestChatBacksOffBetweenReissues(t *testing.T) {
+	const base = 10 * time.Millisecond
 	srv, seen := sseServer(t, sseShortOfDone)
 	started := time.Now()
-	if _, err := slotChat(t, context.Background(), openAIAt(srv.URL), "s", "p",
-		[]time.Duration{30 * time.Millisecond}); !errors.Is(err, model.ErrChatIncomplete) {
+	if _, err := slotChatOn(t, queueOf(base, longest), context.Background(), openAIAt(srv.URL), "s", "p"); !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want incomplete", err)
 	}
-	if took := time.Since(started); len(seen()) != model.ChatAttempts || took < time.Duration(model.ChatAttempts-1)*30*time.Millisecond {
-		t.Errorf("%d requests over %v, want %d with a 30ms pause before each re-issue", len(seen()), took, model.ChatAttempts)
+	if took, want := time.Since(started), base*time.Duration(1<<(attempts-1)-1); len(seen()) != attempts || took < want {
+		t.Errorf("%d requests over %v, want %d with pauses of %v in all", len(seen()), took, attempts, want)
 	}
 	// The pause fits the budget (there is none), so a cancel arriving during
 	// it is what ends the call.
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(20*time.Millisecond, cancel)
 	defer cancel()
-	if _, err := slotChat(t, ctx, openAIAt(srv.URL), "s", "p", []time.Duration{time.Hour}); !errors.Is(err, context.Canceled) {
+	if _, err := slotChatOn(t, queueOf(time.Hour, longest), ctx, openAIAt(srv.URL), "s", "p"); !errors.Is(err, context.Canceled) {
 		t.Errorf("Chat cancelled in its pause = %v", err)
+	}
+}
+
+// TestChatHonoursRetryAfter: a 429 carrying Retry-After in seconds is
+// re-issued after the delay the server asked for, not after the drawn pause —
+// here an hour, which the deadline could not cover.
+func TestChatHonoursRetryAfter(t *testing.T) {
+	var mu sync.Mutex
+	var seen int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		mu.Lock()
+		seen++
+		first := seen == 1
+		mu.Unlock()
+		if first {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sseAnswered))
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	res, err := slotChatOn(t, queueOf(time.Hour, longest), ctx, openAIAt(srv.URL), "s", "p")
+	if err != nil || lastAttempt(res).Outcome != model.ChatOK {
+		t.Fatalf("Chat = %+v, %v; want the re-issue after the server's delay answered", lastAttempt(res), err)
+	}
+	if took := time.Since(started); took < time.Second {
+		t.Errorf("re-issued after %v, want the 1s the server asked for", took)
 	}
 }
 
 // TestChatGivesUpWhereThePauseOutlivesTheDeadline: a pause the deadline cannot
 // cover is not taken. The attempt after it is impossible, and waiting it out
 // would spend the whole budget dying on the deadline instead of on the attempt
-// it made — the caller's real scoring backoff, 5 s then 30 s, inside a 2 s
-// deadline.
+// it made — a pause of an hour inside a 2 s deadline.
 func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
 	srv, requests := statusServer(t, http.StatusServiceUnavailable)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	started := time.Now()
-	res, err := slotChat(t, ctx, openAIAt(srv.URL), "the system", "the prompt",
-		[]time.Duration{5 * time.Second, 30 * time.Second})
+	res, err := slotChatOn(t, queueOf(time.Hour, longest), ctx, openAIAt(srv.URL), "the system", "the prompt")
 	got := lastAttempt(res)
 	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
@@ -508,24 +564,23 @@ func TestChatGivesUpWhereThePauseOutlivesTheDeadline(t *testing.T) {
 }
 
 // TestChatSpendsItsBudgetOnAttempts: a deadline the pauses fit is spent on
-// attempts, not on giving up early. A 30 s deadline with a short injected
-// backoff still puts the call on the wire model.ChatAttempts times.
+// attempts, not on giving up early. A 30 s deadline with short pauses still
+// puts the call on the wire attempts times.
 func TestChatSpendsItsBudgetOnAttempts(t *testing.T) {
 	srv, requests := statusServer(t, http.StatusServiceUnavailable)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	res, err := slotChat(t, ctx, openAIAt(srv.URL), "the system", "the prompt",
-		[]time.Duration{time.Millisecond, time.Millisecond})
+	res, err := slotChat(t, ctx, openAIAt(srv.URL), "the system", "the prompt")
 	got := lastAttempt(res)
 	if !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
-	if got.Attempt != model.ChatAttempts {
-		t.Errorf("attempt = %d, want the last of %d", got.Attempt, model.ChatAttempts)
+	if got.Attempt != attempts {
+		t.Errorf("attempt = %d, want the last of %d", got.Attempt, attempts)
 	}
-	if n := requests(); n != model.ChatAttempts {
-		t.Errorf("%d requests, want %d", n, model.ChatAttempts)
+	if n := requests(); n != attempts {
+		t.Errorf("%d requests, want %d", n, attempts)
 	}
 }
 
@@ -533,22 +588,21 @@ func TestChatSpendsItsBudgetOnAttempts(t *testing.T) {
 // sequence leaves it unaffected — every attempt is made and every pause is
 // waited out rather than cut short.
 func TestChatTakesAPauseTheDeadlineCovers(t *testing.T) {
-	const pause = 30 * time.Millisecond
+	const base = 10 * time.Millisecond
 	srv, requests := statusServer(t, http.StatusServiceUnavailable)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	started := time.Now()
-	if _, err := slotChat(t, ctx, openAIAt(srv.URL), "the system", "the prompt",
-		[]time.Duration{pause}); !errors.Is(err, model.ErrChatIncomplete) {
+	if _, err := slotChatOn(t, queueOf(base, longest), ctx, openAIAt(srv.URL), "the system", "the prompt"); !errors.Is(err, model.ErrChatIncomplete) {
 		t.Fatalf("Chat = %v, want an incomplete call", err)
 	}
 	took := time.Since(started)
-	if n := requests(); n != model.ChatAttempts {
-		t.Errorf("%d requests, want %d", n, model.ChatAttempts)
+	if n := requests(); n != attempts {
+		t.Errorf("%d requests, want %d", n, attempts)
 	}
-	if want := time.Duration(model.ChatAttempts-1) * pause; took < want || took >= time.Second {
-		t.Errorf("took %v, want the %d pauses it waited out inside the deadline", took, model.ChatAttempts-1)
+	if want := base * time.Duration(1<<(attempts-1)-1); took < want || took >= time.Second {
+		t.Errorf("took %v, want the %d pauses, %v in all, waited out inside the deadline", took, attempts-1, want)
 	}
 }
 
@@ -573,7 +627,7 @@ func TestChatRecordsWhenTheFirstDeltaArrived(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, _ := sseServer(t, tc.sse)
-			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt", nil)
+			res, err := slotChat(t, context.Background(), openAIAt(srv.URL), "the system", "the prompt")
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}
@@ -627,7 +681,7 @@ func TestChatDoesNotResendAnAnswerCutOffBeforeAnyText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := sseServer(t, tc.body)
 
-			res, err := slotChat(t, context.Background(), tc.client(srv.URL), "s", "p", []time.Duration{time.Hour})
+			res, err := slotChat(t, context.Background(), tc.client(srv.URL), "s", "p")
 			if n := len(seen()); n != 1 || len(res.Attempts) != 1 {
 				t.Fatalf("%d requests, %d attempts; want one of each", n, len(res.Attempts))
 			}

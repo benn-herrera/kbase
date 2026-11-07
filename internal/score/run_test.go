@@ -1,7 +1,9 @@
 package score
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -43,12 +45,14 @@ func sequentialLaunch(ask Ask) Launch {
 
 // asked is one scripted reply: the title its item's prompt carries, and the
 // reply — cut off at the completion cap where truncated — or the error the call
-// returns.
+// returns. A reply marked once answers one call only, so an item's re-ask takes
+// the next reply its title matches.
 type asked struct {
 	title     string
 	reply     string
 	truncated bool
 	err       error
+	once      bool
 }
 
 // asking is a scripted Ask: the first reply whose title the prompt carries
@@ -56,10 +60,12 @@ type asked struct {
 func asking(t *testing.T, answers []asked) (Ask, *[]string) {
 	t.Helper()
 	var prompts []string
+	used := make([]bool, len(answers))
 	return func(_ context.Context, prompt string) (Reply, error) {
 		prompts = append(prompts, prompt)
-		for _, a := range answers {
-			if strings.Contains(prompt, a.title) {
+		for i, a := range answers {
+			if strings.Contains(prompt, a.title) && !used[i] {
+				used[i] = a.once
 				return Reply{Text: a.reply, Truncated: a.truncated}, a.err
 			}
 		}
@@ -242,7 +248,7 @@ func TestRunReadsTheIndexBeforeTheWalkAndNotDuringIt(t *testing.T) {
 	}
 }
 
-// TestReplySummaryIsBoundedAndPlain: a failed line's reply as a document or a log
+// TestReplySummaryIsBoundedAndPlain: a failed line's reply as a result or a log
 // line states it — control characters dropped, a line break read as a space, and
 // a long reason cut to its bound on a character boundary.
 func TestReplySummaryIsBoundedAndPlain(t *testing.T) {
@@ -299,8 +305,9 @@ func TestRunWalksTheSet(t *testing.T) {
 	if want := (Counts{Total: 4, Done: 2, Failed: 2}); res.Counts != want {
 		t.Errorf("counts = %+v, want %+v", res.Counts, want)
 	}
-	if len(*prompts) != len(answer) {
-		t.Errorf("the run made %d calls, want %d", len(*prompts), len(answer))
+	// Claim A's malformed reply is asked once more, and refused again.
+	if want := len(answer) + 1; len(*prompts) != want {
+		t.Errorf("the run made %d calls, want %d", len(*prompts), want)
 	}
 	if !slices.Equal(*landed, wantLanded) {
 		t.Errorf("the write seam was handed %v, want %v", *landed, wantLanded)
@@ -455,7 +462,7 @@ func TestRunFailsATruncatedReply(t *testing.T) {
 // TestRunCancelRecordsWhatWasAnswered: a context cancelled during a call stops
 // the walk, and the walk's end still records a line for every item answered
 // before the stop — the value that parsed landed, the reply that did not failed
-// — and none for the call in flight, then removes the result files.
+// — and none for the call in flight, then removes the answer files.
 func TestRunCancelRecordsWhatWasAnswered(t *testing.T) {
 	src, ix, set := runSet(t)
 	set = set[:3]
@@ -466,9 +473,9 @@ func TestRunCancelRecordsWhatWasAnswered(t *testing.T) {
 	ask := func(_ context.Context, _ string) (Reply, error) {
 		calls++
 		switch calls {
-		case 2:
+		case 2, 3: // the second item's ask and its re-ask
 			return Reply{Text: "about half"}, nil
-		case 3:
+		case 4:
 			cancel()
 			return Reply{}, context.Canceled
 		}
@@ -485,8 +492,8 @@ func TestRunCancelRecordsWhatWasAnswered(t *testing.T) {
 	if want := (Counts{Total: 3, Done: 1, Failed: 1, Remaining: 1}); res.Counts != want {
 		t.Errorf("counts = %+v, want %+v", res.Counts, want)
 	}
-	if calls != 3 {
-		t.Errorf("the run made %d calls, want 3: a cancelled context stops the walk", calls)
+	if calls != 4 {
+		t.Errorf("the run made %d calls, want 4: a cancelled context stops the walk", calls)
 	}
 	if want := []landed{{itemID(set[0]), "1.0"}}; !slices.Equal(*wrote, want) {
 		t.Errorf("the write seam was handed %v, want %v: the cancelled walk's end still lands what it answered", *wrote, want)
@@ -494,21 +501,21 @@ func TestRunCancelRecordsWhatWasAnswered(t *testing.T) {
 	if got := l.Status(set[2]); got != "" {
 		t.Errorf("the item in flight recorded %q, want nothing", got)
 	}
-	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "status"); !slices.Equal(got, []string{StatusDone, StatusFailed}) {
-		t.Errorf("the ledger's lines record %q, want the two items answered before the stop, in walk order", got)
+	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "status"); !slices.Equal(got, []string{StatusDone, StatusFailed, StatusFailed}) {
+		t.Errorf("the ledger's lines record %q, want the two items answered before the stop, the second's two calls, in walk order", got)
 	}
 	if _, err := os.Stat(filepath.Join(l.Dir(), resultsDir)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the walk's end left its result files: %v", err)
+		t.Errorf("the walk's end left its answer files: %v", err)
 	}
 }
 
 // reversing is a Launch over ask that holds each item it launches until the item
 // launched after it has finished, so the n items a walk launches complete in the
-// reverse of their launch order. The slice records, by launch, the prompt each
-// item's call carried. A walk that launches fewer than n items never drains, so
-// n is the count of items the walk calls.
-func reversing(n int, ask Ask) (Launch, []string) {
-	prompts := make([]string, n)
+// reverse of their launch order. The slice records, by launch, the prompts each
+// item's calls carried, in call order. A walk that launches fewer than n items
+// never drains, so n is the count of items the walk calls.
+func reversing(n int, ask Ask) (Launch, [][]string) {
+	prompts := make([][]string, n)
 	finished := make([]chan struct{}, n+1)
 	for k := range finished {
 		finished[k] = make(chan struct{})
@@ -527,7 +534,7 @@ func reversing(n int, ask Ask) (Launch, []string) {
 			defer close(finished[k])
 			<-finished[k+1]
 			after := item(func(ctx context.Context, prompt string) (Reply, error) {
-				prompts[k] = prompt
+				prompts[k] = append(prompts[k], prompt)
 				return ask(ctx, prompt)
 			})
 			if after != nil {
@@ -574,13 +581,23 @@ func TestRunRecordsTheSameWhateverOrderItsItemsComplete(t *testing.T) {
 		}
 		return l
 	}
-	sequential := walk(sequentialLaunch(ask))
-	n := len(*prompts)
-	launch, _ := reversing(n, ask)
+	launches := 0
+	one := sequentialLaunch(ask)
+	sequential := walk(func(ctx context.Context, wg *sync.WaitGroup, item func(Ask) func()) error {
+		launches++
+		return one(ctx, wg, item)
+	})
+	m := len(*prompts)
+	launch, byLaunch := reversing(launches, ask)
 	outOfOrder := walk(launch)
-	reversed := slices.Clone((*prompts)[:n])
-	slices.Reverse(reversed)
-	if !slices.Equal((*prompts)[n:], reversed) {
+	// An item's calls run in order inside its launch, so the out-of-order walk
+	// makes the one-at-a-time walk's calls with the items' turns reversed.
+	var inOrder, reversed []string
+	for k := range byLaunch {
+		inOrder = append(inOrder, byLaunch[k]...)
+		reversed = append(reversed, byLaunch[len(byLaunch)-1-k]...)
+	}
+	if !slices.Equal((*prompts)[:m], inOrder) || !slices.Equal((*prompts)[m:], reversed) {
 		t.Fatal("the reversing launch did not complete the calls in the reverse of the one-at-a-time walk's order")
 	}
 	for _, name := range []string{linesFile, capturesFile} {
@@ -619,7 +636,7 @@ func TestRunLaunchesItsItemsInSetOrder(t *testing.T) {
 		if recordedItem(rec) != itemID(items[k]) {
 			t.Errorf("capture %d names %s, want %s: the captures stand in walk order", k, recordedItem(rec), itemID(items[k]))
 		}
-		if rec["prompt"] != launched[k] {
+		if len(launched[k]) != 1 || rec["prompt"] != launched[k][0] {
 			t.Errorf("launch %d carried another item's prompt than %s's, the set's item %d", k, itemID(items[k]), k)
 		}
 	}
@@ -818,7 +835,7 @@ func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
 	}
 	for _, c := range []struct {
 		id  string
-		ask func(string) (string, error)
+		ask func(string, *asks.Correction) (string, error)
 	}{
 		{"clm-aaaaaa", asks.ScoreRigorStatement},
 		{"ana-aaaaaa", asks.ScoreRigorMethod},
@@ -827,7 +844,7 @@ func TestRunDigestsTheVariantEachItemReceived(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		prompt, err := c.ask(text.numbered())
+		prompt, err := c.ask(text.numbered(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1046,5 +1063,254 @@ func assertDerivable(t *testing.T, l *Ledger, tableOf map[string]kb.FaultTable) 
 	}
 	if done == 0 {
 		t.Fatal("the run landed nothing to re-derive")
+	}
+}
+
+// reAskedRun is a run over runSet's first item in dir whose calls are answered
+// by answers, its result, the prompts it sent, and its captures read back in
+// call order.
+func reAskedRun(t *testing.T, dir string, answers []asked) (Result, []string, []captureRecord) {
+	t.Helper()
+	src, ix, set := runSet(t)
+	l := kept(t, dir)
+	ask, prompts := asking(t, answers)
+	write, _ := writing()
+	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
+		Ledger: l, Model: "small"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var caps []captureRecord
+	for _, raw := range rawLines(t, filepath.Join(l.Dir(), capturesFile)) {
+		var rec captureRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatal(err)
+		}
+		caps = append(caps, rec)
+	}
+	return res, *prompts, caps
+}
+
+// reRendered is the prompt the capture rec's item is asked with under its own
+// correction, rendered afresh from the KB: what the capture's digest must name.
+func reRendered(t *testing.T, rec captureRecord) string {
+	t.Helper()
+	src, ix, set := runSet(t)
+	g, err := graphOf(src, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := rigorClassOf(set[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed, err := rigorText(src, g, set[0].Node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := cl.render(closed, rec.Correction.correction())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prompt
+}
+
+// TestRunReAsksARefusedReplyOnce: a reply the parse refuses is asked once more in
+// the same run — the item's own prompt with a correction after it — and a good
+// second reply lands. The ledger holds the refused call's failed line, with no
+// text of the reply, then the landed one; each call has its capture, and the
+// re-ask's records what its correction was rendered from and re-renders to its
+// digest.
+func TestRunReAsksARefusedReplyOnce(t *testing.T) {
+	dir := t.TempDir()
+	res, prompts, caps := reAskedRun(t, dir, []asked{
+		{title: "1| An Analysis", reply: "0.5, roughly.  ", once: true},
+		{title: "1| An Analysis", reply: "none"},
+	})
+	if res.Outcome != result.Done || res.Counts != (Counts{Total: 1, Done: 1}) || len(res.Written) != 1 {
+		t.Errorf("outcome %q, counts %+v, written %v; want the item done and landed", res.Outcome, res.Counts, res.Written)
+	}
+	if len(prompts) != 2 || prompts[1] == prompts[0] || !strings.HasPrefix(prompts[1], prompts[0]) {
+		t.Fatalf("the run sent %d prompts; want the first ask, then a re-ask that begins with it and adds to it", len(prompts))
+	}
+	recs := lines(t, filepath.Join(RunsDir(dir), header().Run, linesFile))
+	if len(recs) != 2 || recs[0]["status"] != StatusFailed || recs[1]["status"] != StatusDone {
+		t.Fatalf("the ledger holds %v, want the refused call's failed line, then the landed one", recs)
+	}
+	reason, _ := recs[0]["reply"].(string)
+	if strings.Contains(reason, "roughly") || recs[0]["faults"] != nil {
+		t.Errorf("the refused call's line %v carries the reply's text", recs[0])
+	}
+	if len(caps) != 2 {
+		t.Fatalf("the run left %d captures, want one per call", len(caps))
+	}
+	if caps[0].Correction != nil {
+		t.Errorf("the first ask's capture records a correction: %+v", caps[0].Correction)
+	}
+	want := &correctionRecord{Case: asks.RefusalNotAChargeLine, Values: map[string]string{asks.SlotReplyLine: "1"}, Quoted: []string{"0.5, roughly."}}
+	if !reflect.DeepEqual(caps[1].Correction, want) {
+		t.Errorf("the re-ask's capture records the correction %+v, want %+v", caps[1].Correction, want)
+	}
+	for i, rec := range caps {
+		if rec.PromptSHA256 != recs[i]["prompt_sha256"] || digestOf(reRendered(t, rec)) != rec.PromptSHA256 {
+			t.Errorf("capture %d: digest %s, its line's %v; it does not re-render to it", i, rec.PromptSHA256, recs[i]["prompt_sha256"])
+		}
+	}
+}
+
+// TestRunFailsAReplyRefusedTwice: a re-ask the parse refuses too leaves the item
+// failed after asks.MaxAsks calls, and a resume asks it afresh, its first prompt
+// the run's first ask.
+func TestRunFailsAReplyRefusedTwice(t *testing.T) {
+	dir := t.TempDir()
+	res, prompts, _ := reAskedRun(t, dir, []asked{{title: "1| An Analysis", reply: "about half"}})
+	if res.Outcome != result.Failed || res.Counts != (Counts{Total: 1, Failed: 1}) || len(prompts) != asks.MaxAsks {
+		t.Fatalf("outcome %q, counts %+v after %d calls; want the item failed after %d", res.Outcome, res.Counts, len(prompts), asks.MaxAsks)
+	}
+	run := filepath.Join(RunsDir(dir), header().Run)
+	if got := fieldOf(t, filepath.Join(run, linesFile), "status"); !slices.Equal(got, []string{StatusFailed, StatusFailed}) {
+		t.Errorf("the ledger's lines record %q, want both calls failed", got)
+	}
+
+	src, ix, set := runSet(t)
+	ask, again := asking(t, []asked{{title: "1| An Analysis", reply: "none"}})
+	write, _ := writing()
+	resumed, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
+		Ledger: reopened(t, dir), Model: "small"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Counts != (Counts{Total: 1, Done: 1}) || len(*again) != 1 || (*again)[0] != prompts[0] {
+		t.Errorf("the resume: counts %+v after %d calls; want the item done on one call carrying the run's first ask", resumed.Counts, len(*again))
+	}
+}
+
+// TestRunReAsksWithoutQuotingALineTheGuardRefuses: a refused reply line carrying
+// what the input guard keeps out of a prompt — a run of twelve backticks, which
+// would close the correction's fence — is not quoted: the re-ask carries the
+// case alone, and its capture records no quoted line.
+func TestRunReAsksWithoutQuotingALineTheGuardRefuses(t *testing.T) {
+	dir := t.TempDir()
+	res, prompts, caps := reAskedRun(t, dir, []asked{
+		{title: "1| An Analysis", reply: strings.Repeat("`", 12) + "\nnone", once: true},
+		{title: "1| An Analysis", reply: "none"},
+	})
+	if res.Counts != (Counts{Total: 1, Done: 1}) || len(caps) != 2 {
+		t.Fatalf("counts %+v, %d captures; want the item done after a re-ask", res.Counts, len(caps))
+	}
+	c := caps[1].Correction
+	if c == nil || c.Case != asks.RefusalNotAChargeLine || c.Quoted == nil || len(c.Quoted) != 0 {
+		t.Fatalf("the re-ask's capture records the correction %+v, want its case and no quoted line", c)
+	}
+	if raw := rawLines(t, filepath.Join(RunsDir(dir), header().Run, capturesFile))[1]; !bytes.Contains(raw, []byte(`"quoted":[]`)) {
+		t.Errorf("the re-ask's capture does not record quoted as []: %s", raw)
+	}
+	if want := reRendered(t, captureRecord{Correction: &correctionRecord{Case: c.Case, Values: c.Values}}); prompts[1] != want {
+		t.Error("the re-ask's prompt is not the item's ask under the case alone")
+	}
+}
+
+// cancelledRun is a run over runSet's first item in a fresh state directory
+// whose ask is called through on, with the context it may cancel: its result,
+// the number of calls made, and its ledger.
+func cancelledRun(t *testing.T, on func(call int, cancel context.CancelFunc) (Reply, error)) (Result, int, *Ledger, query.Item) {
+	t.Helper()
+	src, ix, set := runSet(t)
+	l := kept(t, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	ask := func(context.Context, string) (Reply, error) {
+		calls++
+		return on(calls, cancel)
+	}
+	write, _ := writing()
+	res, err := (&Runner{Source: src, Index: ix, Items: set[:1], Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
+		Ledger: l, Model: "small"}).Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, calls, l, set[0]
+}
+
+// TestRunCancelDuringTheReAskRecordsNothing: a cancel that stops the re-ask in
+// flight records no line and no capture for the item, its refused first call's
+// included.
+func TestRunCancelDuringTheReAskRecordsNothing(t *testing.T) {
+	res, calls, l, it := cancelledRun(t, func(call int, cancel context.CancelFunc) (Reply, error) {
+		if call == 1 {
+			return Reply{Text: "about half"}, nil
+		}
+		cancel()
+		return Reply{}, context.Canceled
+	})
+	if res.Outcome != result.Cancelled || calls != 2 {
+		t.Errorf("outcome %q after %d calls, want %q after the re-ask", res.Outcome, calls, result.Cancelled)
+	}
+	if got := l.Status(it); got != "" {
+		t.Errorf("the item recorded %q, want nothing", got)
+	}
+	if caps := rawLines(t, filepath.Join(l.Dir(), capturesFile)); len(caps) != 0 {
+		t.Errorf("the run left %d captures, want none", len(caps))
+	}
+}
+
+// TestRunCancelBeforeTheReAskRecordsTheRefusal: a cancel that lands after the
+// refused reply and before the re-ask starts makes no second call; the item
+// records its one call, failed.
+func TestRunCancelBeforeTheReAskRecordsTheRefusal(t *testing.T) {
+	_, calls, l, it := cancelledRun(t, func(_ int, cancel context.CancelFunc) (Reply, error) {
+		cancel()
+		return Reply{Text: "about half"}, nil
+	})
+	if calls != 1 {
+		t.Errorf("the run made %d calls, want one", calls)
+	}
+	if got := fieldOf(t, filepath.Join(l.Dir(), linesFile), "status"); !slices.Equal(got, []string{StatusFailed}) || l.Status(it) != StatusFailed {
+		t.Errorf("the ledger's lines record %q, want the one refused call failed", got)
+	}
+}
+
+// TestAttemptReAsksEachRefusalUnderItsCase: every refusal case the parse names
+// is re-asked, and the re-ask carries that case.
+func TestAttemptReAsksEachRefusalUnderItsCase(t *testing.T) {
+	// Line 1 is the title, 2 to 4 the statement, a blank line between 3 and 4.
+	closed := rigorTextOf(t, "A Claim", "The map is continuous.\nEvery chart commutes.\n\nA bound holds.")
+	for _, c := range []struct{ reply, want string }{
+		{"", asks.RefusalEmptyReply},
+		{"none\nflt-overreach: 2", asks.RefusalNoneBesideCharges},
+		{"The text is fine.", asks.RefusalNotAChargeLine},
+		{"0.75", asks.RefusalBareNumber},
+		{"flt-nonsense: 2", asks.RefusalIDNotOffered},
+		{"flt-overreach", asks.RefusalIDWithoutLine},
+		{"flt-overreach: the map", asks.RefusalFieldNamesNoLine},
+		{"flt-overreach: 9", asks.RefusalLineNotShown},
+		{"flt-overreach: 3-2", asks.RefusalRangeBackwards},
+		{"flt-overreach: 1-2", asks.RefusalRangeCrossesParts},
+		{"flt-overreach: 3-4", asks.RefusalRangeCrossesGap},
+		{"flt-underspecified: 2-3\nflt-underspecified: 3", asks.RefusalOverlappingRanges},
+	} {
+		t.Run(c.want, func(t *testing.T) {
+			first, err := statementClass.render(closed, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replies := []string{c.reply, kb.ChargeNone}
+			ask := func(context.Context, string) (Reply, error) {
+				r := replies[0]
+				replies = replies[1:]
+				return Reply{Text: r}, nil
+			}
+			sent, interrupted := call{class: statementClass, closed: closed, prompt: first}.attempt(context.Background(), ask, Entry{})
+			if interrupted || len(sent) != 2 {
+				t.Fatalf("%d calls, interrupted %t; want the refusal re-asked", len(sent), interrupted)
+			}
+			if got := sent[1].call.correction; got == nil || got.Case != c.want {
+				t.Errorf("the re-ask carries %+v, want the case %s", got, c.want)
+			}
+			if sent[1].entry.Status != StatusDone {
+				t.Errorf("the re-ask recorded %q, want its good reply landed", sent[1].entry.Status)
+			}
+		})
 	}
 }

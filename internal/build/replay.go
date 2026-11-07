@@ -259,7 +259,7 @@ type overviewReplayed struct {
 }
 
 // Walk re-asks the selected rows through p — the multichoice items as one
-// replay batch on p's decision role, then each overview call as its own item
+// replay wave on p's decision role, then each overview call as its own item
 // on its text role, every call on p.Queue — recording the replay under its
 // directory alone and taking no lock. Once replay.yaml is written it keeps
 // itself and the newest buildstore.KeptRuns-1 other replays of its trail's
@@ -291,13 +291,13 @@ func (rp *Replay) Walk(ctx context.Context, p Provider, lg log.Logger) (ReplayRe
 	progress := buildstore.StartReplayProgress(lg, res.Counts.Total)
 	defer progress.End()
 	launch := call.New(p.MultichoiceClient, p.MultichoiceProvider, rp.Dir, lg).Launch(p.Queue, p.Multichoice)
-	batch := asks.NewReplayBatch(ctx, countedLaunch(launch, progress))
+	wave := asks.NewReplayWave(ctx, countedLaunch(launch, progress))
 	for _, g := range rp.groups {
-		if err := batch.AskGroup(g.rec.Kind, g.rec.Group, g.items); err != nil {
+		if err := wave.AskGroup(g.rec.Kind, g.rec.Group, g.items); err != nil {
 			break
 		}
 	}
-	recs, walkErr := batch.Wait()
+	recs, walkErr := wave.Wait()
 	overviews := make([]overviewReplayed, len(rp.overviews))
 	if walkErr == nil {
 		walkErr = rp.askOverviews(ctx, call.New(p.OverviewClient, p.OverviewProvider, rp.Dir, lg).PassageLaunch(p.Queue, p.Overview), overviews, progress)
@@ -356,12 +356,12 @@ func (rp *Replay) setUp(header []byte) error {
 			return err
 		}
 	}
-	return atomicfile.Write(filepath.Join(rp.dir, replayFile), header, nil)
+	return atomicfile.Write(filepath.Join(rp.dir, replayFile), header)
 }
 
 // countedLaunch is launch with each item counted into progress by its last
 // call, which is how the item ends: done where it returned no error, failed
-// where it never completed, and neither where it stopped the batch.
+// where it never completed, and neither where it stopped the wave.
 func countedLaunch(launch asks.Launch, progress *buildstore.ReplayProgress) asks.Launch {
 	return func(ctx context.Context, wg *sync.WaitGroup, item func(asks.MultichoiceReader) func(error)) error {
 		return launch(ctx, wg, func(read asks.MultichoiceReader) func(error) {
@@ -495,7 +495,7 @@ func (rp *Replay) write(recs []asks.GroupRecord, rows []comparisonRow) error {
 			return err
 		}
 	}
-	if err := atomicfile.Write(filepath.Join(rp.dir, comparisonFile), buf.Bytes(), nil); err != nil {
+	if err := atomicfile.Write(filepath.Join(rp.dir, comparisonFile), buf.Bytes()); err != nil {
 		return fmt.Errorf("compare the replay: %w", err)
 	}
 	return nil

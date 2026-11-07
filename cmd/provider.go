@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,6 +16,7 @@ import (
 	"kbase/internal/buildstore"
 	"kbase/internal/config"
 	"kbase/internal/kb"
+	"kbase/internal/mcp"
 	"kbase/internal/modelclient"
 	toolresult "kbase/internal/result"
 	"kbase/internal/secret"
@@ -36,12 +38,12 @@ type providerOptions struct {
 	Layers []config.Layer
 
 	// RepoRoot is the repository root this invocation resolved, "" outside a
-	// worktree. A configure command's --local is its one consumer: the layer
+	// worktree. A configure command's --layer repository is its one consumer: the layer
 	// it names is chosen whether or not it is in the read stack above.
 	RepoRoot string
 
-	// WriteDir is the configuration directory written into where no location
-	// flag names one — the layer config.WriteTarget names. A refusal naming a
+	// WriteDir is the configuration directory written into where no --layer
+	// names one — the layer config.WriteTarget names. A refusal naming a
 	// pool entry the pool lacks points at that layer's providers.toml, the
 	// file the entry belongs in.
 	WriteDir string
@@ -105,13 +107,38 @@ func warnFaults(stderr io.Writer, faults []config.ProviderFault) []toolresult.It
 	return items
 }
 
+// launchConfigWarnings is the warnings of the configuration a run started from
+// dir loads, read as its verb reads it: warnFaults' items, or, where the load
+// fails outright, the items its failure would be refused with. It writes
+// nothing but warnFaults' lines on stderr, and resolves no role.
+func launchConfigWarnings(dir string, stderr io.Writer) []toolresult.Item {
+	opts, err := loadVerbContext(dir)
+	if err != nil {
+		return errorItems(err)
+	}
+	return warnFaults(stderr, opts.Faults)
+}
+
+// configWarningsHelp is the help paragraph of build, score, models and probe,
+// whose result carries warnFaults' items; result names that result: "the
+// result", or "the run's own result" for a run, whose launch over MCP carries
+// the configuration as read at launch.
+func configWarningsHelp(result string) string {
+	return `Each configuration fault — a provider whose table failed to load, a provider
+that loaded despite a fault in its key file, a credentials store directory
+that did not list — is an item of ` + result + `'s "warnings": "path"
+the file or directory it is against, "detail" what is wrong. "warnings" is
+empty where there are none, and is carried whatever the outcome, refusals
+included.`
+}
+
 // warningsField is a result's warnings: the items given, an empty list where
 // there are none.
 func warningsField(items []toolresult.Item) toolresult.Field {
 	if items == nil {
 		items = []toolresult.Item{}
 	}
-	return toolresult.Field{Key: "warnings", Value: items}
+	return toolresult.Field{Key: toolresult.WarningsKey, Value: items}
 }
 
 // warnCleartextKey writes config.CleartextWarning's line for ep, judged on the
@@ -128,7 +155,7 @@ func warnCleartextKey(stderr io.Writer, ep config.Endpoint) bool {
 // providerFields is a pool entry's provenance in the order a verb that selects
 // one states it: the entry the endpoint came from, the rule that named it and
 // the configuration layer that supplied the entry. It is empty together where
-// no entry was selected, so a document never names an entry without its rule
+// no entry was selected, so a result never names an entry without its rule
 // and layer.
 func providerFields(name, rule, layer string) []toolresult.Field {
 	if name == "" {
@@ -141,7 +168,7 @@ func providerFields(name, rule, layer string) []toolresult.Field {
 	}
 }
 
-// roleRecord is one role's record in a result document, in §7.1's key order:
+// roleRecord is one role's record in a result, in §7.1's key order:
 // the role, the pool entry that answered it with the rule that named the entry
 // and the layer that supplied it, and the model this invocation asked for.
 func roleRecord(ep config.Endpoint) toolresult.Record {
@@ -155,7 +182,7 @@ func rolesField(records []toolresult.Record) toolresult.Field {
 	return toolresult.Field{Key: "roles", Value: records}
 }
 
-// refusedOrFailed is the one mapping from an error to a result document: a
+// refusedOrFailed is the one mapping from an error to a result: a
 // refusal is refused with its items, a retry-class error is retry, and
 // anything else failed.
 func refusedOrFailed(fields []toolresult.Field, err error) (string, []toolresult.Field) {
@@ -275,67 +302,59 @@ func storeFault(dir, name string, err error) config.StoreFault {
 // to <action>" in the --provider help text ("query", "report").
 func registerProviderFlags(cmd *cobra.Command, provider *string, timeout *time.Duration, action string) {
 	registerProviderFlag(cmd, provider, action)
-	registerTimeoutFlag(cmd, timeout, sharedTimeoutUsage)
+	registerTimeoutFlag(cmd, timeout, catalogueTimeoutUsage, catalogueTimeoutBrief)
 }
 
-// registerProviderFlag declares the --provider flag alone, for a verb that
-// selects a pool entry without making a request.
+// The usage and the brief of a --timeout bounding one catalogue request, never
+// a run.
+const (
+	catalogueTimeoutUsage = "deadline for one catalogue request"
+	catalogueTimeoutBrief = "deadline per catalogue request, e.g. 30s"
+)
+
+// registerProviderFlag declares the --provider flag alone, and its brief, for
+// a verb that selects a pool entry without making a request.
 func registerProviderFlag(cmd *cobra.Command, provider *string, action string) {
 	cmd.Flags().StringVar(provider, "provider", "",
 		"the provider to "+action+", named in any case (default: the only provider)")
+	mcp.Brief(cmd, "provider", "the provider to "+action)
 }
 
-// sharedTimeoutUsage is what --timeout bounds: one request, never a run.
-const sharedTimeoutUsage = "deadline for one model request"
-
-// registerTimeoutFlag declares --timeout alone, for a verb whose bound is not
-// a catalogue request's.
-func registerTimeoutFlag(cmd *cobra.Command, timeout *time.Duration, usage string) {
+// registerTimeoutFlag declares --timeout alone, its usage and its brief stating
+// what it bounds.
+func registerTimeoutFlag(cmd *cobra.Command, timeout *time.Duration, usage, brief string) {
 	cmd.Flags().DurationVar(timeout, "timeout", defaultListTimeout, usage)
+	mcp.Brief(cmd, "timeout", brief)
 }
 
 // configureLocation is the directory a configure command writes into and the
-// layer that names it: --global's ~/.config/kbase, --local's
-// <repository>/.kbase, else WriteDir — the directory --config-dir or
-// KBASE_CONFIG_DIR names, else the global one. The two flags together, either
-// beside --config-dir, and --local outside a git worktree are refused.
-func configureLocation(opts providerOptions, global, local bool, workDir string) (dir, layer string, items []toolresult.Item, err error) {
+// layer that names it. want is the --layer a call names, "" for none: global's
+// ~/.config/kbase, repository's <repository>/.kbase, and with none WriteDir —
+// the directory --config-dir or KBASE_CONFIG_DIR names, else the global one. A
+// layer other than those two, a layer beside --config-dir, and
+// repository outside a git worktree are refused.
+func configureLocation(opts providerOptions, want, workDir string) (dir, layer string, items []toolresult.Item, err error) {
 	top := opts.Layers[0].Source
 	switch {
-	case global && local:
-		return "", "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: argmark.Flag("local"),
-			Detail: fmt.Sprintf("%s and %s name different configuration directories; pass one or the other", argmark.Flag("global"), argmark.Flag("local"))}}, nil
-	case (global || local) && top == config.LayerSourceExplicit:
-		flag := argmark.Flag("global")
-		if local {
-			flag = argmark.Flag("local")
-		}
-		return "", "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: flag,
-			Detail: flag + " and --config-dir name different configuration directories; pass one or the other"}}, nil
-	case local && opts.RepoRoot == "":
+	case want != "" && !slices.Contains(config.WriteLayers, want):
+		return "", "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: argmark.Flag("layer"), Allowed: config.WriteLayers,
+			Detail: fmt.Sprintf("%s names %s, and %q is neither", argmark.Flag("layer"), proseSeries(config.WriteLayers, "or"), want)}}, nil
+	case want != "" && top == config.LayerSourceExplicit:
+		return "", "", []toolresult.Item{{Check: toolresult.CheckUsage, Key: argmark.Flag("layer"),
+			Detail: argmark.FlagValue("layer", want) + " and --config-dir name different configuration directories; omit " + argmark.Flag("layer") + " to write where --config-dir names"}}, nil
+	case want == config.LayerSourceRepository && opts.RepoRoot == "":
 		return "", "", []toolresult.Item{{Check: checkWorktree, Path: workDir, Remedy: "git init",
-			Detail: fmt.Sprintf("%s is not inside a git worktree, which %s writes into; `git init` there is the operator's to run", workDir, argmark.Flag("local"))}}, nil
-	case local:
+			Detail: fmt.Sprintf("%s is not inside a git worktree, which %s writes into; `git init` there is the operator's to run",
+				workDir, argmark.FlagValue("layer", config.LayerSourceRepository))}}, nil
+	case want == config.LayerSourceRepository:
 		return config.RepositoryDir(opts.RepoRoot), config.LayerSourceRepository, nil, nil
-	case global:
+	case want == config.LayerSourceGlobal:
 		dir, err := config.GlobalDir()
 		return dir, config.LayerSourceGlobal, nil, err
 	case top == config.LayerSourceExplicit || top == config.LayerSourceEnvironment:
 		return opts.WriteDir, top, nil, nil
 	}
 	return opts.WriteDir, config.LayerSourceGlobal, nil, nil
-}
-
-// locationFlag is the location flag a configure call carried, by its name:
-// "local", "global", or "" for neither.
-func locationFlag(global, local bool) string {
-	switch {
-	case local:
-		return "local"
-	case global:
-		return "global"
-	}
-	return ""
 }
 
 // loadWrittenStack loads, over the credentials store, the configuration a
@@ -354,10 +373,10 @@ func loadWrittenStack(dir, source string) (providerOptions, error) {
 	return opts, nil
 }
 
-// registerLocationFlags declares a configure command's --global and --local.
-func registerLocationFlags(cmd *cobra.Command, global, local *bool) {
-	cmd.Flags().BoolVar(global, "global", false,
-		"write into the global configuration directory, ~/.config/kbase, the default where --config-dir and KBASE_CONFIG_DIR name none")
-	cmd.Flags().BoolVar(local, "local", false,
-		"write into the repository's configuration directory, <repository>/"+config.RepositoryDirName+" (refused outside a git worktree)")
+// registerLayerFlag declares a configure command's --layer.
+func registerLayerFlag(cmd *cobra.Command, layer *string) {
+	cmd.Flags().StringVar(layer, "layer", "",
+		"the layer to write into: global (~/.config/kbase) or repository (<repository>/"+config.RepositoryDirName+")")
+	mcp.EnumFlag(cmd.Flags().Lookup("layer"), config.WriteLayers...)
+	mcp.Brief(cmd, "layer", "configuration layer to write")
 }

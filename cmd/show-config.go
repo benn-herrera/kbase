@@ -16,7 +16,7 @@ import (
 
 // showConfigOptions is the resolved input of the show-config verb: the layers
 // this invocation read with what each holds, the merged pool state loaded out
-// of them, and the stream the document goes to. The verb makes no request and
+// of them, and the stream the result goes to. The verb makes no request and
 // opens no client, so providerOptions' NewClient stays unset.
 type showConfigOptions struct {
 	providerOptions
@@ -25,7 +25,7 @@ type showConfigOptions struct {
 }
 
 // runShowConfig reports how this invocation's configuration resolves and writes
-// its result document. It writes no file, reads no KB and makes no request, so
+// its result. It writes no file, reads no KB and makes no request, so
 // its outcome is done whenever configuration loads; a file that fails the
 // strict load refuses before the verb runs, as it does for every subcommand.
 func runShowConfig(opts showConfigOptions) (int, error) {
@@ -81,7 +81,7 @@ func layerRecords(layers []config.Layer) []toolresult.Record {
 	for _, l := range layers {
 		records = append(records, toolresult.Record{
 			{Key: "path", Value: l.Path},
-			{Key: "source", Value: l.Source},
+			{Key: "layer", Value: l.Source},
 			{Key: "exists", Value: l.Exists},
 			{Key: "providers-exists", Value: l.ProvidersExists},
 			{Key: "config-exists", Value: l.ConfigExists},
@@ -100,7 +100,7 @@ func fileExists(path string) bool {
 // providerRecords is the pool as the report lists it: one mapping per usable
 // entry and per provider a dropping fault removed, in name order. A dropped
 // provider has no entry to describe, so its mapping carries no base-url and
-// no key.
+// no key-source.
 func providerRecords(entries []config.Entry) []toolresult.Record {
 	records := make([]toolresult.Record, 0, len(entries))
 	for _, e := range entries {
@@ -111,11 +111,11 @@ func providerRecords(entries []config.Entry) []toolresult.Record {
 		if e.Protocol != "" {
 			record = append(record, toolresult.Field{Key: "api", Value: e.Protocol})
 		}
-		if e.DecisionsFlavor != "" {
-			record = append(record, toolresult.Field{Key: "decisions-flavor", Value: e.DecisionsFlavor})
+		if e.DecisionAPI != "" {
+			record = append(record, toolresult.Field{Key: "decision-api", Value: e.DecisionAPI})
 		}
 		if e.Key != "" {
-			record = append(record, toolresult.Field{Key: "key", Value: string(e.Key)})
+			record = append(record, toolresult.Field{Key: "key-source", Value: string(e.Key)})
 		}
 		if e.KeyFile != "" {
 			record = append(record, toolresult.Field{Key: "key-file", Value: e.KeyFile})
@@ -171,7 +171,7 @@ func selectionRecord(s config.Inputs, flag string) toolresult.Record {
 	if err != nil {
 		return toolresult.Record{{Key: "detail", Value: err.Error()}}
 	}
-	return toolresult.Record{{Key: "provider", Value: name}, {Key: "rule", Value: rule}}
+	return toolresult.Record{{Key: "provider", Value: name}, {Key: "provider-rule", Value: rule}}
 }
 
 // resolvedRoles is one record per role, in role order: what answers it, the
@@ -226,7 +226,7 @@ Configuration is read from layers: <repository>/` + config.RepositoryDirName + `
 alone. A provider name is read in lowercase, whatever case providers.toml
 spells it in, and a higher layer's table for a provider replaces a lower
 layer's table of the same name whole, while a config.toml value overrides only
-the key it sets. The document names every layer read, in precedence order,
+the key it sets. The result names every layer read, in precedence order,
 with whether its directory and each of its files stand; every provider the
 merge produced with the layer it came from, the chat protocol and decision
 surface it speaks, the kind of key it supplies and why any faulted; the merged
@@ -238,13 +238,14 @@ Not every role resolves here and that is no refusal: an unresolved role is a
 diagnostic. Diagnostics are not refusals at all — one call shows every gap at
 once, and the outcome is done.
 
-Keys never appear. A key is reported by the kind it is: store, kept by kbase
-under the provider's name; file, read from the key file the provider's table
-states, which is reported by its path; or none. A stored key outranks a key
-file. A provider whose key comes from a file carries upgrade, the command that
-moves the key into the store; a provider with both has a diagnostic saying its
-key file is not read. A file in the store that does not open is a diagnostic,
-and the provider falls back to the key file its table states, else to none.
+API keys never appear. A provider's "key-source" is the kind of key it
+supplies: store, kept by kbase under the provider's name; file, read from the
+key file the provider's table states, whose path "key-file" gives; or none. A
+stored key outranks a key file. A provider whose key comes from a file carries
+"upgrade", the command that moves the key into the store; a provider with both
+has a diagnostic saying its key file is not read. A file in the store that does
+not open is a diagnostic, and the provider falls back to the key file its table
+states, else to none.
 
 It reads no KB and makes no network request.`,
 	Args: cobra.NoArgs,

@@ -78,7 +78,7 @@ func init() {
 	}
 }
 
-// runScoreReplay runs one replay, writes its result document, and returns the
+// runScoreReplay runs one replay, writes its result, and returns the
 // exit code the outcome maps to.
 func runScoreReplay(opts scoreReplayOptions) (int, error) {
 	if err := requireStreams(opts.Stdout, opts.Stderr, "score"); err != nil {
@@ -143,7 +143,7 @@ func scoreReplayRun(opts scoreReplayOptions) (outcome string, fields []toolresul
 	reg := modelclient.New(opts.NewClient, opts.Logger, rp.ID(), concurrency)
 	defer reg.CloseAll()
 	launch := scoringLaunch(opts.scoreOptions, reg, ep, concurrency)
-	fields = append(fields, toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "dir", Value: rp.Dir()})
+	fields = append(fields, toolresult.Field{Key: "replay", Value: rp.ID()}, toolresult.Field{Key: "ledger", Value: rp.Dir()})
 	res, err := rp.Walk(ctx, launch, score.ReplayHeader{BackEnd: string(config.BackEndProvider), Provider: ep.Provider, Model: ep.Model,
 		Started: score.Stamp()}, opts.Logger)
 	if err != nil {

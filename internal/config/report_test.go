@@ -48,7 +48,7 @@ func TestReport(t *testing.T) {
 			cfg:  Config{Models: ModelMap{Decision: "lab/clef", Text: "lab/qwen"}},
 			providers: Providers{
 				"reaper": {Name: "reaper", BaseURL: "https://reaper.example/v1", APIKeyFile: "keys/reaper.txt", Layer: LayerSourceRepository,
-					DecisionsFlavor: FlavorDecisions},
+					DecisionAPI: DecisionAPIDecisions},
 				"warned": {Name: "warned", BaseURL: "https://warned.example/v1", APIKeyFile: "/k/warned.txt", Layer: LayerSourceGlobal},
 				"nokey":  {Name: "nokey", BaseURL: "https://nokey.example/v1", Layer: LayerSourceRepository},
 			},
@@ -67,10 +67,10 @@ func TestReport(t *testing.T) {
 				Entries: []Entry{
 					{Name: "broken", Layer: LayerSourceRepository, Fault: "no baseUrl declared"},
 					{Name: "gone", Layer: LayerSourceRepository, Fault: unreadKey},
-					{Name: "nokey", BaseURL: "https://nokey.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceRepository, Usable: true},
-					{Name: "reaper", BaseURL: "https://reaper.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorDecisions, Key: KeyKindFile, KeyFile: "keys/reaper.txt",
+					{Name: "nokey", BaseURL: "https://nokey.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindNone, Layer: LayerSourceRepository, Usable: true},
+					{Name: "reaper", BaseURL: "https://reaper.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPIDecisions, Key: KeyKindFile, KeyFile: "keys/reaper.txt",
 						Upgrade: "cat " + filepath.Join(repoDir, "keys", "reaper.txt") + " | kbase auth add reaper", Layer: LayerSourceRepository, Usable: true},
-					{Name: "warned", BaseURL: "https://warned.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindFile, KeyFile: "/k/warned.txt",
+					{Name: "warned", BaseURL: "https://warned.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindFile, KeyFile: "/k/warned.txt",
 						Upgrade: "cat /k/warned.txt | kbase auth add warned", Layer: LayerSourceGlobal, Usable: true, Fault: exposedWarn},
 				},
 				Diagnostics: []result.Item{
@@ -94,10 +94,10 @@ func TestReport(t *testing.T) {
 					{Path: globalDir, Source: LayerSourceGlobal},
 				},
 				Entries: []Entry{
-					{Name: "both", BaseURL: "https://both.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindStore, Layer: LayerSourceGlobal, Usable: true},
-					{Name: "spaced", BaseURL: "https://spaced.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindFile, KeyFile: "/k/my key.txt",
+					{Name: "both", BaseURL: "https://both.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindStore, Layer: LayerSourceGlobal, Usable: true},
+					{Name: "spaced", BaseURL: "https://spaced.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindFile, KeyFile: "/k/my key.txt",
 						Upgrade: `cat '/k/my key.txt' | kbase auth add spaced`, Layer: LayerSourceRepository, Usable: true},
-					{Name: "stored", BaseURL: "https://stored.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindStore, Layer: LayerSourceRepository, Usable: true},
+					{Name: "stored", BaseURL: "https://stored.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindStore, Layer: LayerSourceRepository, Usable: true},
 				},
 				Diagnostics: []result.Item{{Check: CheckProvider, Path: globalProviders,
 					Detail: `provider "both" has a stored key, which outranks its apiKeyFile "both.key": that file is not read`,
@@ -121,9 +121,9 @@ func TestReport(t *testing.T) {
 					{Path: globalDir, Source: LayerSourceGlobal},
 				},
 				Entries: []Entry{
-					{Name: "Lab", BaseURL: "https://lab.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceGlobal, Usable: true,
+					{Name: "Lab", BaseURL: "https://lab.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindNone, Layer: LayerSourceGlobal, Usable: true,
 						Fault: storeFile + ": " + truncated},
-					{Name: "other", BaseURL: "https://other.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceGlobal, Usable: true,
+					{Name: "other", BaseURL: "https://other.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindNone, Layer: LayerSourceGlobal, Usable: true,
 						Fault: storeDir + ": " + noUsername},
 				},
 				Diagnostics: []result.Item{
@@ -145,7 +145,7 @@ func TestReport(t *testing.T) {
 					{Path: globalDir, Source: LayerSourceGlobal},
 				},
 				Entries: []Entry{
-					{Name: "lab", BaseURL: "https://lab.example/v1", Protocol: ProviderAPIAnthropic, DecisionsFlavor: FlavorSystemOne, Key: KeyKindNone, Layer: LayerSourceGlobal, Usable: true},
+					{Name: "lab", BaseURL: "https://lab.example/v1", Protocol: ProviderAPIAnthropic, DecisionAPI: DecisionAPISystemOne, Key: KeyKindNone, Layer: LayerSourceGlobal, Usable: true},
 				},
 				Diagnostics: []result.Item{{Check: CheckProvider, Path: storeDir, Detail: "permission denied"}},
 			},

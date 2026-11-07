@@ -1,10 +1,11 @@
 ### `show`
 
-`show` is [page §3.4](../../../NEW_MCP_CLI_DESIGN/3-operations/3.4-queries/show.md)'s query: its record of one node of any kind — `host`, `host_anchor` and
-`summary`, then its kind's own fields — and its refusal. What this release adds to the page and
-holds:
+`show` returns the record of one node of any kind.
 
-- `host_anchor` is the anchor of the section holding the node's first statement marker in its host.
-- A pending `rigor` or `strength` reads `*pending*`, as in every query; null is only for a value
-  that does not apply.
-- An `<id>` no node carries is refused `check: unknown-id` at `<id>`, `detail` `no node <id>` ([page §2.10](../../../NEW_MCP_CLI_DESIGN/2-conventions/2.10-existence.md)).
+- **Arguments**: `id`, required.
+- **Record**: `kind`, `id`, `title`, `host`, `host-anchor` and `summary`, then the kind's own fields ([§7](../7-tool-result-contract-and-exit-codes/item.md)). `host` is `find`'s.
+- `host-anchor` is the anchor of the section holding the node's first statement marker in its host ([§10](../10-metadata-format-version/statements-and-anchors.md)). `host` and `host-anchor` are null for a work, an axiom and a node with no statement marker.
+- `summary` is the node's summary-page entry, written `<page>#<slug>`; null where the node has none.
+- A pending `rigor` or `strength` reads `*pending*`, as in every query; null is only for a value that does not apply.
+- An `id` that names no node is refused `check: unknown-id` at `<id>`, `detail` `no node <id>` ([Idempotence](write-batches/idempotence.md)).
+
