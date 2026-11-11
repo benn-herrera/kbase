@@ -2,6 +2,7 @@ package result
 
 import (
 	"bytes"
+	"io"
 	"reflect"
 	"testing"
 
@@ -180,6 +181,30 @@ func TestAResultIsSpelledByTheWriterItGoesTo(t *testing.T) {
 	}
 	if reemitted.String() != want {
 		t.Errorf("reemitted:\n%s\nwant:\n%s", reemitted.String(), want)
+	}
+}
+
+// TestUnderlyingPassesBytesUnspelled: text holding a marker, written on the
+// writer Underlying finds past a Spelled one, or on a writer that is not
+// Spelled, arrives as written.
+func TestUnderlyingPassesBytesUnspelled(t *testing.T) {
+	text := "key-" + argmark.Flag("limit") + "\n"
+	for _, tc := range []struct {
+		name string
+		wrap func(*bytes.Buffer) io.Writer
+	}{
+		{"spelled", func(b *bytes.Buffer) io.Writer { return Spelled(b, argmark.Spelling{MCP: true}) }},
+		{"plain", func(b *bytes.Buffer) io.Writer { return b }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if _, err := io.WriteString(Underlying(tc.wrap(&buf)), text); err != nil {
+				t.Fatal(err)
+			}
+			if buf.String() != text {
+				t.Errorf("wrote %q, want %q", buf.String(), text)
+			}
+		})
 	}
 }
 

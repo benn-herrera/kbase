@@ -24,8 +24,10 @@ the neutral form and the reader's interface formats it.
   formatted by `s`, and so is any other text written on it, such as what cobra prints from a command's
   summary and flag usages. The root's stdout is such a writer for every subcommand but `mcp`, set in
   `PersistentPreRunE`; the MCP server wraps each tool call's output the same way. A writer already
-  `Spelled` keeps its formatting, settled where the call came in (`resultOut`, `cliOut`). A result
-  written on any other writer keeps the marked form.
+  `Spelled` keeps its formatting, settled where the call came in (`resultOut`, `cliOut`).
+  `result.Underlying(w)` is the writer a `Spelled` one wraps, else `w`: what a verb writing bytes that
+  must not be reformatted, as `auth get-piped` writes a key, writes on. A result written on any other
+  writer keeps the marked form.
 - **`result.Verbatim`.** The KB text a result passes through (a title, a rationale, a context, a leaf's
   line, a conversion list's id and text) is a `Verbatim` and is written unchanged on every
   interface. Only text kbase composes is formatted, because KB text may contain the same code points

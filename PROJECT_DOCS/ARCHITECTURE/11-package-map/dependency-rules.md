@@ -108,11 +108,12 @@ fails the test. A rule that names a `cmd` file is checked at file level (`TestCm
   value `export.Run` calls.
 - `internal/auth` imports nothing of kbase but `atomicfile`, to write its files at their mode, and
   `secret`; only `cmd` imports it, and `config`'s own rule keeps it from the store.
-- A key's text leaves a `secret.Key` through `Reveal` in four files alone:
+- A key's text leaves a `secret.Key` through `Reveal` in five files alone:
   `internal/model/openai_client.go` and `anthropic_client.go` (setting the auth header and scrubbing
-  an echoed key), `internal/model/transport.go` (cutting a status error's body around it) and
-  `internal/auth/auth.go` (sealing it). `cmd/revealpolicy_test.go`, on the module walk, fails a
-  production file outside them that names `Reveal`.
+  an echoed key), `internal/model/transport.go` (cutting a status error's body around it),
+  `internal/auth/auth.go` (sealing it) and `cmd/auth.go` (writing the key `auth get-piped`
+  recovers). `cmd/revealpolicy_test.go`, on the module walk, fails a production file outside them
+  that names `Reveal`.
 
 ---
 

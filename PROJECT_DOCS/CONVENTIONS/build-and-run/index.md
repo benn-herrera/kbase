@@ -7,8 +7,8 @@ from the hermetic `just test-integration` aggregate target and says so in its do
 - edit gate: `just edit-gate`
 - checkpoint gate: `just checkpoint`
 
-kbase is distributed through the Homebrew tap `benn-herrera/kbase`, whose formula is maintained in
-the sibling clone `homebrew-kbase/` (`just tap`). The formula builds a tagged release from source
+kbase is distributed through the Homebrew tap `benn-herrera/tap`, whose formula is maintained in
+the sibling clone `homebrew-tap/` (`just tap`). The formula builds a tagged release from source
 with no build tag, so what users receive is the release shape `test-dist-no-replay` vets.
 `just tag` tags a release: refused while tracked files have uncommitted changes, it creates a signed
 annotated tag `v<version>` locally and pushes it nowhere; the tree is vetted before it, by

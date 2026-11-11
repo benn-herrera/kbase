@@ -20,11 +20,22 @@ three failure modes (no session bus, no gpg-agent, no PowerShell module) for the
 gpg, which would make gpg a dependency and a passphrase a runtime condition; and a stored key serves
 builds that run in CI, where no one is logged in.
 
+**Recovery.** `kbase auth get-piped` writes a stored key in plaintext, for a user who has lost it,
+and only to a pipe or a file: `isTerminal` on the process's own stdout (`result.Underlying`, past the
+`result.Spelled` writer the root sets in `PersistentPreRunE`) refuses a terminal or other character
+device before the store is read, and the key is written there, unformatted. Its success writes the
+key alone, not through `emitResult`; its refusals and failures are results as every verb's are. It
+is cobra-hidden, and the whole `auth` tree is `cliOnly` (`cmd/surface.go`), so nothing an agent
+loads while working through kbase names it. Against the helpful agent the store answers, the
+safeguard is the command's absence from what that agent is served, not its impossibility: SPEC and
+README.md name it, and neither is served or installed where an agent working through kbase looks.
+
 **Secret type.** `secret.Key` is the type every key travels in. fmt's verbs, a text, JSON or YAML
 encoding and a log value all render `<redacted>`, and `Reveal` alone returns the text.
-`cmd/revealpolicy_test.go` allows `Reveal` in four production files: `internal/auth/auth.go`, the two
-wire clients, which set the auth header and scrub an echoed key, and `internal/model/transport.go`,
-which truncates a status error's body around a key.
+`cmd/revealpolicy_test.go` allows `Reveal` in five production files: `internal/auth/auth.go`, the two
+wire clients, which set the auth header and scrub an echoed key, `internal/model/transport.go`,
+which truncates a status error's body around a key, and `cmd/auth.go`, where `auth get-piped`
+writes a recovered key.
 
 **Read path.** `cmd`'s `loadConfigContext` reads every file of the store through `internal/auth`
 (`readStoredKeys`) before the load and gives `config.Load` a `config.StoredKeys`: each key that

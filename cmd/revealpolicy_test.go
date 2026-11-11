@@ -11,8 +11,10 @@ import (
 
 // revealOwners are the production files that may take a key's text out of a
 // secret.Key: the two clients setting their auth header, the scrub of a key a
-// server echoes, the status error's cut around it, and the store's seal.
+// server echoes, the status error's cut around it, the store's seal, and the
+// recovery `auth get-piped` writes.
 var revealOwners = []string{
+	"cmd/auth.go",
 	"internal/auth/auth.go",
 	"internal/model/anthropic_client.go",
 	"internal/model/openai_client.go",

@@ -34,7 +34,7 @@ guest-session/
 __pycache__/
 
 # custom homebrew tap repo location
-homebrew-kbase/
+homebrew-tap/
 
 # markdown monolith -> hierarchy tool
 tools/docdicer/

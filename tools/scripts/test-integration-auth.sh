@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The credentials store over the delivered binary, with HOME, XDG_STATE_HOME and
 # the configuration directory all under the evidence directory: auth add by
-# pipe and auth list naming the provider; show-config reporting key-source:
+# pipe and auth list naming the provider; auth get-piped writing the key into a
+# pipe that compares it, refused with stdout on /dev/null and for a provider with
+# no stored key; show-config reporting key-source:
 # store; an empty pipe refused with the store unchanged; an entry with both a
 # stored key and an apiKeyFile reporting key-source: store and the
 # unread-apiKeyFile warning; an entry with an apiKeyFile alone reporting its
@@ -96,6 +98,37 @@ ok=0; done_doc || ok=1
 grep -qx '    - "stored"' "${DOC}.out" || ok=1
 check "${ok}" "auth list names stored"
 
+# 1b. auth get-piped: the stored key and a newline into a pipe compared with
+#     them, the key reaching no file; stdout on /dev/null, a character device as
+#     a terminal is, refused; and a provider with no stored key refused.
+n=$((n + 1))
+DOC="${docs}/$(printf '%02d' "${n}")-get-piped-stored"
+set +e
+( cd "${work}" && "${kbase}" auth get-piped stored --config-dir "${config}" < /dev/null ) 2> "${DOC}.log" | cmp -s - <(printf '%s\n' "${store_key}")
+codes=("${PIPESTATUS[@]}")
+set -e
+printf '%s\n' "${codes[0]}" > "${DOC}.exit"
+printf 'cmp against the stored key and a newline: exit %s\n' "${codes[1]}" > "${DOC}.out"
+ok=0
+[[ "${codes[0]}" -eq 0 && "${codes[1]}" -eq 0 ]] || ok=1
+check "${ok}" "auth get-piped stored into a pipe writes the stored key and a newline"
+n=$((n + 1))
+DOC="${docs}/$(printf '%02d' "${n}")-get-piped-devnull"
+set +e
+( cd "${work}" && "${kbase}" auth get-piped stored --config-dir "${config}" < /dev/null ) > /dev/null 2> "${DOC}.log"
+printf '%s\n' "$?" > "${DOC}.exit"
+set -e
+: > "${DOC}.out"
+ok=0
+[[ "$(cat "${DOC}.exit")" -ne 0 ]] || ok=1
+check "${ok}" "auth get-piped stored with stdout on /dev/null refused"
+run get-piped-ghost "" auth get-piped ghost
+ok=0
+[[ "$(cat "${DOC}.exit")" -ne 0 ]] && grep -qx 'outcome: "refused"' "${DOC}.out" || ok=1
+grep -qF 'check: "usage"' "${DOC}.out" || ok=1
+! grep -qF -- "${store_key}" "${DOC}.out" || ok=1
+check "${ok}" "auth get-piped ghost, no key stored, refused naming no key"
+
 # 2. show-config reports the stored key by its kind.
 run show-stored "" show-config
 ok=0; done_doc || ok=1
@@ -182,7 +215,7 @@ ok=0
 [[ "$(cat "${DOC}.file.txt")" == "$(printf '%s\n' "${config}/both.key" "${config}/my keys/filed.key" | sort)" ]] || ok=1
 check "${ok}" "the stored key in no stream or file, the key files' key in those files alone"
 
-OUT_DIR="${out}" RECIPE="test-integration-auth" INVOCATION="config/: providers.toml with [stored] (no key field), [both] (apiKeyFile both.key) and [filed] (apiKeyFile my keys/filed.key), each key file holding the file key, mode 0600, and config.toml naming stored, both and filed for the three roles; HOME=home/ (empty) and XDG_STATE_HOME=xdg/ for every call, so the store is xdg/kbase/auth/; KBASE_CONFIG_DIR unset\nper invocation NN-<name>, from work/: ${kbase} <args> --config-dir config, a key piped where the leg adds one (never written to a file), stdout, stderr and exit to docs/NN-<name>.{out,log,exit}: auth add stored, auth list, show-config (stored key-source: store), auth add stored over an empty pipe (refused, the store's cksum unchanged), auth add both, show-config (both key-source: store with the unread-apiKeyFile diagnostic against config/providers.toml; filed key-source: file with its upgrade), the upgrade as printed (docs/NN-upgrade.command) run by bash -c with bin/ on PATH and KBASE_CONFIG_DIR=config, show-config (filed key-source: store), show-config after xdg/kbase/auth/stored-key.enc is overwritten with one byte (done, a diagnostic at that path with remedy <command-that-prints-the-key> | kbase auth add stored, stored key-source: none), auth remove both, auth remove stored, show-config (both key-source: file, stored key-source: none, filed's unread apiKeyFile the one diagnostic)\nkey-search.store.txt and key-search.file.txt: every file under this directory holding the stored key's text (none) and the file key's text (the two key files alone)\nauth.tsv: per check its label, pass or fail, and its result" \
+OUT_DIR="${out}" RECIPE="test-integration-auth" INVOCATION="config/: providers.toml with [stored] (no key field), [both] (apiKeyFile both.key) and [filed] (apiKeyFile my keys/filed.key), each key file holding the file key, mode 0600, and config.toml naming stored, both and filed for the three roles; HOME=home/ (empty) and XDG_STATE_HOME=xdg/ for every call, so the store is xdg/kbase/auth/; KBASE_CONFIG_DIR unset\nper invocation NN-<name>, from work/: ${kbase} <args> --config-dir config, a key piped where the leg adds one (never written to a file), stdout, stderr and exit to docs/NN-<name>.{out,log,exit}: auth add stored, auth list, auth get-piped stored with stdin /dev/null and stdout piped into cmp against the stored key and a newline (no file holds the key; NN-get-piped-stored.out holds cmp's exit), auth get-piped stored with stdin and stdout /dev/null (refused, nonzero exit; NN-get-piped-devnull.out empty), auth get-piped ghost (no key stored: refused, check usage, naming no key), show-config (stored key-source: store), auth add stored over an empty pipe (refused, the store's cksum unchanged), auth add both, show-config (both key-source: store with the unread-apiKeyFile diagnostic against config/providers.toml; filed key-source: file with its upgrade), the upgrade as printed (docs/NN-upgrade.command) run by bash -c with bin/ on PATH and KBASE_CONFIG_DIR=config, show-config (filed key-source: store), show-config after xdg/kbase/auth/stored-key.enc is overwritten with one byte (done, a diagnostic at that path with remedy <command-that-prints-the-key> | kbase auth add stored, stored key-source: none), auth remove both, auth remove stored, show-config (both key-source: file, stored key-source: none, filed's unread apiKeyFile the one diagnostic)\nkey-search.store.txt and key-search.file.txt: every file under this directory holding the stored key's text (none) and the file key's text (the two key files alone)\nauth.tsv: per check its label, pass or fail, and its result" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
     printf 'integration(test-integration-auth): an auth check failed — see auth.tsv\n'

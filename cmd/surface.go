@@ -105,8 +105,8 @@ func init() {
 	// Credentials: the store's verbs, under one parent the tool table never
 	// reads below.
 	authCmd := authCommand()
-	authCmd.AddCommand(authAddCommand(), authRemoveCommand(), authListCommand())
-	rootCmd.AddCommand(cliOnly(authCmd, "a key arrives on stdin, which no tool call has, and no tool accepts a key"))
+	authCmd.AddCommand(authAddCommand(), authRemoveCommand(), authListCommand(), authGetPipedCommand())
+	rootCmd.AddCommand(cliOnly(authCmd, "a key arrives on stdin and leaves on stdout, neither of which a tool call has, and no tool accepts or returns a key"))
 	// Server.
 	rootCmd.AddCommand(cliOnly(mcpCommand(), "it is the server the tools are served by"))
 

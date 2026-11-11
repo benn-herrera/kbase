@@ -217,6 +217,15 @@ type spelledWriter struct {
 	spelling argmark.Spelling
 }
 
+// Underlying is the writer a Spelled writer w wraps, else w: where a verb
+// writes bytes no spelling may alter.
+func Underlying(w io.Writer) io.Writer {
+	if sw, ok := w.(spelledWriter); ok {
+		return sw.w
+	}
+	return w
+}
+
 // Write spells p's text where it carries a marker, which a writer of whole
 // lines, as cobra is, never splits. It reports p written whole.
 func (sw spelledWriter) Write(p []byte) (int, error) {

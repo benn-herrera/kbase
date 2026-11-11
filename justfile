@@ -168,23 +168,25 @@ edit-gate: fmt-check
 AGENTS_DIR := "../adjagent"
 [doc("NEEDS the adjagent clone (AGENTS_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
-    @AGENTS_DIR="{{AGENTS_DIR}}" tools/scripts/agents.sh
+  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=claude
+  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=opencode
 
 # The tap clone's one source: its origin URL, which the clone and the remote
 # set-up both take, and the location its .gitignore entry names.
-TAP_DIR := "homebrew-kbase"
-TAP_URL := "git@github.com:benn-herrera/homebrew-kbase.git"
-[doc("set up the sibling Homebrew tap clone at homebrew-kbase/: clone it, or add the missing origin to a clone; leave a correct clone alone, refuse any other; one line says what was done")]
+TAP_DIR := "homebrew-tap"
+TAP_URL := "git@github.com:benn-herrera/homebrew-tap.git"
+TAP_FORMULA := "kbase"
+[doc("set up the sibling Homebrew tap clone at homebrew-tap/: clone it, or add the missing origin to a clone; leave a correct clone alone, refuse any other; one line says what was done")]
 tap:
-    @TAP_DIR="{{TAP_DIR}}" TAP_URL="{{TAP_URL}}" tools/scripts/tap.sh
+    @ TAP_URL="{{TAP_URL}}" TAP_DIR="{{TAP_DIR}}" TAP_FORMULA="{{TAP_FORMULA}}" tools/scripts/tap.sh
 
 [doc("LIVE; NEEDS the tap clone, a pushed release: set the tap formula's v<version> tarball and sha256 and commit it there, pushing nothing; raise go.mod's go line if Go no longer supports it, uncommitted")]
 tap-update:
-    @TAP_DIR="{{TAP_DIR}}" tools/scripts/tap-update.sh
+    @TAP_DIR="{{TAP_DIR}}" TAP_FORMULA="{{TAP_FORMULA}}" tools/scripts/tap-update.sh
 
 [doc("LIVE; NEEDS brew and the tap clone; DESTRUCTIVE to this machine's brew install of kbase: reinstall it from a scratch formula over a tarball of the working tree's tracked files; the tap is untouched")]
 tap-local:
-    @TAP_DIR="{{TAP_DIR}}" tools/scripts/tap-local.sh
+    @TAP_DIR="{{TAP_DIR}}" TAP_FORMULA="{{TAP_FORMULA}}" tools/scripts/tap-local.sh
 
 # Integration recipes are named test-integration-<process>-<corpus>: the
 # process first, the input corpus last, because a corpus is served by several
@@ -273,6 +275,8 @@ check-links: _docdicer
 [private]
 _docdicer:
     @[[ -d tools/docdicer ]] || git -C tools clone git@github.com:benn-herrera/docdicer
+    @cd tools/docdicer && { [[ -d .claude ]] || ln -vs ../../.claude .; }
+    @cd tools/docdicer && { [[ -d .opencode ]] || ln -vs ../../.opencode .; }
 
 [doc("hermetic: stage the compatibility op script test-data/fixtures/compat/ops.yaml through ./bin/kbase over a scratch copy of the results fixture, then re-issue it and check nothing changed")]
 test-integration-opscript-results: build
@@ -309,7 +313,7 @@ test-integration-config: build
     @mkdir -p "{{CONFIG_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" CONFIG_OUT_DIR="{{CONFIG_OUT_DIR}}" tools/scripts/test-integration-config.sh 2>&1 | tee "{{CONFIG_OUT_DIR}}/log.txt"
 
-[doc("hermetic: ./bin/kbase auth and show-config over a credentials store staged under the evidence directory, checking each key's reported source and that no stream or file holds a stored key")]
+[doc("hermetic: ./bin/kbase auth and show-config over a staged credentials store: each key's reported source, and no stream or file holding a stored key but get-piped's stdout, read in a pipe")]
 test-integration-auth: build
     @mkdir -p "{{AUTH_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" AUTH_OUT_DIR="{{AUTH_OUT_DIR}}" tools/scripts/test-integration-auth.sh 2>&1 | tee "{{AUTH_OUT_DIR}}/log.txt"

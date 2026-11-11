@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"kbase/internal/auth"
 	"kbase/internal/config"
 	"kbase/internal/log"
+	"kbase/internal/mcp/protocol"
 	toolresult "kbase/internal/result"
 	"kbase/internal/secret"
 )
@@ -253,6 +255,7 @@ func TestAuthUsageRefusalEchoesNoArgument(t *testing.T) {
 	for _, args := range [][]string{
 		{"auth", "add", "p", authSentinelKey},
 		{"auth", "remove", "p", authSentinelKey},
+		{"auth", "get-piped", "p", authSentinelKey},
 		{"auth", "list", authSentinelKey},
 		{"auth", authSentinelKey},
 	} {
@@ -524,5 +527,121 @@ func TestConfiguredProviderNamesSkipTheStoreDirectoryFault(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"bad", "local", "stored"}; !slices.Equal(got, want) {
 		t.Errorf("configuredProviderNames = %q, want %q", got, want)
+	}
+}
+
+// wantOneAuthRefusal fails t unless stdout is a refused result of exactly one
+// item carrying want's check, key and remedy, and its detail where want has one.
+func wantOneAuthRefusal(t *testing.T, stdout string, want toolresult.Item) {
+	t.Helper()
+	d := parseResult(t, stdout)
+	items := d.items(toolresult.RefusalsKey)
+	if d.Outcome != toolresult.Refused || len(items) != 1 {
+		t.Fatalf("outcome %s with %d refusals, want one refusal", d.Outcome, len(items))
+	}
+	got := items[0]
+	if got["check"] != want.Check || got["key"] != want.Key || got["remedy"] != want.Remedy ||
+		(want.Detail != "" && got["detail"] != want.Detail) {
+		t.Errorf("refusal %v, want check %q key %q detail %q remedy %q", got, want.Check, want.Key, want.Detail, want.Remedy)
+	}
+}
+
+// TestAuthGetPipedThroughTheCLI: the real command folds the name, writes the
+// key and a newline alone and exits 0.
+func TestAuthGetPipedThroughTheCLI(t *testing.T) {
+	const provider = "auth-get-piped"
+	store := cliStore(t)
+	if err := store.Add(provider, secret.NewKey(authSentinelKey)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := store.Remove(provider); err != nil {
+			t.Error(err)
+		}
+	})
+	out, code := kbase(t, realPath(t, t.TempDir()), "auth", "get-piped", "Auth-GET-piped")
+	if code != 0 || out != authSentinelKey+"\n" {
+		t.Errorf("exit %d, stdout %d bytes; want exit 0 and the key and a newline alone (%d bytes)", code, len(out), len(authSentinelKey)+1)
+	}
+}
+
+// TestAuthGetPipedRefusesATerminalBeforeReading: over a store whose key file
+// does not open, a terminal on stdout is refused usage, where reading the store
+// first would have failed.
+func TestAuthGetPipedRefusesATerminalBeforeReading(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "auth")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "trunc"+auth.FileSuffix), []byte{0}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantOneAuthRefusal(t, runAuth(t, "auth get-piped", authGetPiped, authOptions{Provider: "Trunc", Dir: dir, StdoutIsTerminal: true}),
+		toolresult.Item{Check: toolresult.CheckUsage, Key: "trunc",
+			Detail: "stdout is a terminal or other character device: kbase writes a key only to a pipe or a file",
+			Remedy: "kbase auth get-piped trunc | <your-system-clipboard-copier>"})
+	if d := parseResult(t, runAuth(t, "auth get-piped", authGetPiped, authOptions{Provider: "Trunc", Dir: dir})); d.Outcome != toolresult.Failed {
+		t.Errorf("reading the truncated key file: outcome %s, want failed", d.Outcome)
+	}
+}
+
+// TestAuthGetPipedRefusesAsRemoveDoes: a provider with no stored key and a name
+// breaking the name rule are refused as remove refuses them.
+func TestAuthGetPipedRefusesAsRemoveDoes(t *testing.T) {
+	for _, tc := range []struct{ name, provider string }{
+		{"no stored key", "Ghost"},
+		{"an unusable name", "a/b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "auth")
+			removed := runAuth(t, "auth remove", authRemove, authOptions{Provider: tc.provider, Dir: dir})
+			if d := parseResult(t, removed); d.Outcome != toolresult.Refused {
+				t.Fatalf("remove: outcome %s, want refused", d.Outcome)
+			}
+			if got := runAuth(t, "auth get-piped", authGetPiped, authOptions{Provider: tc.provider, Dir: dir}); got != removed {
+				t.Errorf("get-piped:\n%s\nremove:\n%s", got, removed)
+			}
+		})
+	}
+}
+
+// TestAuthGetPipedIsHiddenAndUnserved: no help listing and nothing the MCP
+// server serves names get-piped, while its own help does.
+func TestAuthGetPipedIsHiddenAndUnserved(t *testing.T) {
+	const name = "get-piped"
+	// The MCP server first: it stages its fixture by a path relative to the
+	// package directory, which the invocations below leave.
+	srv, _ := mcpServer(t)
+	served := map[string]string{"the MCP instructions": srv.Instructions}
+	for _, tool := range toolsListedBy(t, srv) {
+		b, err := json.Marshal(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		served["tool "+tool.Name] = string(b)
+	}
+	var listed struct {
+		Resources []protocol.Resource `json:"resources"`
+	}
+	serveOne(t, srv, "resources/list", nil, &listed)
+	for _, r := range listed.Resources {
+		served[r.URI] = readResource(t, srv, r.URI)
+	}
+
+	dir := realPath(t, t.TempDir())
+	for _, args := range [][]string{{"auth", "--help"}, {"--help"}} {
+		out, code := kbase(t, dir, args...)
+		if code != 0 {
+			t.Fatalf("kbase %s: exit %d", strings.Join(args, " "), code)
+		}
+		served["kbase "+strings.Join(args, " ")] = out
+	}
+	for what, text := range served {
+		if strings.Contains(text, name) {
+			t.Errorf("%s names %s", what, name)
+		}
+	}
+	if out, code := kbase(t, dir, "auth", name, "--help"); code != 0 || !strings.Contains(out, name) {
+		t.Errorf("kbase auth %s --help: exit %d, names it: %v; want exit 0 naming it", name, code, strings.Contains(out, name))
 	}
 }

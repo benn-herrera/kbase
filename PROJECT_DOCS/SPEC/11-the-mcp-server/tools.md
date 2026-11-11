@@ -5,7 +5,7 @@
   - `write` runs a batch whose entries name the write ops ([§8](../8-maintenance-subcommands/write-batches/index.md)); a write op has no tool of its own.
   - Each operation stays a subcommand, unchanged on the command line.
 - **CLI-only commands.** Every other subcommand is served. These are not, and no tool exposes them:
-  - `auth` and its subcommands: a key arrives on stdin, which no tool call has, and no tool accepts a key;
+  - `auth` and its subcommands: a key arrives on stdin and leaves on stdout, neither of which a tool call has, and no tool accepts or returns a key;
   - `wait`: a tool call would hold the turn for the build's or score run's duration, so a session polls `status` instead;
   - `mcp`, the server itself;
   - `help` and `completion`, which belong to the CLI framework.

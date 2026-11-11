@@ -38,13 +38,13 @@ Input is LaTeX only. A volume root is the paper's top `.tex` file: the one `00RE
 
 ### Homebrew (macOS and Linux)
 
-```sh
-brew tap benn-herrera/kbase
+```bash
+brew tap benn-herrera/tap
 brew install kbase
 ```
 
 The formula builds kbase from the tagged release's source and puts it on `PATH`, with the tools it
-needs; the [tap's README](https://github.com/benn-herrera/homebrew-kbase) lists them.
+needs; see [benn-herrera/tap](https://github.com/benn-herrera/homebrew-tap)
 
 ### Windows
 
@@ -94,6 +94,17 @@ because the overview passage is one of the dropped steps.
 
 A KB can also be created empty, with no LaTeX and no build: see
 [Creating an empty KB](docs/building.md#creating-an-empty-kb).
+
+## Recovering a stored key
+
+`kbase auth get-piped <provider>` writes the key stored for `<provider>` to stdout, which must
+be a pipe or a file: stdout that is a terminal (or another character device, such as
+`/dev/null`) is refused before the key is read. Pipe it to where you keep keys, such as
+`kbase auth get-piped local | pbcopy`; a refusal goes into that pipe instead. The refusal
+guards only stdout pointed straight at a terminal: `| cat` still shows the key. A redirect to a
+file leaves the key on disk in plain text, readable as the shell's umask allows: create the file
+owner-only first. The command is left out of kbase's help and MCP tools. Its contract is in
+[SPEC: Provider commands](PROJECT_DOCS/SPEC/9-configuration/provider-commands.md).
 
 ## More documentation
 

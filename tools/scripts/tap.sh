@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up the sibling Homebrew tap clone, homebrew-kbase/, that this project's
+# Sets up the sibling Homebrew tap clone, homebrew-tap/, that this project's
 # formula lives in, so the tap and the main tree are maintained in parallel.
 #
 # The clone is idempotent by STATE, not by the directory being absent: `git
@@ -17,7 +17,10 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
-cd "${script_dir}/../.." || exit 1
+while [[ ! -d .git && "$(pwd)" != "/" ]]; do
+  cd "${script_dir}/.."
+done
+[[ -d .git ]] || { printf '%s: failed finding project root.\n' "$(basename "${0}")" 1>&2; exit 1; }
 
 : "${TAP_DIR:?TAP_DIR is not set: the tap clone location relative to this repository}"
 : "${TAP_URL:?TAP_URL is not set: the tap repository to clone from or to set as origin}"
@@ -52,9 +55,9 @@ if ! origin="$(git -C "${TAP_DIR}" remote get-url origin 2> /dev/null)"; then
 fi
 
 if [[ "${origin}" != "${TAP_URL}" ]]; then
-    printf 'tap: %s already has origin %s, not %s — refused, nothing was changed.\n' \
+    printf 'tap: %s already has origin %s, not %s — nothing was changed.\n' \
         "${TAP_DIR}" "${origin}" "${TAP_URL}" >&2
-    exit 1
+    exit 0
 fi
 
 printf 'tap: %s is already set up (origin %s) — nothing was changed\n' "${TAP_DIR}" "${origin}"

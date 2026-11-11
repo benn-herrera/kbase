@@ -5,6 +5,9 @@ Future intent, not commitment. Design truth lives in [SPEC](PROJECT_DOCS/SPEC/en
 [CONVENTIONS, "Plan & Execute Process"](PROJECT_DOCS/CONVENTIONS/plan-execute-process/index.md).
 Finished items are deleted, not archived.
 
+## Auth
+
+
 ## Claim graph
 
 - Strength that does not compound with chain depth, so the same points arranged in more or fewer

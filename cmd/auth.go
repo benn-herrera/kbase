@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -28,21 +29,36 @@ import (
 const authProviderArg = "<provider>"
 
 // authOptions is the input of the auth verbs: the provider name a verb acts
-// on, the store's directory, and for add the configured provider names, the
-// key's stream and whether it is a terminal.
+// on, the store's directory, for add the configured provider names, the
+// key's stream and whether it is a terminal, and for get-piped whether stdout
+// is a terminal.
 type authOptions struct {
-	Provider        string
-	Dir             string
-	Configured      []string
-	Stdin           io.Reader
-	StdinIsTerminal bool
-	Stdout          io.Writer
-	Logger          log.Logger
+	Provider         string
+	Dir              string
+	Configured       []string
+	Stdin            io.Reader
+	StdinIsTerminal  bool
+	Stdout           io.Writer
+	StdoutIsTerminal bool
+	Logger           log.Logger
 }
 
-// runAuthVerb runs one auth verb and writes its result.
+// authListRemedy is the remedy of a refusal naming a provider that may have no
+// stored key.
+const authListRemedy = "kbase auth list"
+
+// authWroteOwnOutput is the outcome of a verb that has written its success to
+// stdout itself, as get-piped writes a key, so no result is emitted. No
+// toolresult outcome spells it.
+const authWroteOwnOutput = "auth-wrote-own-output"
+
+// runAuthVerb runs one auth verb and writes its result, but for a verb whose
+// outcome is authWroteOwnOutput.
 func runAuthVerb(name string, verb func(authOptions) (string, []toolresult.Field), opts authOptions) (int, error) {
 	outcome, fields := verb(opts)
+	if outcome == authWroteOwnOutput {
+		return 0, nil
+	}
 	return emitResult(name, opts.Stdout, outcome, fields)
 }
 
@@ -97,14 +113,52 @@ func authAdd(opts authOptions) (string, []toolresult.Field) {
 func authRemove(opts authOptions) (string, []toolresult.Field) {
 	removed, err := auth.NewStore(opts.Dir).Remove(opts.Provider)
 	if err != nil {
-		return authStoreFailure(err, "kbase auth list")
+		return authStoreFailure(err, authListRemedy)
 	}
 	provider := strings.ToLower(opts.Provider)
 	if !removed {
-		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: provider, Remedy: "kbase auth list",
-			Detail: fmt.Sprintf("no key stored for provider `%s`", provider)})
+		return authNoKeyStored(provider)
 	}
 	return toolresult.Done, []toolresult.Field{{Key: "provider", Value: provider}}
+}
+
+// authNoKeyStored is the refusal of a verb given a provider, already folded to
+// lowercase, that has no stored key.
+func authNoKeyStored(provider string) (string, []toolresult.Field) {
+	return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: provider, Remedy: authListRemedy,
+		Detail: fmt.Sprintf("no key stored for provider `%s`", provider)})
+}
+
+// authGetPiped writes the key stored for the provider, its name folded to
+// lowercase, and a newline to the stream past stdout's spelling, and no result.
+// An unusable name, a character device on stdout and a provider with no stored
+// key are refused, in that order; the first two before the store is read.
+func authGetPiped(opts authOptions) (string, []toolresult.Field) {
+	if err := auth.CheckName(opts.Provider); err != nil {
+		return authStoreFailure(err, authListRemedy)
+	}
+	provider := strings.ToLower(opts.Provider)
+	if opts.StdoutIsTerminal {
+		return refused(nil, toolresult.Item{Check: toolresult.CheckUsage, Key: provider, Remedy: authGetPipedRemedy(provider),
+			Detail: "stdout is a terminal or other character device: kbase writes a key only to a pipe or a file"})
+	}
+	key, err := auth.NewStore(opts.Dir).Read(provider)
+	if errors.Is(err, fs.ErrNotExist) {
+		return authNoKeyStored(provider)
+	}
+	if err != nil {
+		return failed(nil, err)
+	}
+	if _, err := io.WriteString(toolresult.Underlying(opts.Stdout), key.Reveal()+"\n"); err != nil {
+		return failed(nil, fmt.Errorf("write the key to stdout: %w", err))
+	}
+	opts.Logger.Debug("auth get-piped: key written", "provider", provider)
+	return authWroteOwnOutput, nil
+}
+
+// authGetPipedRemedy is get-piped spelled for provider in its piped form.
+func authGetPipedRemedy(provider string) string {
+	return "kbase auth get-piped " + provider + " | <your-system-clipboard-copier>"
 }
 
 // authList names the providers with a stored key, in name order.
@@ -137,10 +191,10 @@ func authStoreDir() (string, error) {
 	return filepath.Join(base, auth.DirName), nil
 }
 
-// isTerminal reports whether r is a terminal: a file whose mode is a
-// character device.
-func isTerminal(r io.Reader) bool {
-	f, ok := r.(*os.File)
+// isTerminal reports whether stream, a reader or a writer, is a terminal: a
+// file whose mode is a character device.
+func isTerminal(stream any) bool {
+	f, ok := stream.(interface{ Stat() (os.FileInfo, error) })
 	if !ok {
 		return false
 	}
@@ -200,6 +254,7 @@ func authVerbCommand(use, short, long string, args cobra.PositionalArgs, readsCo
 				opts.Configured = configuredProviderNames(loaded)
 			}
 			opts.StdinIsTerminal = isTerminal(opts.Stdin)
+			opts.StdoutIsTerminal = isTerminal(toolresult.Underlying(opts.Stdout))
 			if len(positionals) > 0 {
 				opts.Provider = positionals[0]
 			}
@@ -274,12 +329,34 @@ list). The result names the provider, in lowercase.`,
 		false, authRemove), "provider", "the provider whose stored key to clear")
 }
 
+func authGetPipedCommand() *cobra.Command {
+	cmd := mcp.DescribePositional(authVerbCommand("get-piped <provider>",
+		"write the API key stored for a provider to a pipe or a file",
+		`Write the API key stored for <provider>, a provider name in any case, to
+stdout, followed by a newline, and nothing else: no YAML result. Stdout must be
+a pipe or a file; a terminal or other character device is refused before the
+store is read.
+
+  `+authGetPipedRemedy(authProviderArg)+`
+
+A redirect to a file leaves the key on disk in plain text. A provider with no
+stored key is refused (check: usage; remedy: kbase auth list). Every refusal and
+failure is a YAML result; a refusal writes no key, and a failure to write the
+key can leave part of it before the result. Under a pipe, a refusal goes into
+the pipe.`,
+		authArgs(1, toolresult.Item{Check: toolresult.CheckUsage, Key: authProviderArg, Remedy: authGetPipedRemedy(authProviderArg),
+			Detail: "kbase auth get-piped takes one argument, the provider name"}),
+		false, authGetPiped), "provider", "the provider whose stored key to write")
+	cmd.Hidden = true
+	return cmd
+}
+
 func authListCommand() *cobra.Command {
 	return authVerbCommand("list",
 		"name the providers that have a stored API key",
 		`Name each provider that has a stored key, in name order: names alone,
 never a key. Each name is in lowercase, the form its key is stored under,
 whatever case add was given.`,
-		authArgs(0, toolresult.Item{Check: toolresult.CheckUsage, Remedy: "kbase auth list", Detail: "kbase auth list takes no argument"}),
+		authArgs(0, toolresult.Item{Check: toolresult.CheckUsage, Remedy: authListRemedy, Detail: "kbase auth list takes no argument"}),
 		false, authList)
 }
