@@ -256,27 +256,21 @@ regenerate-fixtures: build
     @BIN_DIR="{{BIN_DIR}}" REGENERATE_OUT_DIR="{{REGENERATE_FIXTURES_OUT_DIR}}" INIT_SKELETON_DIR="{{INIT_SKELETON_DIR}}" tools/scripts/regenerate-fixtures.sh 2>&1 | tee "{{REGENERATE_FIXTURES_OUT_DIR}}/log.txt"
 
 [doc("split a markdown monolith by heading level into linked leaves under out (optional link map TSV), then check the leaves reassemble it and every relative link resolves")]
-dice-doc monolith out map="": _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-doc "{{monolith}}" "{{out}}" "{{map}}"
+dice-doc monolith out map="":
+    @just docdicer dice-doc "{{monolith}}" "{{out}}" "{{map}}"
 
 [doc("dice the documents listed in a manifest TSV, read from src-dir, into linked volumes, with intermediates in work-dir, then verify all trees (see tools/docdicer/README.md)")]
-dice-docs manifest src work: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
+dice-docs manifest src work:
+    @just docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
 
 [doc("write a diced tree (the directory holding its entry-point.md) back out as one markdown document at monolith, which must not exist, then check it dices back to the same tree")]
-undice tree monolith: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer undice "{{tree}}" "{{monolith}}"
+undice tree monolith:
+    @just docdicer undice "{{tree}}" "{{monolith}}"
 
 [doc("check every relative link and #anchor in PROJECT_DOCS, docs and top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
-check-links: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS docs *.md
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS
-
-[private]
-_docdicer:
-    @[[ -d tools/docdicer ]] || git -C tools clone git@github.com:benn-herrera/docdicer
-    @cd tools/docdicer && { [[ -d .claude ]] || ln -vs ../../.claude .; }
-    @cd tools/docdicer && { [[ -d .opencode ]] || ln -vs ../../.opencode .; }
+check-links:
+    @just docdicer check-links PROJECT_DOCS docs *.md
+    @just docdicer check-tree PROJECT_DOCS
 
 [doc("hermetic: stage the compatibility op script test-data/fixtures/compat/ops.yaml through ./bin/kbase over a scratch copy of the results fixture, then re-issue it and check nothing changed")]
 test-integration-opscript-results: build

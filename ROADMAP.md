@@ -7,14 +7,10 @@ Finished items are deleted, not archived.
 
 ## Items
 
-0. Remove hosted tools/docdicer repo
-  - move it to ../devpro/
-  - replaces uses of it with devpro-installed version
-
 1. Claim graph
 - Strength that does not compound with chain depth, so the same points arranged in more or fewer
   steps score alike (THESIS: arrangement-invariant): see
-  [PROPOSED_REVISED_STRENGTH_SCORING_SCHEME](ROADMAP_PLANS/PROPOSED_REVISED_STRENGTH_SCORING_SCHEME.md)
+  [PROPOSED_REVISED_STRENGTH_SCORING_SCHEME](ROADMAP_DESIGNS/PROPOSED_REVISED_STRENGTH_SCORING_SCHEME.md)
   §5, "The combination".
 - A `definition` node. A definition is context today: no node, no edge, no score, and a claim's
   dependence on a definition is unrecorded.
@@ -42,7 +38,7 @@ Finished items are deleted, not archived.
   maintained and may close those gaps itself.
 
 3. Exporter
-- see [EXPORT_LATEX_BUG](ROADMAP_PLANS/EXPORT_LATEX_BUG.md)
+- see [EXPORT_LATEX_BUG](ROADMAP_DESIGNS/EXPORT_LATEX_BUG.md)
 
 4. Configuration
 - A test for whether lockstep schedule for the ask queue, beside the continuous one would be more efficient

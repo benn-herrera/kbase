@@ -33,6 +33,3 @@ __pycache__/
 
 # custom homebrew tap repo location
 homebrew-tap/
-
-# markdown monolith -> hierarchy tool
-tools/docdicer/
