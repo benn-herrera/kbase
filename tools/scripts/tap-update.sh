@@ -29,6 +29,6 @@ sha="$(curl -fsSL "${url}" | shasum -a 256 | cut -d' ' -f1)" || \
 "${script_dir}"/tap-formula-set.sh "${f}" "${url}" "${sha}"
 git -C "${TAP_DIR}" pull
 if ! git -C "${TAP_DIR}" diff --quiet HEAD -- Formula/${TAP_FORMULA}.rb; then
-    git -C "${TAP_DIR}" commit -S -m "${TAP_FORMULA} ${ver}" -- Formula/${TAP_FORMULA}.rb
-    git show --show-signature HEAD
+    GPG_TTY=$(tty) git -C "${TAP_DIR}" commit -S -m "${TAP_FORMULA} ${ver}" -- Formula/${TAP_FORMULA}.rb
+    git show --show-signature HEAD | grep '^gpg:'
 fi
