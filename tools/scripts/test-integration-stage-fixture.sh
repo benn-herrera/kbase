@@ -28,7 +28,7 @@
 # staging tool, not by this test. XDG_STATE_HOME is exported under the output
 # directory instead, so nothing reaches the user's real state store.
 #
-# Inputs (environment): BIN_DIR; AGENTS_DIR, the sibling adjagent clone; JUST,
+# Inputs (environment): BIN_DIR; DEVPRO_DIR, the sibling adjagent clone; JUST,
 # the just executable; STAGE_FIXTURE_OUT_DIR, the evidence directory.
 set -euo pipefail
 
@@ -36,7 +36,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 cd "${script_dir}/../.." || exit 1
 
 : "${BIN_DIR:?BIN_DIR is not set: the build output directory}"
-: "${AGENTS_DIR:?AGENTS_DIR is not set: the sibling adjagent clone}"
+: "${DEVPRO_DIR:?DEVPRO_DIR is not set: the sibling adjagent clone}"
 : "${JUST:?JUST is not set: the just executable}"
 : "${STAGE_FIXTURE_OUT_DIR:?STAGE_FIXTURE_OUT_DIR is not set: the evidence directory}"
 
@@ -82,7 +82,7 @@ function make_fixture() {
 # run_leg <NN-leg> <fixture>: one run of the staging script; leaves legs/<NN-leg>.{out,log,exit}.
 function run_leg() {
   local stem="${legs}/${1}" rc=0
-  BIN_DIR="${BIN_DIR}" JUST="${JUST}" AGENTS_DIR="${AGENTS_DIR}" FIXTURE_DIR="${2}" INVOCATION_DIR="${out}" \
+  BIN_DIR="${BIN_DIR}" JUST="${JUST}" DEVPRO_DIR="${DEVPRO_DIR}" FIXTURE_DIR="${2}" INVOCATION_DIR="${out}" \
     "${prep}" > "${stem}.out" 2> "${stem}.log" || rc=$?
   printf '%s\n' "${rc}" > "${stem}.exit"
 }
@@ -170,7 +170,7 @@ check "${leg}" harness-is-copy "${ignoring}/.kbase/harness.sh" harness_is_copy "
 check "${leg}" sentinel-untouched "${out}/sentinel" file_is "${out}/sentinel" sentinel
 
 OUT_DIR="${out}" RECIPE=test-integration-stage-fixture \
-  INVOCATION="scratch fixtures under ${out}/fixtures/ (git init, core.excludesFile an empty file, one commit, tag cleared)\nper leg: BIN_DIR=${BIN_DIR} JUST=${JUST} AGENTS_DIR=${AGENTS_DIR} FIXTURE_DIR=<fixture> INVOCATION_DIR=${out} tools/scripts/prep-test-integration-fixture.sh" \
+  INVOCATION="scratch fixtures under ${out}/fixtures/ (git init, core.excludesFile an empty file, one commit, tag cleared)\nper leg: BIN_DIR=${BIN_DIR} JUST=${JUST} DEVPRO_DIR=${DEVPRO_DIR} FIXTURE_DIR=<fixture> INVOCATION_DIR=${out} tools/scripts/prep-test-integration-fixture.sh" \
   tools/scripts/write-evidence.sh
 
 if [[ "${status}" -ne 0 ]]; then

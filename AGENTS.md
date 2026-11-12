@@ -16,7 +16,7 @@ Must-see:
 
 @PROJECT_DOCS/CONVENTIONS/entry-point.md
 
- <!-- vvv-adjagent devpro 0.16.1 do not edit at or between marker lines. adjagent-vvv -->
+ <!-- vvv-devpro devpro 0.17.0 do not edit at or between marker lines. devpro-vvv -->
  
 ## Scratch space
 **INVARIANT**: `/tmp` and other system-wide scratch locations are off limits. All scratch —
@@ -192,4 +192,4 @@ changes cannot be seen at its source or corrected there.
   project's own terms, and takes neither the figure nor a name drawn from it unless the user asks
   for that wording.
 
- <!-- ^^^-adjagent do not edit at or between marker lines. adjagent-^^^ -->
+ <!-- ^^^-devpro do not edit at or between marker lines. devpro-^^^ -->

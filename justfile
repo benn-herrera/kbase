@@ -165,11 +165,11 @@ edit-gate: fmt-check
     @tools/scripts/check-just-docs.sh
 
 # this project is developed in tandem with adjagent
-AGENTS_DIR := "../adjagent"
-[doc("NEEDS the adjagent clone (AGENTS_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
+DEVPRO_DIR := "../devpro"
+[doc("NEEDS the depro clone (DEVPRO_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
-  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=opencode
-  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=claude
+  @PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install . --harness=opencode
+  @PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install . --harness=claude
 
 # The tap clone's one source: its origin URL, which the clone and the remote
 # set-up both take, and the location its .gitignore entry names.
@@ -204,12 +204,12 @@ prep-test-integration-arxiv ids=ARXIV_IDS:
 
 [doc("NEEDS git and the adjagent clone; DESTRUCTIVE to dir: reset fixture repository dir to its `cleared` tag, install the agent set, copy bin/kbase and tools/harness.sh into .kbase/, move the `staged` tag")]
 prep-test-integration-fixture dir: build
-    @BIN_DIR="{{BIN_DIR}}" FIXTURE_DIR="{{dir}}" INVOCATION_DIR="{{invocation_directory()}}" JUST="{{just_executable()}}" AGENTS_DIR="{{AGENTS_DIR}}" tools/scripts/prep-test-integration-fixture.sh
+    @BIN_DIR="{{BIN_DIR}}" FIXTURE_DIR="{{dir}}" INVOCATION_DIR="{{invocation_directory()}}" JUST="{{just_executable()}}" DEVPRO_DIR="{{DEVPRO_DIR}}" tools/scripts/prep-test-integration-fixture.sh
 
 [doc("NEEDS git and the adjagent clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, checking that it stages, re-stages and refuses")]
 test-integration-stage-fixture: build
     @mkdir -p "{{STAGE_FIXTURE_OUT_DIR}}"
-    @BIN_DIR="{{BIN_DIR}}" AGENTS_DIR="{{AGENTS_DIR}}" JUST="{{just_executable()}}" STAGE_FIXTURE_OUT_DIR="{{STAGE_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-stage-fixture.sh 2>&1 | tee "{{STAGE_FIXTURE_OUT_DIR}}/log.txt"
+    @BIN_DIR="{{BIN_DIR}}" DEVPRO_DIR="{{DEVPRO_DIR}}" JUST="{{just_executable()}}" STAGE_FIXTURE_OUT_DIR="{{STAGE_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-stage-fixture.sh 2>&1 | tee "{{STAGE_FIXTURE_OUT_DIR}}/log.txt"
 
 [doc("NEEDS pandoc and python3 (excluded from test-integration): ./bin/kbase build --no-inference over each BUILD_ARXIV_IDS paper in a fresh fixture repository; fetches the papers first if absent")]
 test-integration-build-arxiv: (prep-test-integration-arxiv BUILD_ARXIV_IDS) build

@@ -2,7 +2,7 @@
 # kb-testing's stage-fixture, for a fixture repository the owner staged by hand:
 # a caller-named directory, never a path this file knows. The scratch directory
 # it removes is each harness's project-temp-dir, read by the _harness-value
-# recipe of AGENTS_DIR's justfile (adjagent), whose install-with-kb recipe
+# recipe of DEVPRO_DIR's justfile (adjagent), whose install-with-kb recipe
 # installs the agent set into the fixture for both harnesses, claude and
 # opencode. The fixture's own kbase is .kbase/kbase, a copy of this tree's
 # build, and beside it .kbase/harness.sh, a copy of this tree's tools/harness.sh.
@@ -15,7 +15,7 @@
 #
 # Inputs (environment): FIXTURE_DIR, the fixture repository, absolute or
 # relative to INVOCATION_DIR; INVOCATION_DIR, the directory the recipe was
-# invoked from; JUST, the just executable; AGENTS_DIR, the sibling adjagent
+# invoked from; JUST, the just executable; DEVPRO_DIR, the sibling adjagent
 # clone; BIN_DIR, the build output directory, relative to the repository root.
 set -euo pipefail
 
@@ -25,11 +25,11 @@ cd "${script_dir}/../.." || exit 1
 : "${FIXTURE_DIR:?FIXTURE_DIR is not set: the fixture repository to reset}"
 : "${INVOCATION_DIR:?INVOCATION_DIR is not set: the directory the recipe was invoked from}"
 : "${JUST:?JUST is not set: the just executable}"
-: "${AGENTS_DIR:?AGENTS_DIR is not set: the sibling adjagent clone}"
+: "${DEVPRO_DIR:?DEVPRO_DIR is not set: the sibling adjagent clone}"
 : "${BIN_DIR:?BIN_DIR is not set: the build output directory holding kbase}"
 
-if [[ ! -f "${AGENTS_DIR}/justfile" ]]; then
-    printf 'error: no justfile at %s/justfile — kbase is developed in tandem with adjagent, so AGENTS_DIR must name a sibling clone.\n' "${AGENTS_DIR}" >&2
+if [[ ! -f "${DEVPRO_DIR}/justfile" ]]; then
+    printf 'error: no justfile at %s/justfile — kbase is developed in tandem with adjagent, so DEVPRO_DIR must name a sibling clone.\n' "${DEVPRO_DIR}" >&2
     exit 1
 fi
 
@@ -75,8 +75,8 @@ if grep -q '^state: "running"' <<< "${status}"; then
     printf 'error: a kbase build is running over %s — cancel it (kbase cancel) or wait.\n' "${dir}" >&2
     exit 1
 fi
-scratch_claude="$("${JUST}" --justfile "${AGENTS_DIR}/justfile" _harness-value claude project-temp-dir)"
-scratch_opencode="$("${JUST}" --justfile "${AGENTS_DIR}/justfile" _harness-value opencode project-temp-dir)"
+scratch_claude="$("${JUST}" --justfile "${DEVPRO_DIR}/justfile" _harness-value claude project-temp-dir)"
+scratch_opencode="$("${JUST}" --justfile "${DEVPRO_DIR}/justfile" _harness-value opencode project-temp-dir)"
 for pair in "claude:${scratch_claude}" "opencode:${scratch_opencode}"; do
     if [[ -z "${pair#*:}" || "${pair#*:}" == . || "${pair#*:}" == *..* ]]; then
         printf 'error: _harness-value %s project-temp-dir returned "%s" — refusing, the reset would remove it from the fixture.\n' "${pair%%:*}" "${pair#*:}" >&2
@@ -86,8 +86,8 @@ done
 printf 'staging %s: resetting to `cleared` — discards every commit above it (the installed agent set, the build ledger), uncommitted changes, kb-root/, %s/ and %s/ — then reinstalling the current agent set for both harnesses and copying the build of this tree to .kbase/kbase and tools/harness.sh to .kbase/harness.sh.\n' "${dir}" "${scratch_claude}" "${scratch_opencode}" >&2
 git -C "${dir}" reset --hard cleared > /dev/null
 rm -rf "${dir}/${scratch_claude}" "${dir}/${scratch_opencode}" "${dir}/kb-root"
-"${JUST}" --justfile "${AGENTS_DIR}/justfile" install-with-kb "${dir}" --harness=claude
-"${JUST}" --justfile "${AGENTS_DIR}/justfile" install-with-kb "${dir}" --harness=opencode --model-tier-map=default
+"${JUST}" --justfile "${DEVPRO_DIR}/justfile" install-with-kb "${dir}" --harness=claude
+"${JUST}" --justfile "${DEVPRO_DIR}/justfile" install-with-kb "${dir}" --harness=opencode --model-tier-map=default
 # Removing before copying keeps a symlinked copy's target untouched; the copy
 # is the fixture's own, so a rebuild of bin/kbase leaves a running build alone.
 mkdir -p "$(dirname "${fixture_kbase}")"
