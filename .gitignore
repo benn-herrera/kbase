@@ -18,17 +18,15 @@ mad-*/
 
 .claude/
 .claude-temp/
-.mcp.json
 .opencode/
 .opencode-temp/
+backup.*
 
 # scratch KB trees born by a kbase init run in this repository
 /kb-root/
 
 # agent set work areas
 mad-design/
-mad-review/
-guest-session/
 
 .venv/
 __pycache__/

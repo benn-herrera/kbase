@@ -168,8 +168,8 @@ edit-gate: fmt-check
 AGENTS_DIR := "../adjagent"
 [doc("NEEDS the adjagent clone (AGENTS_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
-  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=claude
   @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=opencode
+  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=claude
 
 # The tap clone's one source: its origin URL, which the clone and the remote
 # set-up both take, and the location its .gitignore entry names.
@@ -422,3 +422,5 @@ update-dependencies:
     go mod tidy
     go get -u ./...
     go mod tidy
+
+import? '.claude/skills/devpro/skills/docdicer/tools/runner-snippets/docdicer.just'
