@@ -5,7 +5,7 @@
 # cross-process maintenance chain closed green, the no-dot placeholder. The
 # born bytes, the birth commit's subject and its trail belong to
 # cmd/init_test.go and ledger_test.go; the script never inspects them.
-# It needs only git — no pandoc, no provider, no adjagent clone.
+# It needs only git — no pandoc, no provider, no devpro clone.
 #
 # Inputs (environment): BIN_DIR; INIT_OUT_DIR, the evidence directory.
 set -euo pipefail

@@ -3,7 +3,7 @@
 The sheet composer reads the rows `index.Derive` yields from a KB root's records and statement
 markers, the H1s of `entry-point.md` and each volume's `index.md`, and the leaves hosting its
 claims. This directory is such a repository: `kb-root/` is a KB in metadata format `3.0.0` — the
-`2.0.x → 3.0.0` converter's golden output (`internal/formats/testdata/adjagent-sheet-3.0.0/kb-root/`),
+`2.0.x → 3.0.0` converter's golden output (`internal/formats/testdata/devpro-sheet-3.0.0/kb-root/`),
 stamped `3.0.0`, with `3.0.0` register pages in place of the `2.0.1` registers —
 and an unmarked-reference build record beside it that the sheets do not read. `kbase verify` over it
 reports the four unhosted claims' `statement marker` fault and the two `demoted` records, and
@@ -69,7 +69,7 @@ regenerated and never hand-edited.
 
 The DOT text is ours and deterministic, so it needs no Graphviz and no version pin. No SVG is
 committed and no test runs Graphviz: `dot`'s layout and bytes change between releases, so the DOT
-text is the only pin on what is drawn. On a mismatch, `TestAdjagentSheetGoldens` writes
+text is the only pin on what is drawn. On a mismatch, `TestDevproSheetGoldens` writes
 the drawn sheet under `test-data/transient/unit_tests/sheet/got/` with the golden's name. A
 golden is replaced only by copying that file over it, and the commit names each golden replaced
 and the change that moved it.

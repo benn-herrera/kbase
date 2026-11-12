@@ -18,17 +18,17 @@ import (
 	"kbase/internal/sheet"
 )
 
-// adjagentFixture is the claim-sheet fixture: a KB, an unmarked build record
+// devproFixture is the claim-sheet fixture: a KB, an unmarked build record
 // beside it that the sheets do not read, and the DOT the sheets compose to.
-const adjagentFixture = "testdata/adjagent-sheet"
+const devproFixture = "testdata/devpro-sheet"
 
-// sheetGotDir is where TestAdjagentSheetGoldens writes a sheet that differs
+// sheetGotDir is where TestDevproSheetGoldens writes a sheet that differs
 // from its golden, under the golden's name.
 const sheetGotDir = "../../test-data/transient/unit_tests/sheet/got"
 
-func openAdjagentFixture(t *testing.T) *kb.Source {
+func openDevproFixture(t *testing.T) *kb.Source {
 	t.Helper()
-	src, err := kbload.Open(filepath.Join(adjagentFixture, "kb-root"))
+	src, err := kbload.Open(filepath.Join(devproFixture, "kb-root"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +85,13 @@ func fixtureFiles(t *testing.T, dir string) map[string][]byte {
 	return out
 }
 
-// TestAdjagentSheetGoldens: kbase draws the fixture as the full sheet,
+// TestDevproSheetGoldens: kbase draws the fixture as the full sheet,
 // the digest and the sheets of the two volumes holding nodes — none for
 // gamma, which holds none — and its sheets are the goldens' DOT, byte for byte.
-func TestAdjagentSheetGoldens(t *testing.T) {
+func TestDevproSheetGoldens(t *testing.T) {
 	drawn := map[string]string{}
 	var paths []string
-	for _, s := range composeDerived(t, openAdjagentFixture(t)) {
+	for _, s := range composeDerived(t, openDevproFixture(t)) {
 		drawn[s.Path] = s.DOT(false)
 		paths = append(paths, s.Path)
 	}
@@ -100,7 +100,7 @@ func TestAdjagentSheetGoldens(t *testing.T) {
 	}
 	for golden, path := range map[string]string{"claim-graph.dot": kb.ClaimGraphFile, "claim-graph-digest.dot": kb.ClaimGraphDigestFile,
 		"alpha-claim-graph.dot": "alpha/" + kb.ClaimGraphFile} {
-		data, err := os.ReadFile(filepath.Join(adjagentFixture, golden))
+		data, err := os.ReadFile(filepath.Join(devproFixture, golden))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,11 +137,11 @@ func at(lines []string, i int) string {
 }
 
 // TestLadderThroughFakeDot drives renderSVG over every sheet the emitter
-// composes for the adjagent fixture, with a dot stand-in that refuses any DOT
+// composes for the devpro fixture, with a dot stand-in that refuses any DOT
 // lacking splines=line: the first rung fails and the emitter's retry DOT
 // renders; where the retry fails too, the first error comes back.
 func TestLadderThroughFakeDot(t *testing.T) {
-	sheets := composeDerived(t, openAdjagentFixture(t))
+	sheets := composeDerived(t, openDevproFixture(t))
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "dot")
 	script := "#!/bin/sh\ninput=$(cat)\nif printf '%s' \"$input\" | grep -q 'splines=line'; then echo '<svg/>'; exit 0; fi\necho 'routesplines failed' >&2\nexit 1\n"
@@ -160,12 +160,12 @@ func TestLadderThroughFakeDot(t *testing.T) {
 	}
 }
 
-// copiedAdjagentFixture is a writable copy of the adjagent fixture's
+// copiedDevproFixture is a writable copy of the devpro fixture's
 // repository.
-func copiedAdjagentFixture(t *testing.T) string {
+func copiedDevproFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for rel, data := range fixtureFiles(t, adjagentFixture) {
+	for rel, data := range fixtureFiles(t, devproFixture) {
 		p := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -196,7 +196,7 @@ func composedDOT(t *testing.T, root string) map[string]string {
 // one supports stroke, nor a cull record in kb-root/.build/ linking a drawn
 // supports pair.
 func TestBuildRecordsDrawNothing(t *testing.T) {
-	root := copiedAdjagentFixture(t)
+	root := copiedDevproFixture(t)
 	without := composedDOT(t, root)
 	record := "links:\n  - a: clm-aaa001\n    b: clm-bbb001\n    harvest: adjacent\n"
 	if err := os.MkdirAll(filepath.Join(root, buildrecords.Dir), 0o755); err != nil {
@@ -211,7 +211,7 @@ func TestBuildRecordsDrawNothing(t *testing.T) {
 }
 
 func TestRenderWithoutDot(t *testing.T) {
-	src := openAdjagentFixture(t)
+	src := openDevproFixture(t)
 	t.Setenv("PATH", "")
 	if _, err := renderDerived(t, src); !errors.Is(err, sheet.ErrNoDot) {
 		t.Errorf("Render with no PATH = %v, want ErrNoDot", err)
@@ -219,7 +219,7 @@ func TestRenderWithoutDot(t *testing.T) {
 }
 
 func TestRenderDraws(t *testing.T) {
-	sheets, err := renderDerived(t, openAdjagentFixture(t))
+	sheets, err := renderDerived(t, openDevproFixture(t))
 	if errors.Is(err, sheet.ErrNoDot) {
 		t.Skip("no Graphviz dot on PATH")
 	}
@@ -239,7 +239,7 @@ func TestRenderDraws(t *testing.T) {
 // TestRenderTwiceIsByteIdentical: the fixture rendered twice through dot gives
 // the same sheets, byte for byte, so a repeated write leaves them unchanged.
 func TestRenderTwiceIsByteIdentical(t *testing.T) {
-	src := openAdjagentFixture(t)
+	src := openDevproFixture(t)
 	first, err := renderDerived(t, src)
 	if errors.Is(err, sheet.ErrNoDot) {
 		t.Skip("no Graphviz dot on PATH")

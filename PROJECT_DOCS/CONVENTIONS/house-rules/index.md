@@ -2,7 +2,7 @@
 
 Contents:
 
-- [The agent set is adjagent's, never edited here](the-agent-set-is-adjagent-s-never-edited-here.md)
+- [The agent set is devpro's, never edited here](the-agent-set-is-devpro-s-never-edited-here.md)
 - [Serialization formats](serialization-formats.md)
 - [Superseded format parsers](superseded-format-parsers.md)
 - [`kb-format` patch bumps](kb-format-patch-bumps.md)

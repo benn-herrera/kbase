@@ -20,7 +20,7 @@ import (
 	"kbase/internal/kb"
 )
 
-// The 2.0.1 parity comparison: test-integration-parity-adjagent-sheet runs
+// The 2.0.1 parity comparison: test-integration-parity-devpro-sheet runs
 // every case of the frozen 2.0.1 goldens through ./bin/kbase over the 2.0.1
 // fixture as converted at load, and TestConvertedAnswersMatchTheGoldens
 // compares each answer with its golden. Without its flags it skips.
@@ -34,7 +34,7 @@ const (
 	parityFrom      = "2.0.1"
 	// parityConverted is the 2.0.1 fixture's conversion to the current format
 	// as the converters' golden pairs pin it.
-	parityConverted = "../formats/testdata/adjagent-sheet-4.0.0/" + kb.KBDir
+	parityConverted = "../formats/testdata/devpro-sheet-4.0.0/" + kb.KBDir
 )
 
 // markerHosted is whether a node kind is hosted by a statement marker, total
@@ -801,7 +801,7 @@ type parityComparisonDoc struct {
 // keys the answer-side rules state removed, and the exit codes agree.
 func TestConvertedAnswersMatchTheGoldens(t *testing.T) {
 	if *parityAnswers == "" || *parityComparison == "" {
-		t.Skip("run by test-integration-parity-adjagent-sheet")
+		t.Skip("run by test-integration-parity-devpro-sheet")
 	}
 	for _, kind := range kb.NodeKinds {
 		if _, ok := markerHosted[kind]; !ok {

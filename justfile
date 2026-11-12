@@ -42,8 +42,8 @@ AUTH_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-auth"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 OPSCRIPT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-opscript-results"
 COMPAT_OP_SCRIPT := TEST_DATA_FIXTURES_DIR / "compat" / "ops.yaml"
-PARITY_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-parity-adjagent-sheet"
-REFUSED_WRITE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-refused-write-adjagent-sheet"
+PARITY_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-parity-devpro-sheet"
+REFUSED_WRITE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-refused-write-devpro-sheet"
 STAGE_FIXTURE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-stage-fixture"
 # The two small papers the lamb build recipes build, and their evidence.
 LAMB_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "lamb"
@@ -51,7 +51,7 @@ LAMB_CYCLE_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "lamb-cycle"
 BUILD_LAMB_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-lamb"
 BUILD_LAMB_CYCLE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-lamb-cycle"
 
-# Pinned integration corpus: the arXiv survey sample, taken from adjagent's
+# Pinned integration corpus: the arXiv survey sample, taken from devpro's
 # kb-testing/justfile — papers sampled by construction across categories whose
 # LaTeX differs in kind. Ids are VERSIONED: an e-print version is append-only,
 # so each id is its own pin and the list reproduces the corpus while
@@ -164,7 +164,7 @@ edit-gate: fmt-check
     @tools/scripts/check-hermetic.sh
     @tools/scripts/check-just-docs.sh
 
-# this project is developed in tandem with adjagent
+# this project is developed in tandem with devpro
 DEVPRO_DIR := "../devpro"
 [doc("NEEDS the depro clone (DEVPRO_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
@@ -202,11 +202,11 @@ tap-local:
 prep-test-integration-arxiv ids=ARXIV_IDS:
     @ARXIV_IDS="{{ids}}" ARXIV_TGZ_DIR="{{ARXIV_TGZ_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" ARXIV_DELAY="{{ARXIV_DELAY}}" tools/scripts/prep-test-integration-arxiv.sh
 
-[doc("NEEDS git and the adjagent clone; DESTRUCTIVE to dir: reset fixture repository dir to its `cleared` tag, install the agent set, copy bin/kbase and tools/harness.sh into .kbase/, move the `staged` tag")]
+[doc("NEEDS git and the devpro clone; DESTRUCTIVE to dir: reset fixture repository dir to its `cleared` tag, install the agent set, copy bin/kbase and tools/harness.sh into .kbase/, move the `staged` tag")]
 prep-test-integration-fixture dir: build
     @BIN_DIR="{{BIN_DIR}}" FIXTURE_DIR="{{dir}}" INVOCATION_DIR="{{invocation_directory()}}" JUST="{{just_executable()}}" DEVPRO_DIR="{{DEVPRO_DIR}}" tools/scripts/prep-test-integration-fixture.sh
 
-[doc("NEEDS git and the adjagent clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, checking that it stages, re-stages and refuses")]
+[doc("NEEDS git and the devpro clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, checking that it stages, re-stages and refuses")]
 test-integration-stage-fixture: build
     @mkdir -p "{{STAGE_FIXTURE_OUT_DIR}}"
     @BIN_DIR="{{BIN_DIR}}" DEVPRO_DIR="{{DEVPRO_DIR}}" JUST="{{just_executable()}}" STAGE_FIXTURE_OUT_DIR="{{STAGE_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-stage-fixture.sh 2>&1 | tee "{{STAGE_FIXTURE_OUT_DIR}}/log.txt"
@@ -323,22 +323,22 @@ test-dist-no-replay:
     @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay"
     @go test -count=1 -run '^TestDistBuildHasNoReplay$' ./cmd 2>&1 | tee "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay/log.txt"
 
-[doc("hermetic: every query case of the frozen goldens in internal/kbload/testdata/parity-2.0.1/ through ./bin/kbase over a scratch copy of the adjagent-sheet-2.0.1 fixture, compared with its golden")]
-test-integration-parity-adjagent-sheet: build
+[doc("hermetic: every query case of the frozen goldens in internal/kbload/testdata/parity-2.0.1/ through ./bin/kbase over a scratch copy of the devpro-sheet-2.0.1 fixture, compared with its golden")]
+test-integration-parity-devpro-sheet: build
     @mkdir -p "{{PARITY_OUT_DIR}}"
-    @BIN_DIR="{{BIN_DIR}}" PARITY_OUT_DIR="{{PARITY_OUT_DIR}}" tools/scripts/test-integration-parity-adjagent-sheet.sh 2>&1 | tee "{{PARITY_OUT_DIR}}/log.txt"
+    @BIN_DIR="{{BIN_DIR}}" PARITY_OUT_DIR="{{PARITY_OUT_DIR}}" tools/scripts/test-integration-parity-devpro-sheet.sh 2>&1 | tee "{{PARITY_OUT_DIR}}/log.txt"
 
-[doc("hermetic: edit-claim through ./bin/kbase over a scratch copy of internal/formats/testdata/adjagent-sheet-2.0.1 with an altered kb-root/CLAUDE.md, checking it is refused and kb-root unchanged")]
-test-integration-refused-write-adjagent-sheet: build
+[doc("hermetic: edit-claim through ./bin/kbase over a scratch copy of internal/formats/testdata/devpro-sheet-2.0.1 with an altered kb-root/CLAUDE.md, checking it is refused and kb-root unchanged")]
+test-integration-refused-write-devpro-sheet: build
     @mkdir -p "{{REFUSED_WRITE_OUT_DIR}}"
-    @BIN_DIR="{{BIN_DIR}}" REFUSED_WRITE_OUT_DIR="{{REFUSED_WRITE_OUT_DIR}}" tools/scripts/test-integration-refused-write-adjagent-sheet.sh 2>&1 | tee "{{REFUSED_WRITE_OUT_DIR}}/log.txt"
+    @BIN_DIR="{{BIN_DIR}}" REFUSED_WRITE_OUT_DIR="{{REFUSED_WRITE_OUT_DIR}}" tools/scripts/test-integration-refused-write-devpro-sheet.sh 2>&1 | tee "{{REFUSED_WRITE_OUT_DIR}}/log.txt"
 
 # The omnibus composes the HERMETIC recipes and writes no log of its own: each
 # already preserves its full output under its own name, and a second copy of
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
-[doc("run every hermetic integration test; the ones needing network, a provider, pandoc, python3 or the adjagent clone are excluded and run by name")]
-test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-auth test-integration-parity-adjagent-sheet test-integration-refused-write-adjagent-sheet test-dist-no-replay
+[doc("run every hermetic integration test; the ones needing network, a provider, pandoc, python3 or the devpro clone are excluded and run by name")]
+test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-auth test-integration-parity-devpro-sheet test-integration-refused-write-devpro-sheet test-dist-no-replay
 
 [doc("the full gate, run once at checkpoints: edit-gate, test-race and build")]
 checkpoint: edit-gate test-race build

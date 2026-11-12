@@ -80,7 +80,7 @@ type conversionRecord struct {
 func TestGoldenPairs(t *testing.T) {
 	for _, pair := range []struct{ in, out string }{
 		{"register-2.0.0", "register-3.0.0"},
-		{"adjagent-sheet-2.0.1", "adjagent-sheet-3.0.0"},
+		{"devpro-sheet-2.0.1", "devpro-sheet-3.0.0"},
 	} {
 		t.Run(pair.in, func(t *testing.T) {
 			got, obsolete, warnings, err := Convert(readTree(t, path.Join(testdata, pair.in)))
@@ -127,7 +127,7 @@ func TestGoldenRefusal(t *testing.T) {
 // and stopped before the stamp leaves a KB whose next conversion changes no
 // byte, makes nothing obsolete and warns of nothing.
 func TestAConvertedKBConvertsToItself(t *testing.T) {
-	for _, golden := range []string{"register-3.0.0", "adjagent-sheet-3.0.0"} {
+	for _, golden := range []string{"register-3.0.0", "devpro-sheet-3.0.0"} {
 		t.Run(golden, func(t *testing.T) {
 			want := readTree(t, path.Join(testdata, golden))
 			got, obsolete, warnings, err := Convert(want)

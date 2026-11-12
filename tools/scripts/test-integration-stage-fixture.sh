@@ -22,13 +22,13 @@
 #      build, .kbase/harness.sh a copy of tools/harness.sh, and the sentinel
 #      untouched.
 # Leg 04 stands in for a running build, which needs pandoc and a long paper.
-# It needs git and the adjagent clone, so it stays out of test-integration.
+# It needs git and the devpro clone, so it stays out of test-integration.
 #
 # The staging script's `status` takes no --state-dir: it is issued by the
 # staging tool, not by this test. XDG_STATE_HOME is exported under the output
 # directory instead, so nothing reaches the user's real state store.
 #
-# Inputs (environment): BIN_DIR; DEVPRO_DIR, the sibling adjagent clone; JUST,
+# Inputs (environment): BIN_DIR; DEVPRO_DIR, the sibling devpro clone; JUST,
 # the just executable; STAGE_FIXTURE_OUT_DIR, the evidence directory.
 set -euo pipefail
 
@@ -36,7 +36,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 cd "${script_dir}/../.." || exit 1
 
 : "${BIN_DIR:?BIN_DIR is not set: the build output directory}"
-: "${DEVPRO_DIR:?DEVPRO_DIR is not set: the sibling adjagent clone}"
+: "${DEVPRO_DIR:?DEVPRO_DIR is not set: the sibling devpro clone}"
 : "${JUST:?JUST is not set: the just executable}"
 : "${STAGE_FIXTURE_OUT_DIR:?STAGE_FIXTURE_OUT_DIR is not set: the evidence directory}"
 

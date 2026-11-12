@@ -15,7 +15,7 @@ import (
 
 // sheetFixtureKB is the claim-graph sheet fixture's kb-root, which carries
 // every node kind and every relation.
-var sheetFixtureKB = filepath.Join("..", "sheet", "testdata", "adjagent-sheet", "kb-root")
+var sheetFixtureKB = filepath.Join("..", "sheet", "testdata", "devpro-sheet", "kb-root")
 
 // Fixture rows per copy: what Derive yields for the sheet fixture as converted.
 const sheetFixtureNodes, sheetFixtureEdges = 14, 17

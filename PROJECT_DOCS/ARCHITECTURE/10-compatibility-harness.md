@@ -8,7 +8,7 @@ what their process produced:
 
 - `test-integration-results-fixture`, `test-integration-init`, `test-integration-opscript-results`,
   `test-integration-mcp`, `test-integration-config`, `test-integration-auth`,
-  `test-integration-parity-adjagent-sheet` and `test-integration-refused-write-adjagent-sheet` run
+  `test-integration-parity-devpro-sheet` and `test-integration-refused-write-devpro-sheet` run
   `./bin/kbase` over fixtures they stage. They judge the result against the verb's keys, the
   tree it wrote, the transcript it served, or the streams and files a credentials command left. The
   parity recipe judges the frozen answers the 2.0.1 binary gave over the KB the conversion reads, each
@@ -27,4 +27,3 @@ goldens. A conversion or decode that differs from its golden is written under
 copying that file over it.
 
 ---
-

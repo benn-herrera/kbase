@@ -2,7 +2,7 @@
 # kb-testing's stage-fixture, for a fixture repository the owner staged by hand:
 # a caller-named directory, never a path this file knows. The scratch directory
 # it removes is each harness's project-temp-dir, read by the _harness-value
-# recipe of DEVPRO_DIR's justfile (adjagent), whose install-with-kb recipe
+# recipe of DEVPRO_DIR's justfile (devpro), whose install-with-kb recipe
 # installs the agent set into the fixture for both harnesses, claude and
 # opencode. The fixture's own kbase is .kbase/kbase, a copy of this tree's
 # build, and beside it .kbase/harness.sh, a copy of this tree's tools/harness.sh.
@@ -15,7 +15,7 @@
 #
 # Inputs (environment): FIXTURE_DIR, the fixture repository, absolute or
 # relative to INVOCATION_DIR; INVOCATION_DIR, the directory the recipe was
-# invoked from; JUST, the just executable; DEVPRO_DIR, the sibling adjagent
+# invoked from; JUST, the just executable; DEVPRO_DIR, the sibling devpro
 # clone; BIN_DIR, the build output directory, relative to the repository root.
 set -euo pipefail
 
@@ -25,11 +25,11 @@ cd "${script_dir}/../.." || exit 1
 : "${FIXTURE_DIR:?FIXTURE_DIR is not set: the fixture repository to reset}"
 : "${INVOCATION_DIR:?INVOCATION_DIR is not set: the directory the recipe was invoked from}"
 : "${JUST:?JUST is not set: the just executable}"
-: "${DEVPRO_DIR:?DEVPRO_DIR is not set: the sibling adjagent clone}"
+: "${DEVPRO_DIR:?DEVPRO_DIR is not set: the sibling devpro clone}"
 : "${BIN_DIR:?BIN_DIR is not set: the build output directory holding kbase}"
 
 if [[ ! -f "${DEVPRO_DIR}/justfile" ]]; then
-    printf 'error: no justfile at %s/justfile — kbase is developed in tandem with adjagent, so DEVPRO_DIR must name a sibling clone.\n' "${DEVPRO_DIR}" >&2
+    printf 'error: no justfile at %s/justfile — kbase is developed in tandem with devpro, so DEVPRO_DIR must name a sibling clone.\n' "${DEVPRO_DIR}" >&2
     exit 1
 fi
 

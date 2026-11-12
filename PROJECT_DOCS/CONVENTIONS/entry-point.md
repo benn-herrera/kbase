@@ -19,7 +19,7 @@ Contents:
 - [Module Structure](module-structure.md)
 - [Key Architecture Constraints](key-architecture-constraints.md)
 - [House Rules](house-rules/index.md)
-  - [The agent set is adjagent's, never edited here](house-rules/the-agent-set-is-adjagent-s-never-edited-here.md)
+  - [The agent set is devpro's, never edited here](house-rules/the-agent-set-is-devpro-s-never-edited-here.md)
   - [Serialization formats](house-rules/serialization-formats.md)
   - [Superseded format parsers](house-rules/superseded-format-parsers.md)
   - [`kb-format` patch bumps](house-rules/kb-format-patch-bumps.md)

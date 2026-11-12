@@ -85,7 +85,7 @@ type conversionRecord struct {
 func TestGoldenPairs(t *testing.T) {
 	for _, pair := range []struct{ in, out string }{
 		{"register-3.0.0", "register-4.0.0"},
-		{"adjagent-sheet-3.0.0", "adjagent-sheet-4.0.0"},
+		{"devpro-sheet-3.0.0", "devpro-sheet-4.0.0"},
 		{"markers-3.0.0", "markers-4.0.0"},
 		{"citations-3.0.0", "citations-4.0.0"},
 	} {
@@ -114,7 +114,7 @@ func TestGoldenPairs(t *testing.T) {
 // makes nothing obsolete, and warns again only of each citation it still
 // cannot resolve, exactly as its first conversion did.
 func TestAConvertedKBConvertsToItself(t *testing.T) {
-	for _, golden := range []string{"register-4.0.0", "adjagent-sheet-4.0.0", "markers-4.0.0", "citations-4.0.0"} {
+	for _, golden := range []string{"register-4.0.0", "devpro-sheet-4.0.0", "markers-4.0.0", "citations-4.0.0"} {
 		t.Run(golden, func(t *testing.T) {
 			want := readTree(t, path.Join(testdata, golden))
 			got, obsolete, warnings, err := Convert(want)
