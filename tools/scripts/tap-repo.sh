@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# NOTE: this script has to be copied to the host project. (chicken and egg)
+#
 # Sets up the sibling Homebrew tap clone, homebrew-tap/, that this project's
 # formula lives in, so the tap and the main tree are maintained in parallel.
 #
@@ -12,22 +14,23 @@
 # into.
 #
 # Inputs (environment): TAP_DIR, the clone's location relative to this
-# repository's root; TAP_URL, the tap repository to clone from or to set as
+# repository's root; tap_url, the tap repository to clone from or to set as
 # origin.
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
-while [[ ! -d .git && "$(pwd)" != "/" ]]; do
-  cd "${script_dir}/.."
+script_dir="$(cd "$(dirname "${0}")" && pwd)" || exit 1
+cd "${script_dir}"
+while [[ ! -d .git ]] && [[ "$(pwd)" != "/" ]]; do
+  cd ".."
 done
 [[ -d .git ]] || { printf '%s: failed finding project root.\n' "$(basename "${0}")" 1>&2; exit 1; }
 
 : "${TAP_DIR:?TAP_DIR is not set: the tap clone location relative to this repository}"
-: "${TAP_URL:?TAP_URL is not set: the tap repository to clone from or to set as origin}"
+tap_url=git@github.com:benn-herrera/homebrew-tap.git
 
 if [[ ! -e "${TAP_DIR}" ]]; then
-    git clone "${TAP_URL}" "${TAP_DIR}" || exit 1
-    printf 'tap: cloned %s into %s\n' "${TAP_URL}" "${TAP_DIR}"
+    git clone "${tap_url}" "${TAP_DIR}" || exit 1
+    printf 'tap: cloned %s into %s\n' "${tap_url}" "${TAP_DIR}"
     exit 0
 fi
 
@@ -49,14 +52,14 @@ if [[ "$(git -C "${TAP_DIR}" rev-parse --show-toplevel 2> /dev/null)" != "$(cd "
 fi
 
 if ! origin="$(git -C "${TAP_DIR}" remote get-url origin 2> /dev/null)"; then
-    git -C "${TAP_DIR}" remote add origin "${TAP_URL}" || exit 1
-    printf 'tap: added origin %s to the existing %s clone\n' "${TAP_URL}" "${TAP_DIR}"
+    git -C "${TAP_DIR}" remote add origin "${tap_url}" || exit 1
+    printf 'tap: added origin %s to the existing %s clone\n' "${tap_url}" "${TAP_DIR}"
     exit 0
 fi
 
-if [[ "${origin}" != "${TAP_URL}" ]]; then
+if [[ "${origin}" != "${tap_url}" ]]; then
     printf 'tap: %s already has origin %s, not %s — nothing was changed.\n' \
-        "${TAP_DIR}" "${origin}" "${TAP_URL}" >&2
+        "${TAP_DIR}" "${origin}" "${tap_url}" >&2
     exit 0
 fi
 
