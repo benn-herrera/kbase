@@ -3,6 +3,7 @@ cover.out
 
 # build output
 bin/
+dist/
 
 # integration-test working data (pinned corpus clones etc.)
 # most test data will be pulled from cloud git repos.
