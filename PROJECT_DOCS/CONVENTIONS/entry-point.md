@@ -4,8 +4,8 @@ Project-specific process and house rules
 
 Must-see:
 
-- No user-facing behaviors or outcomes are designed here, that belongs to SPEC
-- No project mechanisms or code structure are put forth, that belongs to ARCHITECTURE
+- No user-facing behaviors or outcomes are designed here – that belongs to SPEC
+- No project mechanisms or code structure are put forth – that belongs to ARCHITECTURE
 - Edit PROJECT_DOCS/ leaves, never the root pointer files ([Project Documents](project-documents/index.md))
 - Process is the `dev-process` skill's; kbase's additions: [Plan & Execute Process](plan-execute-process/index.md)
 

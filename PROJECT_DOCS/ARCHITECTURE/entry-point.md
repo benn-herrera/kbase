@@ -3,8 +3,8 @@
 How this project's implementation meets requirements designated by SPEC
 
 Must-see:
-- No user-facing behaviors or outcomes are designed here, that belongs to SPEC
-- No project-specific process is dictated, that belongs to CONVENTIONS
+- No user-facing behaviors or outcomes are designed here – that belongs to SPEC
+- No project-specific process is dictated – that belongs to CONVENTIONS
 - Every mechanism stated here is decided and landed
   - [§13](13-slice-verdicts/index.md) records the verdicts of the slice that settled the reader's design
 
