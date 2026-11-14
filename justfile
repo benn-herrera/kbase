@@ -168,8 +168,8 @@ edit-gate: fmt-check
 DEVPRO_DIR := "../devpro"
 [doc("NEEDS the depro clone (DEVPRO_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
-  @PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install . --harness=opencode
-  @PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install . --harness=claude
+  PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install . --harness=claude
+  PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install . --harness=opencode
 
 # The tap clone's one source: its origin URL, which the clone and the remote
 # set-up both take, and the location its .gitignore entry names.
@@ -416,4 +416,4 @@ update-dependencies:
     go get -u ./...
     go mod tidy
 
-import? '.claude/skills/devpro/skills/docdicer/tools/runner-snippets/docdicer.just'
+import? '.opencode/plugins/devpro/skills/docdicer/tools/runner-snippets/docdicer.just'
