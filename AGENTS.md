@@ -1,12 +1,11 @@
 # AGENTS – KBase
 
- <!-- vvv-devpro devpro 0.17.2 do not edit at or between marker lines. devpro-vvv -->
+ <!-- vvv-devpro devpro 0.17.3 do not edit at or between marker lines. devpro-vvv -->
  
 ## Scratch space
 **INVARIANT**: `/tmp` and other system-wide scratch locations are off limits. All scratch —
-throwaway builds, probe harnesses, captured output — goes in `.opencode-temp/` under the
-active project root, beside `.opencode/` and never inside it (writes there trip
-the permission system's own-settings protections). If it doesn't exist, stop and say so; don't
+throwaway builds, probe harnesses, captured output — goes in `.devpro-temp/` under the
+active project root. If it doesn't exist, stop and say so; don't
 improvise a location.
 
 ## Task management
@@ -122,7 +121,7 @@ changes cannot be seen at its source or corrected there.
   `sed -i`, `perl -i`, a one-off script, a heredoc, or a redirect: a scripted edit hits every match,
   not the one site meant, and shows no diff. Moving or copying a file as it stands is neither.
   Specific exemptions:
-  - Writes to scratch space `.opencode-temp/`
+  - Writes to scratch space `.devpro-temp/`
   - File-writing tools — formatter, renderer, build
 - The edit and write tools write JSON escapes for U+2028/U+2029 as raw characters; spell those
   code points another way, e.g. in Python `chr(0x2028)`; elsewhere the language's own escape, built at runtime.

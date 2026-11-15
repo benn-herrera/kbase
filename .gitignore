@@ -10,17 +10,14 @@ dist/
 # manual local test fixtures
 test-data/transient/
 
-mad-*/
-
 # tarballs that may be copied around the tree by a messy developer
 *.tgz
 
 .DS_Store
 
 .claude/
-.claude-temp/
 .opencode/
-.opencode-temp/
+.devpro-temp/
 backup.*
 
 # scratch KB trees born by a kbase init run in this repository
