@@ -1,7 +1,7 @@
 ## 3. Compatibility contract
 
 - A KB kbase builds is navigable in Claude Code or opencode through the kbase skill's reading
-  route, and maintainable through the same skill's maintenance route by kb-maintainer;
+  route, and maintainable through the same skill's maintenance route;
   `kbase score` grades the KB's rigor and bearings.
 - Exact: the metadata layer, the load-bearing forms, and the KB's placement (`kb-root/` beside
   `.git`; reading starts at `kb-root/entry-point.md` and descends through `index.md` files).
