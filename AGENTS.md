@@ -1,6 +1,6 @@
 # AGENTS – KBase
 
- <!-- vvv-devpro devpro 0.17.3 do not edit at or between marker lines. devpro-vvv -->
+ <!-- vvv-devpro devpro 0.17.4 do not edit at or between marker lines. devpro-vvv -->
  
 ## Scratch space
 **INVARIANT**: `/tmp` and other system-wide scratch locations are off limits. All scratch —
@@ -112,7 +112,7 @@ changes cannot be seen at its source or corrected there.
   session, first read the relevant coder agent definition and those documents, where not in context.
 - A comment earns its place only by clarifying what the code cannot state — an invariant, an
   external contract, why not the obvious way; if the code needs explaining, fix the code. Docstrings
-  document behaviour. Neither cites a decision, a review id or a project document: those rot as
+  document behavior. Neither cites a decision, a review id or a project document: those rot as
   documents move, and git already holds the record. Judge the block, not the line: every note in it
   can earn its place while the block outweighs what it documents. The test is who reads it and when
   — a note the next editor of this file needs stays; one answering "why was this done" belongs in
@@ -157,6 +157,9 @@ changes cannot be seen at its source or corrected there.
   present ready-to-execute and wait.
 - A one-off instruction authorizes one act, not a standing rule — an act that spans several turns is
   still one act, and the quote that authorized it still governs.
+- A package an approved plan names needs no authorization beyond the plan's approval: that
+  approval is the quote the package's work runs under. *Purpose:* the work a plan names was
+  authorized when the plan was approved.
 
 ## Responding to the user
 - **ZERO SELF-BLAME LANGUAGE.** Self-blame is theater: it neither identifies the problem nor

@@ -1,9 +1,7 @@
 # ROADMAP – kbase
 
-Future intent, not commitment. Design truth lives in [SPEC](PROJECT_DOCS/SPEC/entry-point.md) and
-[ARCHITECTURE](PROJECT_DOCS/ARCHITECTURE/entry-point.md); where plans live is in
-[CONVENTIONS, "Plan & Execute Process"](PROJECT_DOCS/CONVENTIONS/plan-execute-process/index.md).
-Finished items are deleted, not archived.
+Future intent only. Not part of the contract doc set; not handed to coding dispatches.
+A finished item leaves nothing. Do not mark it as done and let it persist. Just remove it.
 
 ## Items
 
