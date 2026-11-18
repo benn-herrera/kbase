@@ -821,7 +821,7 @@ func TestEdgesRefusesItsUsage(t *testing.T) {
 }
 
 // sheetFixture is the 3.0.0 KB the sheet goldens are drawn from.
-var sheetFixture = filepath.Join("..", "sheet", "testdata", "adjagent-sheet", "kb-root")
+var sheetFixture = filepath.Join("..", "sheet", "testdata", "devpro-sheet", "kb-root")
 
 // convertedSheetKB is a copy of the sheet fixture converted to the current
 // format by update-format's save.

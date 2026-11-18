@@ -102,6 +102,35 @@ func TestShelfHasNoStrayDelimiter(t *testing.T) {
 	}
 }
 
+// TestCorrectionQuoteFenceWidth: the width a quoted reply line is withheld at is
+// the run the correction's quote opens with, so the constant and the fragment
+// cannot drift.
+func TestCorrectionQuoteFenceWidth(t *testing.T) {
+	name := fragmentFile(scoreCorrectionQuote)
+	files, err := shelfFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(files, name) {
+		t.Fatalf("the shelf holds no %s", name)
+	}
+	text, err := load(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		run := line[:len(line)-len(strings.TrimLeft(line, "`"))]
+		if run == "" {
+			continue
+		}
+		if len(run) != CorrectionQuoteFenceWidth {
+			t.Errorf("the quote opens with %d backticks, and a line is withheld at %d", len(run), CorrectionQuoteFenceWidth)
+		}
+		return
+	}
+	t.Fatal("the fragment opens no fence")
+}
+
 func TestClassifyAsksNumberPassagesOnce(t *testing.T) {
 	src := Claim{ID: "clm-aaaaaa", Title: "Theorem 1", Document: "v/a.md", Locator: "**Theorem 1**."}
 	items := ClassifyAsks(src, "the statement", []ClassifyItem{

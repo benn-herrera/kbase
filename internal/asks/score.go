@@ -34,6 +34,12 @@ const (
 	correctionLines = "correction-lines"
 )
 
+// CorrectionQuoteFenceWidth is the backtick run the correction's quote opens
+// with, being the width score-correction-quote.tmpl.md fences its quoted lines
+// in. A quoted reply line carrying that run or more would close the fence early,
+// so no line is quoted with it.
+const CorrectionQuoteFenceWidth = 12
+
 // The refusal cases a score reply's parse names, one per refusal site, each
 // stated to the model by its own fragment (refusalFragment).
 const (

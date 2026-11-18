@@ -7,8 +7,8 @@ Graphviz's, so the goldens pin the DOT. `TestRenderDraws` renders through `dot`,
 asserts only that each root is fitted to the viewer; `TestRenderTwiceIsByteIdentical` renders the
 fixture twice through `dot`, skipping without it, and requires identical SVG bytes; `TestDOTQuoting` asserts, where `dot` is on
 `PATH`, that the DOT it composes parses through `dot`. The goldens are a fixture and its three DOT files under
-`internal/sheet/testdata/adjagent-sheet/`: a `3.0.0` KB and the DOT the sheet composes for it, with a
-build record beside it that the sheet does not read. `TestAdjagentSheetGoldens` compares the emitted
+`internal/sheet/testdata/devpro-sheet/`: a `3.0.0` KB and the DOT the sheet composes for it, with a
+build record beside it that the sheet does not read. `TestDevproSheetGoldens` compares the emitted
 DOT with them byte for byte.
 
 The inputs are the rows `index.Derive` yields (nodes, edges, strength bands, cites), which `index`'s `planSheet` hands
@@ -37,4 +37,3 @@ Every rebuild of the derived views (`index.UpdateFormat`, every caller of `index
 sheet through one interface, `index`'s `planSheet`, which renders every sheet on each call and yields
 one only where its bytes change, with no ownership test on an existing sheet. A rebuild writes what it
 yields; a batch writes it with its records. `verify` does not reach it.
-

@@ -28,9 +28,9 @@ rm -rf "${repo}" "${docs}" "${out}/snapshot" "${out}/tree.diff" "${out}/values.y
   "${out}/update-format.out" "${out}/update-format.log"
 mkdir -p "${repo}/.git/objects" "${repo}/.git/refs/heads" "${docs}" "${out}/snapshot"
 printf 'ref: refs/heads/main\n' > "${repo}/.git/HEAD"
-cp -R "${root}/internal/formats/testdata/adjagent-sheet-2.0.1/kb-root" "${repo}/"
+cp -R "${root}/internal/formats/testdata/devpro-sheet-2.0.1/kb-root" "${repo}/"
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-KBASE="${kbase}" REPO="${repo}" OUT_DIR="${out}" RECIPE="test-integration-refused-write-adjagent-sheet" COMMIT_MESSAGE="the 2.0.1 fixture as staged" tools/scripts/stage-converted-copy.sh
+KBASE="${kbase}" REPO="${repo}" OUT_DIR="${out}" RECIPE="test-integration-refused-write-devpro-sheet" COMMIT_MESSAGE="the 2.0.1 fixture as staged" tools/scripts/stage-converted-copy.sh
 printf 'not the redirect\n' > "${repo}/kb-root/CLAUDE.md"
 cp -R "${repo}/kb-root/." "${out}/snapshot/"
 printf 'entry:\n- id: clm-aaa002\n  rigor: 0.5\n' > "${out}/values.yaml"
@@ -63,10 +63,10 @@ if ! diff -r "${out}/snapshot" "${repo}/kb-root" > "${out}/tree.diff" 2>&1; then
   status=1
 fi
 
-OUT_DIR="${out}" RECIPE="test-integration-refused-write-adjagent-sheet" INVOCATION="cp -R internal/formats/testdata/adjagent-sheet-2.0.1/kb-root repo/ (with a bare .git), git add kb-root and commit, from repo/: ${kbase} update-format > update-format.out, then kb-root/CLAUDE.md rewritten as a line other than the redirect, kb-root/ copied to snapshot/\nfrom repo/: ${kbase} edit-claim --values values.yaml > docs/01-edit-claim.out, 2> docs/01-edit-claim.log, exit in docs/01-edit-claim.exit\ngo test -count=1 -run '^TestResult\$' ./cmd -args -result.file=docs/01-edit-claim.out -result.verb=edit-claim -result.outcome=refused > docs/01-edit-claim.keys.log; docs/01-edit-claim.out holds check agents-redirect\ndiff -r snapshot repo/kb-root > tree.diff (empty when kb-root is unchanged)" \
+OUT_DIR="${out}" RECIPE="test-integration-refused-write-devpro-sheet" INVOCATION="cp -R internal/formats/testdata/devpro-sheet-2.0.1/kb-root repo/ (with a bare .git), git add kb-root and commit, from repo/: ${kbase} update-format > update-format.out, then kb-root/CLAUDE.md rewritten as a line other than the redirect, kb-root/ copied to snapshot/\nfrom repo/: ${kbase} edit-claim --values values.yaml > docs/01-edit-claim.out, 2> docs/01-edit-claim.log, exit in docs/01-edit-claim.exit\ngo test -count=1 -run '^TestResult\$' ./cmd -args -result.file=docs/01-edit-claim.out -result.verb=edit-claim -result.outcome=refused > docs/01-edit-claim.keys.log; docs/01-edit-claim.out holds check agents-redirect\ndiff -r snapshot repo/kb-root > tree.diff (empty when kb-root is unchanged)" \
   tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
-  printf 'integration(test-integration-refused-write-adjagent-sheet): the write was not refused with kb-root unchanged — see checks.tsv and tree.diff\n'
+  printf 'integration(test-integration-refused-write-devpro-sheet): the write was not refused with kb-root unchanged — see checks.tsv and tree.diff\n'
   exit 1
 fi
-printf 'integration(test-integration-refused-write-adjagent-sheet) ok\n'
+printf 'integration(test-integration-refused-write-devpro-sheet) ok\n'

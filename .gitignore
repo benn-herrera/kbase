@@ -3,13 +3,12 @@ cover.out
 
 # build output
 bin/
+dist/
 
 # integration-test working data (pinned corpus clones etc.)
 # most test data will be pulled from cloud git repos.
 # manual local test fixtures
 test-data/transient/
-
-mad-*/
 
 # tarballs that may be copied around the tree by a messy developer
 *.tgz
@@ -17,24 +16,18 @@ mad-*/
 .DS_Store
 
 .claude/
-.claude-temp/
-.mcp.json
 .opencode/
-.opencode-temp/
+.devpro-temp/
+backup.*
 
 # scratch KB trees born by a kbase init run in this repository
 /kb-root/
 
 # agent set work areas
 mad-design/
-mad-review/
-guest-session/
 
 .venv/
 __pycache__/
 
 # custom homebrew tap repo location
 homebrew-tap/
-
-# markdown monolith -> hierarchy tool
-tools/docdicer/

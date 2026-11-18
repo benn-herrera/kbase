@@ -7,6 +7,5 @@ columns, its own line breaks kept and nothing rewritten, and the lines lying in 
 judgement are numbered from 1 over the whole text, `N| ` before each. The call's own labels have no
 number, and neither does the edge's context: an unnumbered line is no site a charge can cite. A work
 renders its title alone — the work lies outside the corpus — so a link from a work is judged on
-the title's proposition. SPEC §8 states the item text; the register's own scoring tokens are refused
-before the call, and that item is `failed` with no call made.
+the title's proposition. SPEC §8 states the item text.
 

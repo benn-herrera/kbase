@@ -4,9 +4,9 @@ What this project is and why
 
 This thesis does not:
 
-- Design user-facing behaviors or outcomes, that belongs to SPEC
-- Put forth project mechanisms or code structure, that belongs to ARCHITECTURE
-- Dictate project-specific process, that belongs to CONVENTIONS
+- Design user-facing behaviors or outcomes – that belongs to SPEC
+- Put forth project mechanisms, coding languages, or code structure – that belongs to ARCHITECTURE
+- Dictate project-specific process – that belongs to CONVENTIONS
 
 ## kbase in plain terms
 

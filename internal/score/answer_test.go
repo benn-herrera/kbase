@@ -14,15 +14,11 @@ import (
 func rigorTextOf(t *testing.T, title, statement string) closedText {
 	t.Helper()
 	ends := nodeEnds{title: passageTitle, statement: passageStatement}
-	ct, err := assemble([]passage{
-		{label: true, text: titleLabel},
+	return assemble([]passage{
+		{text: titleLabel},
 		{end: ends.title, text: title},
 		{end: ends.statement, text: statement},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ct
 }
 
 // bearingTextOf is a closed text shaped like one bearing call's: each end's label
@@ -30,20 +26,16 @@ func rigorTextOf(t *testing.T, title, statement string) closedText {
 // which is carried and is no citation's home.
 func bearingTextOf(t *testing.T, sourceTitle, source, targetTitle, target, context string) closedText {
 	t.Helper()
-	ct, err := assemble([]passage{
-		{label: true, text: sourceLabel},
+	return assemble([]passage{
+		{text: sourceLabel},
 		{end: passageSource, text: sourceTitle},
 		{end: passageSource, text: source},
-		{label: true, text: targetLabel},
+		{text: targetLabel},
 		{end: passageTarget, text: targetTitle},
 		{end: passageTarget, text: target},
-		{label: true, text: contextLabel},
+		{text: contextLabel},
 		{text: context},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ct
 }
 
 // assertCite is what a charge owes the text it cites: its quote is the text at its

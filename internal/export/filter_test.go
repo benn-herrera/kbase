@@ -591,11 +591,12 @@ func TestFilterRawDisplayEnvironments(t *testing.T) {
 // TestFilterMathComment: a maths body whose last line holds an unescaped %
 // ends with a newline, so the comment stops before the writer's closing
 // delimiter. Synthetic: the writer already breaks the line after a lone %
-// (fixture 2609.00268v1's case), but reads \\% as an escaped %.
+// (fixture 2609.00268v1's case). The two spellings differ: `\%` takes no
+// newline, `\\%` does.
 func TestFilterMathComment(t *testing.T) {
-	stream := "# A {#d1-a}\n\nInline $`x \\\\% c`$ and $`y \\% d`$.\n\n``` math\nz \\\\% e\n```\n"
+	stream := "# A {#d1-a}\n\nInline $`y \\% d`$.\n\n``` math\nz \\\\% e\n```\n"
 	latex, findings := runFilter(t, stream, fixtureTables(), false)
-	wantContains(t, latex, "\\(x \\\\% c\n\\)", "\\(y \\% d\\)", "\\[z \\\\% e\n\\]")
+	wantContains(t, latex, "\\(y \\% d\\)", "\\[z \\\\% e\n\\]")
 	wantFindings(t, findings, "")
 }
 

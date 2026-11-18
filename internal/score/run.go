@@ -155,9 +155,9 @@ type Runner struct {
 // lands the cells' values, then appends their captures and their lines, in walk
 // order, and removes the answer files; no common file is written before then. A
 // reply the parse cannot read is asked once more with a correction, inside the
-// item's own launch; a reply still refused, a refused text and a failed call or
-// landing are recorded and the run goes on. An item the ledger already records
-// as landed is not asked again — a fresh run's ledger records nothing, so a fresh run asks
+// item's own launch; a reply still refused and a failed call or landing are
+// recorded and the run goes on. An item the ledger already records as landed is
+// not asked again — a fresh run's ledger records nothing, so a fresh run asks
 // every item. An item Skip names is recorded skipped, once: a line already
 // recording it so is not appended again. A cancelled context stops the walk and
 // records nothing for an item without an answer.
@@ -290,8 +290,8 @@ func (r *Runner) Run(ctx context.Context) (Result, error) {
 // reply is priced under, derived once — and the closed text and prompt the call
 // is sent with, as the entry its line starts from and the call, the entry
 // recording the judged hash of the item's text as g holds it. Where the class
-// or the hash cannot be derived or the guard refuses the text, the entry is
-// failed with the reason and there is no call.
+// or the hash cannot be derived, the entry is failed with the reason and there
+// is no call.
 func (r *Runner) prepare(it query.Item, facts passFacts, g graph) (Entry, *call) {
 	e := Entry{Model: r.Model, Before: priorOf(r.Index, g, it)}
 	refused := func(err error) (Entry, *call) {
@@ -365,18 +365,18 @@ type sentCall struct {
 
 // correctionOf is the correction a re-ask after refusal carries: the refusal's
 // case and the values its fragment names, and each reply line the case names,
-// its trailing whitespace trimmed and the rest sent as the reply wrote it. A
-// quoted line is model output and not item text, so the input guard's check
-// runs over each here, and a line it refuses drops the quotes; nothing is
-// stripped or escaped. The values need no guard: each is a digit string or an
-// id the parse read as `flt-[a-z0-9-]+`, which holds nothing the guard refuses.
+// its trailing whitespace trimmed and the rest sent as the reply wrote it. The
+// quote sits inside a fence asks.CorrectionQuoteFenceWidth backticks wide, so a
+// line carrying that run would close it early: no quoted line is sent, and the
+// correction carries its case alone. Nothing is stripped or escaped.
 func correctionOf(refusal malformedError, reply string) asks.Correction {
 	c := asks.Correction{Case: refusal.refusal, Values: refusal.values}
+	fence := strings.Repeat("`", asks.CorrectionQuoteFenceWidth)
 	lines := strings.Split(reply, "\n")
 	quoted := make([]string, 0, len(refusal.lines))
 	for _, n := range refusal.lines {
 		q := strings.TrimRightFunc(lines[n-1], unicode.IsSpace)
-		if _, _, hit := refused(q); hit {
+		if strings.Contains(q, fence) {
 			return c
 		}
 		quoted = append(quoted, q)
@@ -436,7 +436,7 @@ func (c *call) put(ctx context.Context, ask Ask, e *Entry) (answer Answer, inter
 
 // compose is the prompt one item's call carries, the digest of exactly it, and
 // the closed text the prompt is made of — whose numbered lines are what a charge
-// cites. A text the guard refuses is composed of nothing and makes no call.
+// cites.
 //
 // The item's class has already fixed which pass's subject it is, and the text is
 // the shape that class is judged on: a rigor class asks a node's text, a bearing
@@ -448,9 +448,9 @@ func (r *Runner) compose(it query.Item, cl class, g graph) (prompt, digest strin
 		if !ok {
 			return "", "", closedText{}, fmt.Errorf("the index holds no %s edge %s → %s", it.Edge.Relation, it.Edge.Source, it.Edge.Target)
 		}
-		closed, err = bearingText(r.Source, g, row)
+		closed, err = bearingText(g, row)
 	} else {
-		closed, err = rigorText(r.Source, g, it.Node.ID)
+		closed, err = rigorText(g, it.Node.ID)
 	}
 	if err != nil {
 		return "", "", closedText{}, err
@@ -470,11 +470,10 @@ func (cl class) render(closed closedText, c *asks.Correction) (string, error) {
 
 // graphOf is the loaded index as the run's passages read it: every node by id,
 // each hosted node's host, and each hosted node's statement, read through
-// kb.Statement from its host leaf in src, each leaf read once, and the line it
-// opens on.
+// kb.Statement from its host leaf in src, each leaf read once.
 func graphOf(src *kb.Source, ix *query.Index) (graph, error) {
 	nodes := ix.Nodes()
-	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), hosts: ix.Hosts(), statements: map[string]string{}, lines: map[string]int{}}
+	g := graph{nodes: make(map[string]kb.NodeRow, len(nodes)), statements: map[string]string{}}
 	for _, n := range nodes {
 		g.nodes[n.ID] = n
 	}
@@ -486,7 +485,7 @@ func graphOf(src *kb.Source, ix *query.Index) (graph, error) {
 	}
 	lifted := func(analysis, claim string) bool { return lifts[[2]string{analysis, claim}] }
 	texts := map[string]string{}
-	for id, host := range g.hosts {
+	for id, host := range ix.Hosts() {
 		text, read := texts[host]
 		if !read {
 			var err error
@@ -496,7 +495,6 @@ func graphOf(src *kb.Source, ix *query.Index) (graph, error) {
 			texts[host] = text
 		}
 		g.statements[id] = kb.Statement(text, id, lifted)
-		g.lines[id] = statementLine(text, id, g.statements[id])
 	}
 	return g, nil
 }

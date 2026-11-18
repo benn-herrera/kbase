@@ -29,7 +29,7 @@ golden="${root}/internal/kbload/testdata/parity-2.0.1"
 minted="${root}/internal/kbload/testdata/parity-minted-ids.tsv"
 rm -rf "${repo}" "${answers}" "${out}/comparison.yaml" "${out}/compare.log"
 mkdir -p "${repo}/.git" "${answers}"
-cp -R "${root}/internal/formats/testdata/adjagent-sheet-2.0.1/kb-root" "${repo}/"
+cp -R "${root}/internal/formats/testdata/devpro-sheet-2.0.1/kb-root" "${repo}/"
 for f in "${golden}"/*.args; do
     stem="${answers}/$(basename "${f}" .args)"
     args=()
@@ -46,16 +46,16 @@ for f in "${golden}"/*.args; do
     rm "${stem}.raw"
 done
 if grep -lF -- "${repo}" "${answers}"/*.out; then
-    printf 'integration(test-integration-parity-adjagent-sheet): a path of the scratch copy survives in the answers above\n'
+    printf 'integration(test-integration-parity-devpro-sheet): a path of the scratch copy survives in the answers above\n'
     exit 1
 fi
 status=0
 go test -count=1 -v -run '^TestConvertedAnswersMatchTheGoldens$' ./internal/kbload -args -parity.answers="${answers}" \
     -parity.comparison="${out}/comparison.yaml" > "${out}/compare.log" 2>&1 || status=1
-OUT_DIR="${out}" RECIPE="test-integration-parity-adjagent-sheet" INVOCATION="cp -R internal/formats/testdata/adjagent-sheet-2.0.1/kb-root repo/ (with an empty .git)\nper case NNN of internal/kbload/testdata/parity-2.0.1, from repo/: ${kbase} <NNN.args, each 2.0.1 work or axiom id mapped through internal/kbload/testdata/parity-minted-ids.tsv> > answers/NNN.out (kb-root path as <kb-root>), 2> answers/NNN.log, exit in answers/NNN.exit\ngo test -count=1 -v -run '^TestConvertedAnswersMatchTheGoldens\$' ./internal/kbload -args -parity.answers=answers -parity.comparison=comparison.yaml > compare.log" \
+OUT_DIR="${out}" RECIPE="test-integration-parity-devpro-sheet" INVOCATION="cp -R internal/formats/testdata/devpro-sheet-2.0.1/kb-root repo/ (with an empty .git)\nper case NNN of internal/kbload/testdata/parity-2.0.1, from repo/: ${kbase} <NNN.args, each 2.0.1 work or axiom id mapped through internal/kbload/testdata/parity-minted-ids.tsv> > answers/NNN.out (kb-root path as <kb-root>), 2> answers/NNN.log, exit in answers/NNN.exit\ngo test -count=1 -v -run '^TestConvertedAnswersMatchTheGoldens\$' ./internal/kbload -args -parity.answers=answers -parity.comparison=comparison.yaml > compare.log" \
     tools/scripts/write-evidence.sh
 if [[ "${status}" -ne 0 ]]; then
-    printf 'integration(test-integration-parity-adjagent-sheet): an answer differs from its golden under the rules — see comparison.yaml and compare.log\n'
+    printf 'integration(test-integration-parity-devpro-sheet): an answer differs from its golden under the rules — see comparison.yaml and compare.log\n'
     exit 1
 fi
-printf 'integration(test-integration-parity-adjagent-sheet) ok\n'
+printf 'integration(test-integration-parity-devpro-sheet) ok\n'

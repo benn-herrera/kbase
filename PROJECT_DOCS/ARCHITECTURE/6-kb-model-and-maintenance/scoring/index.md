@@ -22,7 +22,7 @@ Contents:
 - [§6 The runner](the-runner.md)
 - [§6 The ask is one seam](the-ask-is-one-seam.md)
 - [§6 The prompt shelf](the-prompt-shelf.md)
-- [§6 The closed text and its guard](the-closed-text-and-its-guard.md)
+- [§6 The closed text](the-closed-text.md)
 - [§6 The parse resolves the numbered lines](the-parse-resolves-the-numbered-lines.md)
 - [§6 The scoring set](the-scoring-set.md)
 - [§6 Bearing predicates](bearing-predicates.md)

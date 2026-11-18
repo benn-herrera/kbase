@@ -186,7 +186,7 @@ var dependencyRules = []dependencyRule{{
 }, {
 	from:      []string{"internal/score"},
 	forbidden: []string{"internal/model"},
-	why:       "the back end sits below the score verb's Ask seam: the runner, the guard, the parse and the ledger learn nothing of what answered",
+	why:       "the back end sits below the score verb's Ask seam: the runner, the parse and the ledger learn nothing of what answered",
 }, {
 	from:      []string{"internal/score"},
 	forbidden: []string{"internal/build"},

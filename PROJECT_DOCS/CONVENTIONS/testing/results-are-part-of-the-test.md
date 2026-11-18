@@ -49,7 +49,7 @@ later reader can re-run it.
 - Integration recipes: `test-integration-<process>-<corpus>`; shared corpus fetch
   `prep-test-integration-<corpus>`; anything needing network or a live provider is excluded from the
   hermetic aggregate target `test-integration` and says so in its `[doc]`, and a recipe that gains a tool
-  dependency — pandoc, python3, the adjagent clone — leaves the aggregate target the same way, what needs no
+  dependency — pandoc, python3, the devpro clone — leaves the aggregate target the same way, what needs no
   tool staying in it as a recipe of its own.
 - A script is checked where it stands: after changing one, `bash -n tools/scripts/<name>.sh`, and
   `just edit-gate` runs `bash -n` over every `tools/scripts/*.sh`, so a syntax error fails the check
@@ -107,4 +107,3 @@ later reader can re-run it.
 - `just test-pkg` takes `GOFLAGS=-run=<regexp>` to run one test; red-first evidence uses it.
 
 ---
-

@@ -3,8 +3,8 @@
 How this project's implementation meets requirements designated by SPEC
 
 Must-see:
-- No user-facing behaviors or outcomes are designed here, that belongs to SPEC
-- No project-specific process is dictated, that belongs to CONVENTIONS
+- No user-facing behaviors or outcomes are designed here – that belongs to SPEC
+- No project-specific process is dictated – that belongs to CONVENTIONS
 - Every mechanism stated here is decided and landed
   - [§13](13-slice-verdicts/index.md) records the verdicts of the slice that settled the reader's design
 
@@ -61,7 +61,7 @@ Contents:
     - [§6 The runner](6-kb-model-and-maintenance/scoring/the-runner.md)
     - [§6 The ask is one seam](6-kb-model-and-maintenance/scoring/the-ask-is-one-seam.md)
     - [§6 The prompt shelf](6-kb-model-and-maintenance/scoring/the-prompt-shelf.md)
-    - [§6 The closed text and its guard](6-kb-model-and-maintenance/scoring/the-closed-text-and-its-guard.md)
+    - [§6 The closed text](6-kb-model-and-maintenance/scoring/the-closed-text.md)
     - [§6 The parse resolves the numbered lines](6-kb-model-and-maintenance/scoring/the-parse-resolves-the-numbered-lines.md)
     - [§6 The scoring set](6-kb-model-and-maintenance/scoring/the-scoring-set.md)
     - [§6 Bearing predicates](6-kb-model-and-maintenance/scoring/bearing-predicates.md)

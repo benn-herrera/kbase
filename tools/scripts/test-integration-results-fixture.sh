@@ -11,7 +11,7 @@
 # verify, the edge queries, stats, restore-demoted and remove-edge are checked
 # over.
 # It needs git and the Go toolchain, which the build already uses — no pandoc,
-# no provider, no adjagent clone — so it joins the omnibus.
+# no provider, no devpro clone — so it joins the omnibus.
 #
 # Inputs (environment): BIN_DIR; RESULTS_FIXTURE_DIR, the committed fixture;
 # RESULTS_FIXTURE_OUT_DIR, the evidence directory.

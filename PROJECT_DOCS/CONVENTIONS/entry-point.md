@@ -4,8 +4,8 @@ Project-specific process and house rules
 
 Must-see:
 
-- No user-facing behaviors or outcomes are designed here, that belongs to SPEC
-- No project mechanisms or code structure are put forth, that belongs to ARCHITECTURE
+- No user-facing behaviors or outcomes are designed here – that belongs to SPEC
+- No project mechanisms or code structure are put forth – that belongs to ARCHITECTURE
 - Edit PROJECT_DOCS/ leaves, never the root pointer files ([Project Documents](project-documents/index.md))
 - Process is the `dev-process` skill's; kbase's additions: [Plan & Execute Process](plan-execute-process/index.md)
 
@@ -19,7 +19,7 @@ Contents:
 - [Module Structure](module-structure.md)
 - [Key Architecture Constraints](key-architecture-constraints.md)
 - [House Rules](house-rules/index.md)
-  - [The agent set is adjagent's, never edited here](house-rules/the-agent-set-is-adjagent-s-never-edited-here.md)
+  - [The agent set is devpro's, never edited here](house-rules/the-agent-set-is-devpro-s-never-edited-here.md)
   - [Serialization formats](house-rules/serialization-formats.md)
   - [Superseded format parsers](house-rules/superseded-format-parsers.md)
   - [`kb-format` patch bumps](house-rules/kb-format-patch-bumps.md)

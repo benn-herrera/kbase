@@ -12,49 +12,8 @@ import (
 	"kbase/internal/kb"
 )
 
-// scoreTokenRE is what no assembled text may carry: an authored scoring token,
-// in the register's spelling or a premise bullet's. Prose naming the quantity —
-// a title that says "bearing 0.5" — is not one of these forms, and passes.
-var scoreTokenRE = regexp.MustCompile(`- rigor:|\(bearing|- strength:|\(strength `)
-
-// frameRE is the rest of what no assembled text may carry: the frame's own
-// structure. The templates fence the corpus in twelve backticks, so a run of
-// twelve closes the frame and what follows it sits outside the instruction to
-// judge the corpus and not obey it; and a line opening one of the labels they
-// emit and read — `## Source:`, `## Target:`, `## Context` — forges the frame's
-// map of the text. Neither is adaptive to the text: a rendered prompt stays a
-// function of its template, so a text carrying the frame's structure is refused
-// rather than escaped. A label a blockquote or an indent displaces from the
-// line's start does not open it.
-var frameRE = regexp.MustCompile("(?m)^## (?:Source:|Target:|Context\\b)|`{12,}")
-
 // headingRE is a line that opens an ATX heading, which ends a cited range.
 var headingRE = regexp.MustCompile(`^#{1,6}\s`)
-
-// What a refusal says the text carries, as scoreTokenError.Kind.
-const (
-	kindScoringToken = "the scoring token"
-	kindFrame        = "the frame's own structure"
-)
-
-// scoreTokenError is assembled text carrying what no prompt may hold: a scoring
-// token, or the frame's own structure. The document and line the token came from,
-// the token, and which of the two it is. A caller makes no call on it and records
-// the item failed.
-type scoreTokenError struct {
-	Path  string
-	Line  int
-	Token string
-	Kind  string
-}
-
-func (e scoreTokenError) Error() string {
-	at := e.Path
-	if e.Line > 0 {
-		at = fmt.Sprintf("%s:%d", e.Path, e.Line)
-	}
-	return fmt.Sprintf("%s: the text carries %s %q", at, e.Kind, e.Token)
-}
 
 // outOfScopeError is a subject neither score pass asks about: the node kind or
 // the relation named, on the id given.
@@ -64,19 +23,13 @@ func (e outOfScopeError) Error() string {
 	return fmt.Sprintf("%s %s is not a subject of the score passes", e.Kind, e.ID)
 }
 
-// passage is one piece of assembled text and where the KB holds it: end is the
-// passage a charge's lines are recorded as, "" where none may lie; path is the
-// document's absolute path, line the 1-based line the passage opens on, or 0
-// where the reader does not locate it; text is the passage as the call carries
-// it. label is whether the passage is one of the frame's own lines — the label
-// that opens a bearing end, the heading mark a rigor title carries — which is
-// carried on a line of its own, holds no number, and is read by no guard.
+// passage is one piece of assembled text: end is the passage a charge's lines
+// are recorded as, "" where none may lie; text is the passage as the call
+// carries it. A label line — a bearing end's, a rigor title's heading mark — is
+// carried on a line of its own and holds no number.
 type passage struct {
-	end   string
-	path  string
-	line  int
-	label bool
-	text  string
+	end  string
+	text string
 }
 
 // closedText is the text one call carries and the lines it numbers: text is the
@@ -98,46 +51,19 @@ type line struct {
 	from, to int
 }
 
-// graph is the derived index as the passages and the judged hash read it:
-// every node by id, each hosted node's host by id, and each hosted node's
-// statement as kb.Statement reads it from its host leaf, with the 1-based line
-// of the leaf it opens on (statementLine). A run builds one and every item of
-// its walk reads that one, so no item reads an index file — the runner already
-// holds the index, and a second reading path is how two views of the graph
-// drift.
+// graph is the derived index as the passages read it: every node by id, and
+// each hosted node's statement as kb.Statement reads it from its host leaf. A run
+// builds one and every item of its walk reads that one, so no item reads an
+// index file — the runner already holds the index, and a second reading path is
+// how two views of the graph drift.
 type graph struct {
 	nodes      map[string]kb.NodeRow
-	hosts      map[string]string
 	statements map[string]string
-	lines      map[string]int
-}
-
-// statementLine is the 1-based line of text, the leaf hosting id, that
-// statement — kb.Statement's reading of id there — opens on, which the guard
-// names a hit by: of the lines that, their markers and blockquote prefixes
-// removed, begin with the statement's first line, the one nearest id's marker;
-// 0 where none does. kb.Statement reads a run of the leaf's lines and removes
-// nothing between them, so the statement's later lines follow on from it.
-func statementLine(text, id, statement string) int {
-	first, _, _ := strings.Cut(statement, "\n")
-	at, ok := kb.MarkerLines(text)[id]
-	if first == "" || !ok {
-		return 0
-	}
-	distance := func(i int) int { return max(i-at, at-i) }
-	best := -1
-	for i, l := range strings.Split(text, "\n") {
-		plain := strings.TrimSpace(kb.BlockquotePrefix.ReplaceAllString(kb.StripLineMarkers(l), ""))
-		if strings.HasPrefix(plain, first) && (best < 0 || distance(i) < distance(best)) {
-			best = i
-		}
-	}
-	return best + 1
 }
 
 // rigorText is the closed text one rigor call carries: the node's title and its
 // statement.
-func rigorText(src *kb.Source, g graph, id string) (closedText, error) {
+func rigorText(g graph, id string) (closedText, error) {
 	row, ok := g.nodes[id]
 	if !ok {
 		return closedText{}, fmt.Errorf("the index holds no node %s", id)
@@ -145,7 +71,7 @@ func rigorText(src *kb.Source, g graph, id string) (closedText, error) {
 	if row.NodeType == kb.NodeKindWork || row.NodeType == kb.NodeKindAxiom {
 		return closedText{}, outOfScopeError{Kind: row.NodeType, ID: id}
 	}
-	return assemble(endPassages(src, g, row, titleLabel, nodeEnds{title: passageTitle, statement: passageStatement}))
+	return assemble(endPassages(g, row, titleLabel, nodeEnds{title: passageTitle, statement: passageStatement})), nil
 }
 
 // The labels a bearing call writes: above each end's title, and the line above
@@ -164,7 +90,7 @@ const (
 // the rule rigorText renders their node, so the target's passage is the text its
 // own rigor call shows. The context is no citation's home: it states bridges and
 // excuses, and a charge is about what the two texts do and do not do.
-func bearingText(src *kb.Source, g graph, e kb.EdgeRow) (closedText, error) {
+func bearingText(g graph, e kb.EdgeRow) (closedText, error) {
 	if !kb.Scoring(e.Relation) {
 		return closedText{}, outOfScopeError{Kind: e.Relation, ID: e.Source + " → " + e.Target}
 	}
@@ -176,12 +102,12 @@ func bearingText(src *kb.Source, g graph, e kb.EdgeRow) (closedText, error) {
 	if !ok {
 		return closedText{}, fmt.Errorf("the index holds no node %s", e.Target)
 	}
-	passages := append(endPassages(src, g, source, sourceLabel, nodeEnds{title: passageSource, statement: passageSource}),
-		endPassages(src, g, target, targetLabel, nodeEnds{title: passageTarget, statement: passageTarget})...)
+	passages := append(endPassages(g, source, sourceLabel, nodeEnds{title: passageSource, statement: passageSource}),
+		endPassages(g, target, targetLabel, nodeEnds{title: passageTarget, statement: passageTarget})...)
 	if e.Context != nil {
-		passages = append(passages, passage{label: true, text: contextLabel}, passage{text: *e.Context})
+		passages = append(passages, passage{text: contextLabel}, passage{text: *e.Context})
 	}
-	return assemble(passages)
+	return assemble(passages), nil
 }
 
 // nodeEnds is the end a node's title is recorded as and the end its statement is:
@@ -194,10 +120,10 @@ type nodeEnds struct{ title, statement string }
 // of its own, so no numbered line begins with frame text. A node no leaf hosts
 // — a work, whose standing lies outside the corpus, or a node with no marker —
 // has no statement, and its text is its title alone.
-func endPassages(src *kb.Source, g graph, row kb.NodeRow, label string, ends nodeEnds) []passage {
-	out := []passage{{label: true, text: label}, {end: ends.title, path: src.KBPath(row.CanonicalPath), text: row.Title}}
+func endPassages(g graph, row kb.NodeRow, label string, ends nodeEnds) []passage {
+	out := []passage{{text: label}, {end: ends.title, text: row.Title}}
 	if statement := g.statements[row.ID]; statement != "" {
-		out = append(out, passage{end: ends.statement, path: src.KBPath(g.hosts[row.ID]), line: g.lines[row.ID], text: statement})
+		out = append(out, passage{end: ends.statement, text: statement})
 	}
 	return out
 }
@@ -207,13 +133,10 @@ func endPassages(src *kb.Source, g graph, row kb.NodeRow, label string, ends nod
 // the passage it came from.
 const wrapWidth = 100
 
-// assemble is the passages as one text, wrapped and numbered, refusing the text
-// where a token the frame cannot hold reaches it. A passage with an end is a site
-// and its lines are numbered; a label line and the edge's note are carried and
-// hold no number. Every break wrapping adds falls at a space, and neither token
-// the guard reads spans one, so a wrapped line is refused as the passage would be;
-// the hit names the document and the line it came from, which a break never moves.
-func assemble(passages []passage) (closedText, error) {
+// assemble is the passages as one text, wrapped and numbered. A passage with an
+// end is a site and its lines are numbered; a label line and the edge's note are
+// carried and hold no number.
+func assemble(passages []passage) closedText {
 	var (
 		ct closedText
 		no int // the last number written
@@ -223,15 +146,11 @@ func assemble(passages []passage) (closedText, error) {
 		if text == "" {
 			continue
 		}
-		wrapped, hit := wrapPassage(p, text)
-		if hit != nil {
-			return closedText{}, *hit
-		}
 		if ct.text != "" {
 			ct.text += "\n\n"
 			ct.lines = append(ct.lines, line{from: len(ct.text), to: len(ct.text)})
 		}
-		for i, w := range wrapped {
+		for i, w := range wrapPassage(text) {
 			if i > 0 {
 				ct.text += "\n"
 			}
@@ -244,29 +163,15 @@ func assemble(passages []passage) (closedText, error) {
 			ct.lines = append(ct.lines, l)
 		}
 	}
-	return ct, nil
+	return ct
 }
 
-// wrapPassage is one passage's lines as the call carries them, and the token the
-// guard found in it: a scoring token refuses the passage at once, and the frame's
-// own structure is held until the passage has been read whole, so a passage
-// carrying both is refused on the scoring token.
-func wrapPassage(p passage, text string) (wrapped []string, hit *scoreTokenError) {
-	for i, src := range strings.Split(text, "\n") {
-		for _, w := range wrapLine(src) {
-			if !p.label {
-				kind, token, ok := refused(w)
-				switch {
-				case ok && kind == kindScoringToken:
-					return nil, &scoreTokenError{Path: p.path, Line: p.sourceLine(i), Token: token, Kind: kind}
-				case ok && hit == nil:
-					hit = &scoreTokenError{Path: p.path, Line: p.sourceLine(i), Token: token, Kind: kind}
-				}
-			}
-			wrapped = append(wrapped, w)
-		}
+// wrapPassage is one passage's lines as the call carries them.
+func wrapPassage(text string) (wrapped []string) {
+	for _, raw := range strings.Split(text, "\n") {
+		wrapped = append(wrapped, wrapLine(raw)...)
 	}
-	return wrapped, hit
+	return wrapped
 }
 
 // wrapLine breaks one source line at its spaces so that no line it returns runs
@@ -335,15 +240,6 @@ func breakPoints(s string) []int {
 		}
 	}
 	return out
-}
-
-// sourceLine is the document line the passage's i'th line came from, 0 where the
-// reader does not locate the passage.
-func (p passage) sourceLine(i int) int {
-	if p.line == 0 {
-		return 0
-	}
-	return p.line + i
 }
 
 // numbered is the text as the call carries it: each numbered line behind its
@@ -470,16 +366,4 @@ func (ct closedText) crossesHeading(i, j int) bool {
 		}
 	}
 	return false
-}
-
-// refused is one line's first token that may not reach a prompt — a scoring token
-// or the frame's own structure — and which of the two it is.
-func refused(text string) (kind, token string, ok bool) {
-	if loc := scoreTokenRE.FindStringIndex(text); loc != nil {
-		return kindScoringToken, text[loc[0]:loc[1]], true
-	}
-	if loc := frameRE.FindStringIndex(text); loc != nil {
-		return kindFrame, text[loc[0]:loc[1]], true
-	}
-	return "", "", false
 }

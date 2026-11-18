@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"kbase/internal/asks"
-	"kbase/internal/kb"
 	"kbase/internal/query"
 	"kbase/internal/result"
 )
@@ -123,8 +122,7 @@ func TestRunCapturesEveryCallItMakes(t *testing.T) {
 }
 
 // TestRunCapturesNoCallItDidNotFinish: a call the run's cancellation interrupts
-// leaves neither a capture nor a ledger line, and a text the guard refuses makes
-// no call and leaves no capture.
+// leaves neither a capture nor a ledger line.
 func TestRunCapturesNoCallItDidNotFinish(t *testing.T) {
 	src, ix, set := runSet(t)
 	t.Run("a cancelled call", func(t *testing.T) {
@@ -156,22 +154,6 @@ func TestRunCapturesNoCallItDidNotFinish(t *testing.T) {
 		}
 		if rec.ID != set[0].Node.ID {
 			t.Errorf("the capture names %s, want the finished %s", rec.ID, set[0].Node.ID)
-		}
-	})
-	t.Run("a refused text", func(t *testing.T) {
-		l := kept(t, t.TempDir())
-		ask := func(context.Context, string) (Reply, error) {
-			t.Fatal("a refused text made a call")
-			return Reply{}, nil
-		}
-		write, _ := writing()
-		items := []query.Item{node(kb.NodeKindClaim, "clm-dddddd")}
-		if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassRigor, Launch: sequentialLaunch(ask), Write: write,
-			Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(filepath.Join(l.Dir(), capturesFile)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a refused text left a capture file: %v", err)
 		}
 	})
 }

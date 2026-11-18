@@ -72,7 +72,7 @@ fails the test. A rule that names a `cmd` file is checked at file level (`TestCm
   decides whether one is a warning or a result field. A refusal's remedy may name the command that
   fixes it (`kbase configure-providers`, `kbase configure-models`).
 - `internal/score` imports `model` nowhere: the endpoint is below the verb's model-call interface,
-  so the runner, the input guard, the parse and the ledger learn nothing of what answered. It imports
+  so the runner, the parse and the ledger learn nothing of what answered. It imports
   `write` for a writing-the-results batch's ops and its lock, and never `build`, `kbload`,
   `statedir` or `kbdocs`: the verb takes the run's locks, opens the KB, resolves the state directory
   and runs the start rebuild of the derived views. A batch reopens the KB, to compare each value's

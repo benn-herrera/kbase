@@ -5,8 +5,8 @@
 `score.Runner` owns the item loop and no I/O of its own. It takes the enumerated items; the `Launch`
 interface, which hands each item the `Ask` its model calls go through; the `Write` interface; the
 ledger; the model name the ledger lines record; and a logger. Because the item text is composed in this
-package, it also takes the `kb.Source` and `query.Index` the renderers read, and the `graph` they
-read, built once from them (`graphOf`); `Invoke` passes in the `graph` it built for the scope.
+package, it also takes the `kb.Source` and `query.Index` `graphOf` builds the `graph` from, and that
+`graph`, built once before the loop; `Invoke` passes in the `graph` it built for the scope.
 
 The pass is read once, before the loop, into its classes. Per item, one lookup of the item's class
 yields both the instruction its call sends and the table its value is computed under, so the
@@ -15,16 +15,19 @@ composes each item's prompt and launches the items in the set's order, at most a
 invocation's `model.Queue` has permits. Each launched item makes its call, parses the reply as the charges
 it records against that item text, computes the value, keeps it in its own result cell and writes its
 answer file.
-A text the input guard refuses, a reply the parse refuses, and a failed call or write each append
-`failed` with nothing written, and the loop continues.
+A reply the parse refuses, and a failed call or write, each append `failed` with nothing written, and
+the loop continues.
 
 `prepare` returns the entry and the `call` the item will make: class, item text and prompt, or nil where
-the class cannot be derived or the input guard refuses the text. `attempt` returns each call it made, in
+the class cannot be derived. `attempt` returns each call it made, in
 call order — the entry its line records and the call as sent — and whether the loop's stop interrupted
 a call. A reply the parse refuses is a `malformedError`; while the context has not ended, `attempt`
 builds an `asks.Correction` from it (`correctionOf`), renders the class's ask again with it and asks once
 more through the same `Ask`, inside the same queue item, up to `asks.MaxAsks` calls
-([§12](../../12-constants/index.md)). A truncated reply, a failed call and a failed write are no
+([§12](../../12-constants/index.md)). `correctionOf` quotes the reply lines the case names unless one of
+them carries the backtick run the correction's quote fence opens with — `asks.CorrectionQuoteFenceWidth`
+([§12](../../12-constants/index.md)); where one does, it would close the fence early, so the correction
+carries no quoted line at all. A truncated reply, a failed call and a failed write are no
 `malformedError` and get no re-ask. An interrupted re-ask returns nothing, the refused first attempt
 included. A re-ask that cannot be rendered fails the item as a first ask's render failure does: the
 refused line records the render error as its reason. The item's answer file holds every call, the final

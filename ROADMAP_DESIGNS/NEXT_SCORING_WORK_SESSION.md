@@ -75,7 +75,7 @@ this names only what would move.
     `stats`' `relations` ranks such text with pending.
 16. **The uncertainty pool and hit list, parked:** the declared categories yield nothing useful,
     and the hit list returns when a scoring pass has run on the fixture and a ranking signal puts
-    the author's premises near the top (`ROADMAP_PLANS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed
+    the author's premises near the top (`ROADMAP_DESIGNS/UNCERTAINTY_POOL_AND_HIT_LIST.md`; the closed
     plan's record is `ACTIVE_PLAN.md` at commit `34b956e`). Never an all-pairs check.
 
 ## Post-sprint review

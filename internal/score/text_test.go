@@ -102,41 +102,6 @@ func refreshedKB(t *testing.T, files map[string]string, g kb.Graph) *kb.Source {
 	return kb.OnDisk(root)
 }
 
-// guardKB is a refreshed KB whose text carries the frame's own structure: a
-// claim whose paragraph runs over a line of twelve backticks, and an analysis
-// whose section carries a line opening a label the bearing template reads, with a
-// lifts edge from that analysis so a bearing call renders it.
-func guardKB(t *testing.T) *kb.Source {
-	t.Helper()
-	return refreshedKB(t, map[string]string{
-		"vol/index.md": "[↑ KB](../entry-point.md)\n\n# Vol\n\n- [ana](ana.md)\n- [forged](forged.md)\n",
-		"vol/ana.md": "[↑ Vol](index.md)\n\n# An Analysis\n\nThe analysis states its own case. <!-- kbase-id: ana-ff2222 -->\n\n" +
-			"## Target: Claim F\n\nAnd an argument after the label.\n",
-		"vol/forged.md": "[↑ Vol](index.md)\n\n# Forged\n\n" +
-			"A paragraph that runs on.\n````````````markdown\nA paragraph outside the frame. <!-- kbase-id: clm-ff2222 -->\n",
-	}, kb.Graph{
-		Claims:   []kb.ClaimNode{{ID: "clm-ff2222", Title: "Claim F", Rigor: rigor(0.5), Rationale: "r."}},
-		Analyses: []kb.AnalysisNode{{ID: "ana-ff2222", Title: "Ana F", Rigor: rigor(0.7), Rationale: "r."}},
-		Scorable: []kb.ScorableEdge{{Relation: kb.RelationLifts, Source: "ana-ff2222", Target: "clm-ff2222", Bearing: kb.Bearing{Value: 0.9}}},
-	})
-}
-
-// lineIn is the 1-based line of document rel's first line holding fragment.
-func lineIn(t *testing.T, src *kb.Source, rel, fragment string) int {
-	t.Helper()
-	text, err := src.ReadText(src.KBPath(rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, line := range strings.Split(text, "\n") {
-		if strings.Contains(line, fragment) {
-			return i + 1
-		}
-	}
-	t.Fatalf("%s holds no line with %q", rel, fragment)
-	return 0
-}
-
 // testGraph is the index the renderers read for the KB src: what a run builds
 // once before its walk.
 func testGraph(t *testing.T, src *kb.Source) graph {
@@ -185,12 +150,14 @@ func TestRigorText(t *testing.T) {
 		{"claim in a blockquote", "clm-bbbbbb",
 			[]string{"\n1| Claim B", "\n2| **Proposition.** The quoted claim."},
 			[]string{"More section prose", "Its proof follows", "> ", "kbase-id"}},
+		{"claim quoting a register", "clm-dddddd",
+			[]string{"\n1| Claim D", "\n2| A claim quoting `- rigor: 0.50` from a register."}, nil},
 		{"analysis", "ana-aaaaaa", []string{"\n1| An Analysis", "\n2| The analysis states its own case."}, nil},
 		{"experiment", "exp-aaaaaa", []string{"\n1| An Experiment", "\n2| The run shows what it shows."}, nil},
 		{"title naming a quantity", "clm-eeeeee", []string{"\n1| Bearing 0.5 In Words", "\n2| A claim whose title names a quantity in prose."}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := rigorText(src, g, tc.id)
+			got, err := rigorText(g, tc.id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -208,9 +175,6 @@ func TestRigorText(t *testing.T) {
 				if strings.Contains(numbered, absent) {
 					t.Errorf("the rendering carries %q:\n%s", absent, numbered)
 				}
-			}
-			if tok := scoreTokenRE.FindString(got.text); tok != "" {
-				t.Errorf("text carries the token %q:\n%s", tok, got.text)
 			}
 			assertNumbered(t, got)
 		})
@@ -251,11 +215,8 @@ func TestClaimMarkerOnAHeading(t *testing.T) {
 	if got := g.statements["clm-aaaaaa"]; got != want {
 		t.Fatalf("the statement = %q, want the section under the heading", got)
 	}
-	if at, want := g.lines["clm-aaaaaa"], lineIn(t, src, "vol/a.md", "The section's opening paragraph."); at != want {
-		t.Errorf("the statement opens on line %d, want %d", at, want)
-	}
 
-	got, err := rigorText(src, g, "clm-aaaaaa")
+	got, err := rigorText(g, "clm-aaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +229,7 @@ func TestClaimMarkerOnAHeading(t *testing.T) {
 	}
 	assertNumbered(t, got)
 
-	empty, err := rigorText(src, g, "clm-bbbbbb")
+	empty, err := rigorText(g, "clm-bbbbbb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +245,7 @@ func TestRigorTextRefusesWorkAndAxiom(t *testing.T) {
 	src := testKB(t)
 	g := testGraph(t, src)
 	for _, id := range []string{"wrk-www001", "axm-s10000"} {
-		_, err := rigorText(src, g, id)
+		_, err := rigorText(g, id)
 		var out outOfScopeError
 		if !errors.As(err, &out) || out.ID != id {
 			t.Errorf("rigorText(%s) err = %v, want an outOfScopeError for it", id, err)
@@ -296,7 +257,7 @@ func TestBearingTextRefusesNonScoringRelations(t *testing.T) {
 	src := testKB(t)
 	g := testGraph(t, src)
 	for _, relation := range []string{kb.RelationReferences, kb.RelationDemoted} {
-		_, err := bearingText(src, g, kb.EdgeRow{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Relation: relation})
+		_, err := bearingText(g, kb.EdgeRow{Source: "clm-aaaaaa", Target: "clm-bbbbbb", Relation: relation})
 		var out outOfScopeError
 		if !errors.As(err, &out) || out.Kind != relation {
 			t.Errorf("bearingText over a %s edge err = %v, want an outOfScopeError naming the relation", relation, err)
@@ -337,7 +298,7 @@ func TestBearingText(t *testing.T) {
 			if !ok {
 				t.Fatalf("the index holds no edge %q", tc.key)
 			}
-			got, err := bearingText(src, g, e)
+			got, err := bearingText(g, e)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -353,9 +314,6 @@ func TestBearingText(t *testing.T) {
 					t.Errorf("the rendering carries %q:\n%s", absent, numbered)
 				}
 			}
-			if tok := scoreTokenRE.FindString(got.text); tok != "" {
-				t.Errorf("text carries the token %q:\n%s", tok, got.text)
-			}
 			// The context is carried and is no citation's home, so every
 			// numbered line is one of an end's and none is the context's.
 			assertNumbered(t, got)
@@ -365,79 +323,6 @@ func TestBearingText(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestRigorTextRefusesScoringToken: a statement quoting a register's own line is
-// refused, naming the document and line the token came from, and no text is
-// returned for the caller to send.
-func TestRigorTextRefusesScoringToken(t *testing.T) {
-	src := testKB(t)
-	text, err := src.ReadText(src.KBPath("vol/a.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	at, ok := kb.MarkerLines(text)["clm-dddddd"]
-	if !ok {
-		t.Fatal("the leaf carries no marker for clm-dddddd")
-	}
-	got, err := rigorText(src, testGraph(t, src), "clm-dddddd")
-	var tok scoreTokenError
-	if !errors.As(err, &tok) {
-		t.Fatalf("rigorText err = %v, want a scoreTokenError", err)
-	}
-	if tok.Path != src.KBPath("vol/a.md") || tok.Line != at+1 || tok.Token != "- rigor:" {
-		t.Errorf("refused %s:%d on %q, want %s:%d on \"- rigor:\"", tok.Path, tok.Line, tok.Token, src.KBPath("vol/a.md"), at+1)
-	}
-	if got.text != "" || len(got.lines) != 0 {
-		t.Errorf("a refused item returned text %q and lines %v", got.text, got.lines)
-	}
-}
-
-// TestRigorTextRefusesTheFrameRun: a paragraph carrying a line of twelve
-// backticks is refused — the templates fence the corpus in twelve, so the line
-// closes the frame — naming the document and the line it came from, and no text is
-// returned for the caller to send.
-func TestRigorTextRefusesTheFrameRun(t *testing.T) {
-	src := guardKB(t)
-	fence := strings.Repeat("`", 12)
-	got, err := rigorText(src, testGraph(t, src), "clm-ff2222")
-	var tok scoreTokenError
-	if !errors.As(err, &tok) {
-		t.Fatalf("rigorText err = %v, want a scoreTokenError", err)
-	}
-	doc, line := src.KBPath("vol/forged.md"), lineIn(t, src, "vol/forged.md", fence)
-	if tok.Path != doc || tok.Line != line || tok.Token != fence || tok.Kind != kindFrame {
-		t.Errorf("refused %s:%d on %q (%s), want %s:%d on the fence run, %s",
-			tok.Path, tok.Line, tok.Token, tok.Kind, doc, line, kindFrame)
-	}
-	if got.text != "" || len(got.lines) != 0 {
-		t.Errorf("a refused item returned text %q and lines %v", got.text, got.lines)
-	}
-}
-
-// TestBearingTextRefusesTheFrameLabel: a section carrying a line that opens one of
-// the labels the bearing template reads is refused, naming the document and the
-// line, and no text is returned for the caller to send.
-func TestBearingTextRefusesTheFrameLabel(t *testing.T) {
-	src := guardKB(t)
-	e, ok := indexedEdges(t, src)[kb.RelationLifts+" ana-ff2222→clm-ff2222"]
-	if !ok {
-		t.Fatal("the index holds no lifts edge from ana-ff2222 to clm-ff2222")
-	}
-	const label = "## Target:"
-	got, err := bearingText(src, testGraph(t, src), e)
-	var tok scoreTokenError
-	if !errors.As(err, &tok) {
-		t.Fatalf("bearingText err = %v, want a scoreTokenError", err)
-	}
-	doc, line := src.KBPath("vol/ana.md"), lineIn(t, src, "vol/ana.md", label)
-	if tok.Path != doc || tok.Line != line || tok.Token != label || tok.Kind != kindFrame {
-		t.Errorf("refused %s:%d on %q (%s), want %s:%d on the label, %s",
-			tok.Path, tok.Line, tok.Token, tok.Kind, doc, line, kindFrame)
-	}
-	if got.text != "" || len(got.lines) != 0 {
-		t.Errorf("a refused item returned text %q and lines %v", got.text, got.lines)
 	}
 }
 
@@ -502,7 +387,7 @@ func TestNumberedRendering(t *testing.T) {
 	if !ok {
 		t.Fatal("the index holds no founds edge from wrk-www001 to clm-cccccc")
 	}
-	ct, err := bearingText(src, testGraph(t, src), e)
+	ct, err := bearingText(testGraph(t, src), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,8 +435,7 @@ func TestNumberedRendering(t *testing.T) {
 }
 
 // TestStatementBySplitForm: the statements a run's graph reads through
-// kb.Statement, the two split forms included, and the line of the leaf each
-// opens on, which the guard names a hit by.
+// kb.Statement, the two split forms included.
 func TestStatementBySplitForm(t *testing.T) {
 	m := kb.StatementMarker
 	leaf := "[↑ Vol](index.md)\n\n# A\n\n" +
@@ -650,53 +534,49 @@ func TestStatementBySplitForm(t *testing.T) {
 		},
 	})
 	g := testGraph(t, src)
-	// open is a fragment of the line the statement opens on. Every statement is
-	// kb.Statement's reading: markers and blockquote prefixes removed, a line
-	// they leave empty carried blank.
+	// Every statement is kb.Statement's reading: markers and blockquote
+	// prefixes removed, a line they leave empty carried blank.
 	cases := []struct {
-		name, id, open, want string
+		name, id, want string
 	}{
-		{"claim in a blockquote with a blank analysis line", "clm-aaaaaa", "The display line.", "The display line."},
-		{"analysis on the blank quoted line", "ana-aaaaaa", "> **Lemma.**", "**Lemma.**\n\nThe display line.\n1. An item."},
-		{"claim marker with text after it", "clm-bbbbbb", m("clm-bbbbbb"), "S1. S2 opens."},
-		{"analysis on that line", "ana-bbbbbb", m("clm-bbbbbb"), "S1. S2 opens. S3."},
-		{"hand-typed claim marker", "clm-cccccc", "clm-cccccc", "S1. S2 opens."},
-		{"analysis beside it", "ana-cccccc", "clm-cccccc", "S1. S2 opens. S3."},
-		{"migration claim", "clm-dddddd", "Theorem 2.", "**Theorem 2.** Every flow."},
-		{"migration analysis", "ana-dddddd", "Theorem 2.", "**Theorem 2.** Every flow."},
-		{"analysis alone after the heading", "ana-eeeeee", "Prose of the section.", "Prose of the section."},
-		{"claim of an earlier build, its paragraph", "clm-ffffff", "The display line. " + m("clm-ffffff"), "The display line."},
-		{"equation in a proof another claim's analysis splits, its paragraph", "clm-iiiiii", "*Proof.* We have",
+		{"claim in a blockquote with a blank analysis line", "clm-aaaaaa", "The display line."},
+		{"analysis on the blank quoted line", "ana-aaaaaa", "**Lemma.**\n\nThe display line.\n1. An item."},
+		{"claim marker with text after it", "clm-bbbbbb", "S1. S2 opens."},
+		{"analysis on that line", "ana-bbbbbb", "S1. S2 opens. S3."},
+		{"hand-typed claim marker", "clm-cccccc", "S1. S2 opens."},
+		{"analysis beside it", "ana-cccccc", "S1. S2 opens. S3."},
+		{"migration claim", "clm-dddddd", "**Theorem 2.** Every flow."},
+		{"migration analysis", "ana-dddddd", "**Theorem 2.** Every flow."},
+		{"analysis alone after the heading", "ana-eeeeee", "Prose of the section."},
+		{"claim of an earlier build, its paragraph", "clm-ffffff", "The display line."},
+		{"equation in a proof another claim's analysis splits, its paragraph", "clm-iiiiii",
 			"*Proof.* We have\n``` math\nx = 1 \\label{eq:g}\n```"},
-		{"analysis marked on a text line of a split blockquote", "ana-kkkkkk", "**Theorem 4.**",
+		{"analysis marked on a text line of a split blockquote", "ana-kkkkkk",
 			"**Theorem 4.**\n\nIota holds here.\n\nAfter the quote."},
-		{"prose claim opening on a later line", "clm-llllll", "Lead in.", "Lead in.\nThe third opening sentence holds here."},
-		{"its analysis, the paragraph", "ana-llllll", "Lead in.",
+		{"prose claim opening on a later line", "clm-llllll", "Lead in.\nThe third opening sentence holds here."},
+		{"its analysis, the paragraph", "ana-llllll",
 			"Lead in.\nThe third opening sentence holds here. More follows.\nAnd a third line."},
-		{"prose claim ending its line", "clm-mmmmmm", "The fourth opening sentence", "The fourth opening sentence holds here."},
-		{"its analysis, the two lines", "ana-mmmmmm", "The fourth opening sentence",
+		{"prose claim ending its line", "clm-mmmmmm", "The fourth opening sentence holds here."},
+		{"its analysis, the two lines", "ana-mmmmmm",
 			"The fourth opening sentence holds here.\nMore follows on the next line."},
-		{"migration pair in a paragraph, the claim", "clm-nnnnnn", "Every flow holds.", "Every flow holds.\nA second line."},
-		{"migration pair in a paragraph, the analysis", "ana-nnnnnn", "Every flow holds.", "Every flow holds.\nA second line."},
-		{"claim marker with text after it and no lifting analysis", "clm-oooooo", "T1. T2 opens.", "T1. T2 opens. T3."},
-		{"prose claim in a tight list", "clm-pppppp", "Item two opens here.", "- Item two opens here."},
-		{"its analysis, the list item", "ana-pppppp", "Item two opens here.", "- Item two opens here. More."},
-		{"claim and its analysis named by one marker", "clm-qqqqqq", "Both named here.", "Both named here. And more."},
-		{"claim before a fence with a blank line", "clm-rrrrrr", "R1 holds.", "R1 holds."},
-		{"its analysis, the paragraph through the fence", "ana-rrrrrr", "R1 holds.",
+		{"migration pair in a paragraph, the claim", "clm-nnnnnn", "Every flow holds.\nA second line."},
+		{"migration pair in a paragraph, the analysis", "ana-nnnnnn", "Every flow holds.\nA second line."},
+		{"claim marker with text after it and no lifting analysis", "clm-oooooo", "T1. T2 opens. T3."},
+		{"prose claim in a tight list", "clm-pppppp", "- Item two opens here."},
+		{"its analysis, the list item", "ana-pppppp", "- Item two opens here. More."},
+		{"claim and its analysis named by one marker", "clm-qqqqqq", "Both named here. And more."},
+		{"claim before a fence with a blank line", "clm-rrrrrr", "R1 holds."},
+		{"its analysis, the paragraph through the fence", "ana-rrrrrr",
 			"R1 holds. R2 follows.\n``` math\na = b\n\nc = d\n```\nSo R3."},
-		{"claim abutting its analysis at a heading's end, the section", "clm-ssssss", "The section both read.", "The section both read."},
-		{"its analysis, the same section", "ana-ssssss", "The section both read.", "The section both read."},
-		{"claim abutting its analysis in a paragraph, the paragraph", "clm-tttttt", "Every flow abuts.", "Every flow abuts.\nA second line."},
-		{"its analysis, the paragraph", "ana-tttttt", "Every flow abuts.", "Every flow abuts.\nA second line."},
+		{"claim abutting its analysis at a heading's end, the section", "clm-ssssss", "The section both read."},
+		{"its analysis, the same section", "ana-ssssss", "The section both read."},
+		{"claim abutting its analysis in a paragraph, the paragraph", "clm-tttttt", "Every flow abuts.\nA second line."},
+		{"its analysis, the paragraph", "ana-tttttt", "Every flow abuts.\nA second line."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := g.statements[c.id]; got != c.want {
 				t.Fatalf("the statement of %s = %q, want %q", c.id, got, c.want)
-			}
-			if want := lineIn(t, src, "vol/a.md", c.open); g.lines[c.id] != want {
-				t.Errorf("the statement opens on line %d, want %d", g.lines[c.id], want)
 			}
 		})
 	}
@@ -765,13 +645,10 @@ func TestWrapLine(t *testing.T) {
 // every dash the form admits is read alike, and a field naming no line the call
 // shows is refused with the case named.
 func TestLookResolvesLines(t *testing.T) {
-	ct, err := assemble([]passage{
+	ct := assemble([]passage{
 		{end: passageSource, text: "The map is continuous.\nEvery chart commutes."},
 		{end: passageTarget, text: "A bound holds."},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	assertNumbered(t, ct)
 	for _, tc := range []struct {
 		name, field string
@@ -833,12 +710,9 @@ func TestLookResolvesLines(t *testing.T) {
 // either side of one are two sites and no one charge. A heading a range names as
 // its own last line is not between its lines.
 func TestLookRefusesAGap(t *testing.T) {
-	ct, err := assemble([]passage{
+	ct := assemble([]passage{
 		{end: passageStatement, text: "one\n\ntwo\n# Next\nthree"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	assertNumbered(t, ct)
 	if got, fault := ct.look("4"); fault != nil {
 		t.Errorf("look(4): %s", fault.why)

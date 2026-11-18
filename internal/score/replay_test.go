@@ -147,12 +147,6 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var items []query.Item
-	for _, it := range set {
-		if it.Node == nil || it.Node.ID != "clm-dddddd" {
-			items = append(items, it)
-		}
-	}
 	h := header()
 	h.Pass = query.PassAll
 	l, err := Create(t.TempDir(), h)
@@ -162,7 +156,7 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	defer l.Close()
 	ask, _ := asking(t, []asked{{reply: "none"}})
 	write, _ := writing()
-	if _, err := (&Runner{Source: src, Index: ix, Items: items, Pass: query.PassAll, Launch: sequentialLaunch(ask), Write: write,
+	if _, err := (&Runner{Source: src, Index: ix, Items: set, Pass: query.PassAll, Launch: sequentialLaunch(ask), Write: write,
 		Ledger: l, Model: "small"}).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +166,8 @@ func TestCapturesReRenderToTheirDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(captured) != len(items) {
-		t.Fatalf("read %d captures, want one per item asked, %d", len(captured), len(items))
+	if len(captured) != len(set) {
+		t.Fatalf("read %d captures, want one per item asked, %d", len(captured), len(set))
 	}
 	classes := map[string]bool{}
 	for key, c := range captured {

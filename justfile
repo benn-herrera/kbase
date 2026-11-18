@@ -42,8 +42,8 @@ AUTH_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-auth"
 MCP_TRANSCRIPT_DIR := TEST_DATA_FIXTURES_DIR / "mcp"
 OPSCRIPT_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-opscript-results"
 COMPAT_OP_SCRIPT := TEST_DATA_FIXTURES_DIR / "compat" / "ops.yaml"
-PARITY_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-parity-adjagent-sheet"
-REFUSED_WRITE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-refused-write-adjagent-sheet"
+PARITY_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-parity-devpro-sheet"
+REFUSED_WRITE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-refused-write-devpro-sheet"
 STAGE_FIXTURE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-stage-fixture"
 # The two small papers the lamb build recipes build, and their evidence.
 LAMB_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "lamb"
@@ -51,7 +51,7 @@ LAMB_CYCLE_FIXTURE_DIR := TEST_DATA_FIXTURES_DIR / "lamb-cycle"
 BUILD_LAMB_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-lamb"
 BUILD_LAMB_CYCLE_OUT_DIR := TEST_DATA_TRANSIENT_DIR / "test-integration-build-lamb-cycle"
 
-# Pinned integration corpus: the arXiv survey sample, taken from adjagent's
+# Pinned integration corpus: the arXiv survey sample, taken from devpro's
 # kb-testing/justfile — papers sampled by construction across categories whose
 # LaTeX differs in kind. Ids are VERSIONED: an e-print version is append-only,
 # so each id is its own pin and the list reproduces the corpus while
@@ -164,29 +164,27 @@ edit-gate: fmt-check
     @tools/scripts/check-hermetic.sh
     @tools/scripts/check-just-docs.sh
 
-# this project is developed in tandem with adjagent
-AGENTS_DIR := "../adjagent"
-[doc("NEEDS the adjagent clone (AGENTS_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
+# this project is developed in tandem with devpro
+DEVPRO_DIR := "../devpro"
+[doc("NEEDS the depro clone (DEVPRO_DIR): install its agent set into this repository for both harnesses, claude and opencode")]
 agents:
-  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=claude
-  @PYTHONPATH="{{AGENTS_DIR}}" python3 -m adjagent install devpro . --harness=opencode
+  PYTHONPATH="{{DEVPRO_DIR}}" python3 -m devpro install .
 
 # The tap clone's one source: its origin URL, which the clone and the remote
 # set-up both take, and the location its .gitignore entry names.
-TAP_DIR := "homebrew-tap"
-TAP_URL := "git@github.com:benn-herrera/homebrew-tap.git"
+HOSTED_TAP_DIR := "homebrew-tap"
 TAP_FORMULA := "kbase"
-[doc("set up the sibling Homebrew tap clone at homebrew-tap/: clone it, or add the missing origin to a clone; leave a correct clone alone, refuse any other; one line says what was done")]
-tap:
-    @ TAP_URL="{{TAP_URL}}" TAP_DIR="{{TAP_DIR}}" TAP_FORMULA="{{TAP_FORMULA}}" tools/scripts/tap.sh
+[doc("set up the sibling Homebrew tap clone at homebrew-tap/ - can't be used directly from here (chicken and egg")]
+tap-repo:
+  TAP_DIR="{{HOSTED_TAP_DIR}}" tools/scripts/tap-repo.sh
 
-[doc("LIVE; NEEDS the tap clone, a pushed release: set the tap formula's v<version> tarball and sha256 and commit it there, pushing nothing; raise go.mod's go line if Go no longer supports it, uncommitted")]
+[doc("LIVE; NEEDS the tap clone, a pushed release: set the tap formula's v<version> tarball and sha256 and commit it there")]
 tap-update:
-    @TAP_DIR="{{TAP_DIR}}" TAP_FORMULA="{{TAP_FORMULA}}" tools/scripts/tap-update.sh
+  @just --justfile "{{HOSTED_TAP_DIR}}/scripts/justfile" TAP_FORMULA={{TAP_FORMULA}} tap-update
 
-[doc("LIVE; NEEDS brew and the tap clone; DESTRUCTIVE to this machine's brew install of kbase: reinstall it from a scratch formula over a tarball of the working tree's tracked files; the tap is untouched")]
+[doc("LIVE; NEEDS brew and the tap clone; DESTRUCTIVE to this machine's brew install of devpro: reinstall it from a scratch formula over a tarball of the working tree's tracked files")]
 tap-local:
-    @TAP_DIR="{{TAP_DIR}}" TAP_FORMULA="{{TAP_FORMULA}}" tools/scripts/tap-local.sh
+  @just --justfile "{{HOSTED_TAP_DIR}}/scripts/justfile" TAP_FORMULA={{TAP_FORMULA}} tap-local
 
 # Integration recipes are named test-integration-<process>-<corpus>: the
 # process first, the input corpus last, because a corpus is served by several
@@ -202,14 +200,14 @@ tap-local:
 prep-test-integration-arxiv ids=ARXIV_IDS:
     @ARXIV_IDS="{{ids}}" ARXIV_TGZ_DIR="{{ARXIV_TGZ_DIR}}" ARXIV_DIR="{{ARXIV_DIR}}" ARXIV_DELAY="{{ARXIV_DELAY}}" tools/scripts/prep-test-integration-arxiv.sh
 
-[doc("NEEDS git and the adjagent clone; DESTRUCTIVE to dir: reset fixture repository dir to its `cleared` tag, install the agent set, copy bin/kbase and tools/harness.sh into .kbase/, move the `staged` tag")]
+[doc("NEEDS git and the devpro clone; DESTRUCTIVE to dir: reset fixture repository dir to its `cleared` tag, install the agent set, copy bin/kbase and tools/harness.sh into .kbase/, move the `staged` tag")]
 prep-test-integration-fixture dir: build
-    @BIN_DIR="{{BIN_DIR}}" FIXTURE_DIR="{{dir}}" INVOCATION_DIR="{{invocation_directory()}}" JUST="{{just_executable()}}" AGENTS_DIR="{{AGENTS_DIR}}" tools/scripts/prep-test-integration-fixture.sh
+    @BIN_DIR="{{BIN_DIR}}" FIXTURE_DIR="{{dir}}" INVOCATION_DIR="{{invocation_directory()}}" JUST="{{just_executable()}}" DEVPRO_DIR="{{DEVPRO_DIR}}" tools/scripts/prep-test-integration-fixture.sh
 
-[doc("NEEDS git and the adjagent clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, checking that it stages, re-stages and refuses")]
+[doc("NEEDS git and the devpro clone (excluded from test-integration): prep-test-integration-fixture over scratch fixture repositories this recipe creates, checking that it stages, re-stages and refuses")]
 test-integration-stage-fixture: build
     @mkdir -p "{{STAGE_FIXTURE_OUT_DIR}}"
-    @BIN_DIR="{{BIN_DIR}}" AGENTS_DIR="{{AGENTS_DIR}}" JUST="{{just_executable()}}" STAGE_FIXTURE_OUT_DIR="{{STAGE_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-stage-fixture.sh 2>&1 | tee "{{STAGE_FIXTURE_OUT_DIR}}/log.txt"
+    @BIN_DIR="{{BIN_DIR}}" DEVPRO_DIR="{{DEVPRO_DIR}}" JUST="{{just_executable()}}" STAGE_FIXTURE_OUT_DIR="{{STAGE_FIXTURE_OUT_DIR}}" tools/scripts/test-integration-stage-fixture.sh 2>&1 | tee "{{STAGE_FIXTURE_OUT_DIR}}/log.txt"
 
 [doc("NEEDS pandoc and python3 (excluded from test-integration): ./bin/kbase build --no-inference over each BUILD_ARXIV_IDS paper in a fresh fixture repository; fetches the papers first if absent")]
 test-integration-build-arxiv: (prep-test-integration-arxiv BUILD_ARXIV_IDS) build
@@ -256,27 +254,21 @@ regenerate-fixtures: build
     @BIN_DIR="{{BIN_DIR}}" REGENERATE_OUT_DIR="{{REGENERATE_FIXTURES_OUT_DIR}}" INIT_SKELETON_DIR="{{INIT_SKELETON_DIR}}" tools/scripts/regenerate-fixtures.sh 2>&1 | tee "{{REGENERATE_FIXTURES_OUT_DIR}}/log.txt"
 
 [doc("split a markdown monolith by heading level into linked leaves under out (optional link map TSV), then check the leaves reassemble it and every relative link resolves")]
-dice-doc monolith out map="": _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-doc "{{monolith}}" "{{out}}" "{{map}}"
+dice-doc monolith out map="":
+    @just docdicer dice-doc "{{monolith}}" "{{out}}" "{{map}}"
 
 [doc("dice the documents listed in a manifest TSV, read from src-dir, into linked volumes, with intermediates in work-dir, then verify all trees (see tools/docdicer/README.md)")]
-dice-docs manifest src work: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
+dice-docs manifest src work:
+    @just docdicer dice-docs "{{manifest}}" "{{src}}" "{{work}}"
 
 [doc("write a diced tree (the directory holding its entry-point.md) back out as one markdown document at monolith, which must not exist, then check it dices back to the same tree")]
-undice tree monolith: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer undice "{{tree}}" "{{monolith}}"
+undice tree monolith:
+    @just docdicer undice "{{tree}}" "{{monolith}}"
 
 [doc("check every relative link and #anchor in PROJECT_DOCS, docs and top-level *.md, and that each diced tree's documents are linked from their parent and reachable (tools/docdicer, cloned when absent)")]
-check-links: _docdicer
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-links PROJECT_DOCS docs *.md
-    @PYTHONPATH="{{justfile_dir()}}/tools/docdicer" python3 -m docdicer check-tree PROJECT_DOCS
-
-[private]
-_docdicer:
-    @[[ -d tools/docdicer ]] || git -C tools clone git@github.com:benn-herrera/docdicer
-    @cd tools/docdicer && { [[ -d .claude ]] || ln -vs ../../.claude .; }
-    @cd tools/docdicer && { [[ -d .opencode ]] || ln -vs ../../.opencode .; }
+check-links:
+    @just docdicer check-links PROJECT_DOCS docs *.md
+    @just docdicer check-tree PROJECT_DOCS
 
 [doc("hermetic: stage the compatibility op script test-data/fixtures/compat/ops.yaml through ./bin/kbase over a scratch copy of the results fixture, then re-issue it and check nothing changed")]
 test-integration-opscript-results: build
@@ -323,22 +315,22 @@ test-dist-no-replay:
     @mkdir -p "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay"
     @go test -count=1 -run '^TestDistBuildHasNoReplay$' ./cmd 2>&1 | tee "{{TEST_DATA_TRANSIENT_DIR}}/test-dist-no-replay/log.txt"
 
-[doc("hermetic: every query case of the frozen goldens in internal/kbload/testdata/parity-2.0.1/ through ./bin/kbase over a scratch copy of the adjagent-sheet-2.0.1 fixture, compared with its golden")]
-test-integration-parity-adjagent-sheet: build
+[doc("hermetic: every query case of the frozen goldens in internal/kbload/testdata/parity-2.0.1/ through ./bin/kbase over a scratch copy of the devpro-sheet-2.0.1 fixture, compared with its golden")]
+test-integration-parity-devpro-sheet: build
     @mkdir -p "{{PARITY_OUT_DIR}}"
-    @BIN_DIR="{{BIN_DIR}}" PARITY_OUT_DIR="{{PARITY_OUT_DIR}}" tools/scripts/test-integration-parity-adjagent-sheet.sh 2>&1 | tee "{{PARITY_OUT_DIR}}/log.txt"
+    @BIN_DIR="{{BIN_DIR}}" PARITY_OUT_DIR="{{PARITY_OUT_DIR}}" tools/scripts/test-integration-parity-devpro-sheet.sh 2>&1 | tee "{{PARITY_OUT_DIR}}/log.txt"
 
-[doc("hermetic: edit-claim through ./bin/kbase over a scratch copy of internal/formats/testdata/adjagent-sheet-2.0.1 with an altered kb-root/CLAUDE.md, checking it is refused and kb-root unchanged")]
-test-integration-refused-write-adjagent-sheet: build
+[doc("hermetic: edit-claim through ./bin/kbase over a scratch copy of internal/formats/testdata/devpro-sheet-2.0.1 with an altered kb-root/CLAUDE.md, checking it is refused and kb-root unchanged")]
+test-integration-refused-write-devpro-sheet: build
     @mkdir -p "{{REFUSED_WRITE_OUT_DIR}}"
-    @BIN_DIR="{{BIN_DIR}}" REFUSED_WRITE_OUT_DIR="{{REFUSED_WRITE_OUT_DIR}}" tools/scripts/test-integration-refused-write-adjagent-sheet.sh 2>&1 | tee "{{REFUSED_WRITE_OUT_DIR}}/log.txt"
+    @BIN_DIR="{{BIN_DIR}}" REFUSED_WRITE_OUT_DIR="{{REFUSED_WRITE_OUT_DIR}}" tools/scripts/test-integration-refused-write-devpro-sheet.sh 2>&1 | tee "{{REFUSED_WRITE_OUT_DIR}}/log.txt"
 
 # The omnibus composes the HERMETIC recipes and writes no log of its own: each
 # already preserves its full output under its own name, and a second copy of
 # the same bytes under a second name is a file that can go stale against the
 # one anybody reads.
-[doc("run every hermetic integration test; the ones needing network, a provider, pandoc, python3 or the adjagent clone are excluded and run by name")]
-test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-auth test-integration-parity-adjagent-sheet test-integration-refused-write-adjagent-sheet test-dist-no-replay
+[doc("run every hermetic integration test; the ones needing network, a provider, pandoc, python3 or the devpro clone are excluded and run by name")]
+test-integration: test-integration-results-fixture test-integration-init test-integration-opscript-results test-integration-mcp test-integration-config test-integration-auth test-integration-parity-devpro-sheet test-integration-refused-write-devpro-sheet test-dist-no-replay
 
 [doc("the full gate, run once at checkpoints: edit-gate, test-race and build")]
 checkpoint: edit-gate test-race build
@@ -422,3 +414,5 @@ update-dependencies:
     go mod tidy
     go get -u ./...
     go mod tidy
+
+import? '.opencode/plugins/devpro/skills/docdicer/tools/runner-snippets/docdicer.just'

@@ -4,9 +4,8 @@
 
 The loop's end appends every capture to `captures.jsonl` in one write, beside the ledger, through
 `appendLines`, with the `O_APPEND` and `Sync` the ledger's own lines take. A capture is written for each
-`call` an attempt returns, so a re-asked item has two, in call order. `attempt` returns none where the class cannot be derived or the input
-guard refuses the text, and a call the context cancelled returns nothing, so none of the three leaves a
-capture. Captures are written before the lines, and a capture that cannot be written ends the run
+`call` an attempt returns, so a re-asked item has two, in call order. `attempt` returns none where the class cannot be derived, and a call the context cancelled returns
+nothing, so neither leaves a capture. Captures are written before the lines, and a capture that cannot be written ends the run
 `failed`, as a ledger line that cannot be written does.
 
 A capture's keys, in order: `run`, `pass`, the item's identity as the ledger line formats it (`identity`:

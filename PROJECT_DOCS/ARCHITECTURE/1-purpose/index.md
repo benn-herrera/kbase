@@ -15,7 +15,7 @@ are novel, the three of THESIS's "What is new":
    [§6](../6-kb-model-and-maintenance/the-node-vocabulary.md).
 2. **The local judgments**: the fault criteria in the scoring prompt templates, and the bearing
    predicates that decide which edges are judged ([§6](../6-kb-model-and-maintenance/scoring/the-prompt-shelf.md),
-   [§6](../6-kb-model-and-maintenance/scoring/bearing-predicates.md)). The templates, the input guard and the reply parse are standard
+   [§6](../6-kb-model-and-maintenance/scoring/bearing-predicates.md)). The templates and the reply parse are standard
    machinery.
 3. **How the judgments combine**: the strength arithmetic ([§6](../6-kb-model-and-maintenance/the-derived-layer/index.md)).
 
